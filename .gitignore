@@ -1,0 +1,65 @@
+# ==========================================
+# 1. DEPENDENCIES (Thư viện cài đặt)
+# ==========================================
+node_modules/
+.pnp
+.pnp.js
+
+# ==========================================
+# 2. BUILD OUTPUTS & CACHE (File biên dịch & Cache)
+# ==========================================
+dist/
+build/
+*.tsbuildinfo
+*.js.map
+
+# ==========================================
+# 3. ENVIRONMENT & SECRETS (Biến môi trường & Mật khẩu)
+# ==========================================
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ==========================================
+# 4. DATABASE & TEMP UPLOADS (Dữ liệu DB tạm & File upload)
+# ==========================================
+*.sqlite
+*.db
+uploads/
+tmp/
+scratch/
+
+# ==========================================
+# 5. IDE & EDITOR SETTINGS (Cấu hình công cụ code)
+# ==========================================
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# ==========================================
+# 6. LOGS & PACKAGE MANAGER (File nhật ký hệ thống)
+# ==========================================
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ==========================================
+# 7. OS SYSTEM FILES (File ẩn của hệ điều hành)
+# ==========================================
+.DS_Store
+Thumbs.db
+
+# ==========================================
+# 8. TEST COVERAGE & REPORTS (Báo cáo chạy Test)
+# ==========================================
+coverage/
+.nyc_output/
