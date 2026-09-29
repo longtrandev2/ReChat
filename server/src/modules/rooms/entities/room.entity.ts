@@ -6,7 +6,6 @@ isPrivate: boolean (Default false)
 password: string (VARCHAR 255, Nullable - hashed nếu private)
 createdAt: Date (DATETIME, default NOW)
 */
-
 import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
 
 @Entity('rooms')
