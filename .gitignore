@@ -63,3 +63,4 @@ Thumbs.db
 # ==========================================
 coverage/
 .nyc_output/
+server/tsconfig.build.tsbuildinfo
