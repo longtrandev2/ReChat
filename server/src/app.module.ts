@@ -7,6 +7,7 @@ import { ConfigModule } from '@nestjs/config';
 import { UsersModule } from './modules/users/user.module.js';
 import { RoomsModule } from './modules/rooms/room.module.js';
 import { ChatModule } from './modules/chat/chat.module.js';
+import { AuthModule } from './modules/auth/auth.module.js';
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
 
 @Module({
@@ -21,6 +22,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     UsersModule,
     RoomsModule,
     ChatModule,
+    AuthModule,
     TypeOrmModule.forRoot({
       type: 'mysql',
       host: process.env.MYSQL_HOST,
