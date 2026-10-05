@@ -1,4 +1,4 @@
-import { Column, CreateDateColumn, Entity, Generated, ManyToOne, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
+import { Column, CreateDateColumn, Entity, ManyToOne, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
 import { User } from "../../users/entities/user.entity.js";
 import { Room } from "../../rooms/entities/room.entity.js";
 
