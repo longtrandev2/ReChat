@@ -12,9 +12,15 @@ export class User {
     @Column()
     password: string;
 
+    @Column({ nullable: true, length: 50 })
+    displayName?: string;
+
+    @Column({ nullable: true, length: 255 })
+    avatarUrl?: string;
+
     @CreateDateColumn()
     createdAt: Date;
 
     @UpdateDateColumn()
-    updateAt: Date;
+    updatedAt: Date;
 }

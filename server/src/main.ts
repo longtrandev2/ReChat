@@ -7,8 +7,12 @@ async function bootstrap() {
     instrument: ObserveInstrument,
   });
 
-  app.setGlobalPrefix('api/v1')
+  app.enableCors({
+    origin: true,
+    credentials: true,
+  });
 
+  app.setGlobalPrefix('api/v1');
 
   // Bật ValidationPipe global
   app.useGlobalPipes(
@@ -17,8 +21,6 @@ async function bootstrap() {
       transform: true, // Tự động ép kiểu dữ liệu
     })
   );
-
-
 
   await app.listen(process.env.PORT ?? 3000);
 }
