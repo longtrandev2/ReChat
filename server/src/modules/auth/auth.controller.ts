@@ -30,4 +30,9 @@ export class AuthController {
         return user;
     }
 
+    @Post('logout')
+    @UseGuards(AuthGuard('jwt'))
+    logout() {
+        return { message: 'Đăng xuất thành công' };
+    }
 }

@@ -28,8 +28,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         if (!user)
             throw new UnauthorizedException('User không tồn tại')
 
-        //Rest Parameter: bỏ password, phần còn lại là result
-        const { password, ...result } = user;
+        // Rest Parameter: bỏ password, phần còn lại là result
+        const { password: _password, ...result } = user;
 
         return result;
     }
