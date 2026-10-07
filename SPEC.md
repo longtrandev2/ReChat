@@ -28,9 +28,9 @@ Xây dựng ứng dụng web nhắn tin thời gian thực (**Real-time Web Mess
 | **FR-03** | Auth | Đăng xuất khỏi hệ thống (`POST /auth/logout`). |
 | **FR-04** | Profile | Xem thông tin cá nhân và cập nhật Profile (`displayName`, `avatarUrl`). |
 | **FR-05** | Profile | Tìm kiếm người dùng theo `username` hoặc `displayName`. |
-| **FR-06** | Friends | Gửi lời mời kết bạn tới người dùng khác. |
-| **FR-07** | Friends | Chấp nhận hoặc Từ chối lời mời kết bạn; xem danh sách lời mời đang chờ. |
-| **FR-08** | Friends | Xem danh sách bạn bè kèm trạng thái Online / Offline và `lastSeen`. |
+| **FR-06** | Friends | Gửi lời mời kết bạn và Hủy/thu hồi lời mời kết bạn đã gửi. |
+| **FR-07** | Friends | Chấp nhận hoặc Từ chối lời mời kết bạn nhận được; xem danh sách lời mời (đến và đi). |
+| **FR-08** | Friends | Xem danh sách bạn bè kèm trạng thái Online / Offline và `lastSeen`; Hủy kết bạn (Unfriend). |
 | **FR-09** | Inbox | Xem danh sách tất cả các cuộc trò chuyện (Inbox), sắp xếp theo tin nhắn mới nhất, hiển thị snippet tin nhắn cuối và số tin chưa đọc (`unreadCount`). |
 | **FR-10** | Chat 1-1 | Khởi tạo hoặc mở cuộc trò chuyện 1-1 với một người bạn. |
 | **FR-11** | Group Chat | Tạo nhóm chat mới từ danh sách bạn bè (đặt tên nhóm, chọn thành viên ban đầu). Người tạo tự động là `OWNER`. |
@@ -59,6 +59,7 @@ Xây dựng ứng dụng web nhắn tin thời gian thực (**Real-time Web Mess
 | **BR-10** | Khi có tin nhắn mới, hệ thống tự động tăng `unreadCount = unreadCount + 1` cho tất cả thành viên khác trong hội thoại. Khi thành viên gọi `markAsRead`, reset `unreadCount = 0`. | FR-09, FR-16 | N/A (Hệ thống tự tính) |
 | **BR-11** | Mọi request API (trừ Register/Login) và kết nối WebSocket phải có JWT Token hợp lệ. | FR-03 -> FR-17 | `401 Unauthorized` / WS Disconnect |
 | **BR-12** | Khi Owner rời nhóm: Tự động chuyển quyền Owner cho thành viên tiếp theo hoặc giải tán nhóm nếu không còn thành viên nào. | FR-12 | `200 OK` |
+| **BR-13** | Hành động Hủy kết bạn (Unfriend) yêu cầu hai người dùng phải đang có mối quan hệ bạn bè (`status = 'ACCEPTED'`). Nếu không tồn tại quan hệ bạn bè sẽ báo lỗi. | FR-08 | `404 Not Found` / `400 Bad Request` |
 
 ---
 
@@ -79,10 +80,13 @@ Xây dựng ứng dụng web nhắn tin thời gian thực (**Real-time Web Mess
 | Method | Path | Mô tả | Auth | Rules |
 |--------|------|-------|------|-------|
 | `POST` | `/api/v1/friends/request/:userId` | Gửi lời mời kết bạn | Bearer JWT | BR-03, BR-04, BR-11 |
-| `PATCH` | `/api/v1/friends/accept/:requestId` | Chấp nhận lời mời kết bạn | Bearer JWT | BR-11 |
-| `DELETE` | `/api/v1/friends/reject/:requestId` | Từ chối hoặc hủy lời mời kết bạn | Bearer JWT | BR-11 |
+| `PATCH` | `/api/v1/friends/requests/:requestId/accept` | Chấp nhận lời mời kết bạn | Bearer JWT | BR-11 |
+| `DELETE` | `/api/v1/friends/requests/:requestId/reject` | Người nhận từ chối lời mời kết bạn | Bearer JWT | BR-11 |
+| `DELETE` | `/api/v1/friends/requests/:requestId/cancel` | Người gửi thu hồi / hủy lời mời kết bạn | Bearer JWT | BR-11 |
+| `DELETE` | `/api/v1/friends/:friendId` | Hủy kết bạn (Unfriend) | Bearer JWT | BR-11, BR-13 |
 | `GET` | `/api/v1/friends` | Lấy danh sách bạn bè (kèm trạng thái Online/Offline) | Bearer JWT | BR-11 |
-| `GET` | `/api/v1/friends/requests` | Lấy danh sách lời mời kết bạn đang chờ xử lý | Bearer JWT | BR-11 |
+| `GET` | `/api/v1/friends/requests` | Lấy danh sách lời mời kết bạn gửi đến tôi (Received) | Bearer JWT | BR-11 |
+| `GET` | `/api/v1/friends/requests/sent` | Lấy danh sách lời mời kết bạn tôi đã gửi (Sent) | Bearer JWT | BR-11 |
 
 ### 5.3. Conversations & Messages
 | Method | Path | Mô tả | Auth | Rules |
