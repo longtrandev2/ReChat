@@ -1,7 +1,11 @@
+import { ApiProperty } from "@nestjs/swagger";
 import { IsNotEmpty, IsString, Matches, MaxLength, MinLength } from "class-validator";
 
-
 export class RegisterDto {
+    @ApiProperty({
+        description: 'Tài khoản đăng nhập (3 - 20 ký tự, chỉ gồm chữ, số, gạch dưới)',
+        example: 'nguyenvana',
+    })
     @IsNotEmpty({ message: 'Username không được phép để trống' })
     @IsString({ message: 'Username phải là chuỗi' })
     @MinLength(3, { message: 'Username phải từ 3 kí tự trở lên' })
@@ -11,12 +15,19 @@ export class RegisterDto {
     })
     username: string;
 
-
+    @ApiProperty({
+        description: 'Mật khẩu (tối thiểu 6 ký tự)',
+        example: 'Secret@123456',
+    })
     @IsNotEmpty({ message: 'Mật khẩu không được phép để trống' })
     @IsString({ message: 'Mật khẩu phải là chuỗi' })
     @MinLength(6, { message: 'Mật khẩu phải dài hơn 6 kí tự' })
     password: string;
 
+    @ApiProperty({
+        description: 'Xác nhận lại mật khẩu',
+        example: 'Secret@123456',
+    })
     @IsNotEmpty({ message: 'Mật khẩu xác nhận không được phép để trống' })
     @IsString({ message: 'Mật khẩu xác nhận phải là chuỗi' })
     confirmPassword: string;
