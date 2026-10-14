@@ -19,6 +19,8 @@ export enum MessageType {
 
 @Entity('messages')
 @Index(['conversation', 'createdAt'])
+@Index(['conversation', 'isPinned'])
+@Index(['conversation', 'type'])
 export class Message {
     @PrimaryGeneratedColumn('uuid')
     id: string;
@@ -51,6 +53,18 @@ export class Message {
 
     @Column({ default: false })
     isRecalled: boolean;
+
+    @Column({ default: false })
+    isPinned: boolean;
+
+    @Column({ nullable: true, type: 'datetime' })
+    pinnedAt?: Date;
+
+    @ManyToOne(() => User, {
+        nullable: true,
+        onDelete: 'SET NULL',
+    })
+    pinnedBy?: User;
 
     @CreateDateColumn()
     createdAt: Date;

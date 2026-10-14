@@ -18,6 +18,12 @@ export class User {
     @Column({ nullable: true, length: 255 })
     avatarUrl?: string;
 
+    @Column({ default: false })
+    isOnline: boolean;
+
+    @Column({ nullable: true, type: 'datetime' })
+    lastSeen?: Date;
+
     @CreateDateColumn()
     createdAt: Date;
 
