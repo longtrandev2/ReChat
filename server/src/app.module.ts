@@ -5,8 +5,7 @@ import { AppService } from './app.service.js';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule } from '@nestjs/config';
 import { UsersModule } from './modules/users/user.module.js';
-import { RoomsModule } from './modules/rooms/room.module.js';
-import { ChatModule } from './modules/chat/chat.module.js';
+import { ConversationsModule } from './modules/conversations/conversations.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { FriendsModule } from './modules/friends/friends.module.js';
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
@@ -21,8 +20,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
       envFilePath: ['../.env', '.env'],
     }),
     UsersModule,
-    RoomsModule,
-    ChatModule,
+    ConversationsModule,
     AuthModule,
     FriendsModule,
     TypeOrmModule.forRoot({
