@@ -32,6 +32,7 @@ export class AuthController {
     }
 
     @Post('logout')
+    @HttpCode(HttpStatus.OK)
     @UseGuards(AuthGuard('jwt'))
     logout() {
         return { message: 'Đăng xuất thành công' };
