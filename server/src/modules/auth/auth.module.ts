@@ -22,7 +22,7 @@ import { AuthController } from './auth.controller.js';
     ],
     providers: [AuthService, JwtStrategy],
     controllers: [AuthController],
-    exports: [AuthService]
+    exports: [AuthService, JwtModule]
 })
 export class AuthModule { }
 
