@@ -40,6 +40,11 @@ Xây dựng ứng dụng web nhắn tin thời gian thực (**Real-time Web Mess
 | **FR-15** | Real-time | Hiển thị thông báo khi có người dùng đang gõ tin nhắn (`Typing indicator`). |
 | **FR-16** | Real-time | Cập nhật và hiển thị trạng thái đã xem tin nhắn (`Read receipts`). |
 | **FR-17** | Real-time | Đồng bộ trạng thái trực tuyến (Online / Offline) và `lastSeen` của bạn bè theo thời gian thực. |
+| **FR-18** | Group Chat | Quản lý thành viên nhóm nâng cao: Xóa thành viên (Kick), Chuyển giao quyền Trưởng nhóm (Transfer Owner), Phân quyền Admin (Promote/Demote). |
+| **FR-19** | Group Chat | Cập nhật thông tin nhóm trò chuyện (Đổi tên nhóm, cập nhật avatar nhóm). |
+| **FR-20** | Messages | Ghim và bỏ ghim tin nhắn quan trọng trong cuộc trò chuyện; xem danh sách tin nhắn đã ghim. |
+| **FR-21** | Messages | Kho lưu trữ tệp & phương tiện (Media Gallery): Lọc và xem lại các ảnh (`IMAGE`) và tệp tin (`FILE`) đã gửi trong hội thoại bằng Cursor pagination. |
+| **FR-22** | Conversations | Kiểm tra trạng thái hoạt động (Active status) của nhóm hoặc cuộc hội thoại 1-1 (đồng bộ với trạng thái Online/Offline của thành viên). |
 
 ---
 
@@ -60,6 +65,13 @@ Xây dựng ứng dụng web nhắn tin thời gian thực (**Real-time Web Mess
 | **BR-11** | Mọi request API (trừ Register/Login) và kết nối WebSocket phải có JWT Token hợp lệ. | FR-03 -> FR-17 | `401 Unauthorized` / WS Disconnect |
 | **BR-12** | Khi Owner rời nhóm: Tự động chuyển quyền Owner cho thành viên tiếp theo hoặc giải tán nhóm nếu không còn thành viên nào. | FR-12 | `200 OK` |
 | **BR-13** | Hành động Hủy kết bạn (Unfriend) yêu cầu hai người dùng phải đang có mối quan hệ bạn bè (`status = 'ACCEPTED'`). Nếu không tồn tại quan hệ bạn bè sẽ báo lỗi. | FR-08 | `404 Not Found` / `400 Bad Request` |
+| **BR-14** | **Quyền Xóa thành viên (Kick Member):** Chỉ `OWNER` hoặc `ADMIN` mới có quyền xóa thành viên khỏi nhóm chat. `ADMIN` không có quyền xóa `OWNER` hoặc `ADMIN` khác. `OWNER` có quyền xóa bất kỳ ai trừ chính mình. Không áp dụng cho hội thoại `DIRECT`. | FR-18 | `403 Forbidden` / `400 Bad Request` |
+| **BR-15** | **Chuyển quyền Trưởng nhóm (Transfer Owner):** Chỉ `OWNER` hiện tại mới có quyền chuyển giao quyền Trưởng nhóm cho một thành viên hợp lệ khác trong nhóm. Sau khi chuyển giao, người nhận trở thành `OWNER`, người cũ trở thành `ADMIN`. Không áp dụng cho hội thoại `DIRECT`. | FR-18 | `403 Forbidden` / `400 Bad Request` |
+| **BR-16** | **Phân quyền Thành viên (Promote/Demote):** Chỉ `OWNER` mới có quyền thăng cấp `MEMBER` thành `ADMIN` hoặc giáng cấp `ADMIN` về `MEMBER`. Không thể tự thay đổi vai trò của chính mình qua API này. | FR-18 | `403 Forbidden` / `400 Bad Request` |
+| **BR-17** | **Cập nhật thông tin nhóm:** Mọi thành viên trong nhóm chat (`OWNER`, `ADMIN`, `MEMBER`) đều có quyền cập nhật tên nhóm (độ dài 1-50 ký tự) hoặc `avatarUrl` của nhóm chat. Không áp dụng cho hội thoại `DIRECT`. | FR-19 | `403 Forbidden` / `400 Bad Request` |
+| **BR-18** | **Ghim tin nhắn (Pinned Messages):** Thành viên trong cuộc trò chuyện có quyền ghim tin nhắn. Không thể ghim tin nhắn đã bị thu hồi (`isRecalled = true`). Người ghim tin nhắn hoặc `OWNER`/`ADMIN` của cuộc trò chuyện có quyền bỏ ghim. Tin nhắn ghim phải thuộc cuộc hội thoại chỉ định. | FR-20 | `400 Bad Request` / `403 Forbidden` / `404 Not Found` |
+| **BR-19** | **Kho tập tin & phương tiện (Media Gallery):** Chỉ thành viên trong cuộc hội thoại mới có quyền truy cập kho media. Hỗ trợ lọc theo loại tin nhắn (`IMAGE` hoặc `FILE`) kèm Cursor-based pagination (`before`, `limit`). | FR-21 | `403 Forbidden` / `400 Bad Request` |
+| **BR-20** | **Trạng thái Active của Hội thoại:** Đối với `DIRECT`, hội thoại active khi đối phương `isOnline = true`. Đối với `GROUP`, nhóm active khi có ít nhất 1 thành viên khác (ngoại trừ user hiện tại) đang `isOnline = true` (đồng bộ presence). Người gọi phải là thành viên hội thoại. | FR-22 | `403 Forbidden` |
 
 ---
 
@@ -94,10 +106,20 @@ Xây dựng ứng dụng web nhắn tin thời gian thực (**Real-time Web Mess
 | `GET` | `/api/v1/conversations` | Lấy danh sách Inbox kèm lastMessage & unreadCount | Bearer JWT | BR-10, BR-11 |
 | `POST` | `/api/v1/conversations/direct` | Mở/tạo cuộc trò chuyện 1-1 với user `{ targetUserId }` | Bearer JWT | BR-05, BR-11 |
 | `POST` | `/api/v1/conversations/group` | Tạo nhóm chat mới `{ name, memberIds }` | Bearer JWT | BR-06, BR-07, BR-11 |
+| `GET` | `/api/v1/conversations/:id` | Lấy chi tiết cuộc hội thoại và danh sách thành viên | Bearer JWT | BR-08, BR-11 |
+| `PATCH` | `/api/v1/conversations/:id` | Cập nhật thông tin nhóm (đổi tên, avatar) `{ name?, avatarUrl? }` | Bearer JWT | BR-08, BR-17 |
 | `POST` | `/api/v1/conversations/:id/members` | Thêm thành viên vào nhóm chat `{ memberIds }` | Bearer JWT | BR-08, BR-11 |
+| `DELETE` | `/api/v1/conversations/:id/members/:userId` | Xóa thành viên khỏi nhóm chat (Kick member) | Bearer JWT | BR-08, BR-14 |
+| `PATCH` | `/api/v1/conversations/:id/transfer-owner` | Chuyển giao quyền Trưởng nhóm `{ newOwnerId }` | Bearer JWT | BR-08, BR-15 |
+| `PATCH` | `/api/v1/conversations/:id/members/:userId/role` | Thay đổi vai trò thành viên (Thăng/Giáng cấp Admin) `{ role }` | Bearer JWT | BR-08, BR-16 |
 | `DELETE` | `/api/v1/conversations/:id/leave` | Rời khỏi nhóm chat | Bearer JWT | BR-08, BR-12 |
 | `GET` | `/api/v1/conversations/:id/messages` | Lấy lịch sử tin nhắn (hỗ trợ `before={messageId}&limit=30`) | Bearer JWT | BR-08, BR-11 |
 | `PATCH` | `/api/v1/conversations/:id/read` | Đánh dấu đã đọc toàn bộ tin nhắn trong hội thoại | Bearer JWT | BR-08, BR-10 |
+| `POST` | `/api/v1/conversations/:id/messages/:messageId/pin` | Ghim tin nhắn trong cuộc trò chuyện | Bearer JWT | BR-08, BR-18 |
+| `DELETE` | `/api/v1/conversations/:id/messages/:messageId/pin` | Bỏ ghim tin nhắn | Bearer JWT | BR-08, BR-18 |
+| `GET` | `/api/v1/conversations/:id/pinned-messages` | Lấy danh sách tin nhắn đang được ghim | Bearer JWT | BR-08, BR-18 |
+| `GET` | `/api/v1/conversations/:id/media` | Kho ảnh & tệp tin đã gửi (`type=IMAGE\|FILE`, `before`, `limit`) | Bearer JWT | BR-08, BR-19 |
+| `GET` | `/api/v1/conversations/:id/active` | Kiểm tra trạng thái hoạt động trực tuyến (Active presence) | Bearer JWT | BR-08, BR-20 |
 
 ---
 
@@ -185,6 +207,9 @@ erDiagram
         varchar fileUrl "Nullable"
         uuid replyToId FK "Nullable (Self-relation)"
         boolean isRecalled "Default false"
+        boolean isPinned "Default false"
+        datetime pinnedAt "Nullable"
+        uuid pinnedById FK "Nullable"
         datetime createdAt
         datetime updatedAt
     }
@@ -247,6 +272,9 @@ erDiagram
   - `fileUrl`: string (VARCHAR 500, Nullable)
   - `replyToId`: string (UUID, Nullable, Self-relation -> Message.id)
   - `isRecalled`: boolean (Default false)
+  - `isPinned`: boolean (Default false)
+  - `pinnedAt`: Date (DATETIME, Nullable)
+  - `pinnedById`: string (UUID, Foreign Key -> User.id, Nullable)
   - `createdAt`: Date (DATETIME)
   - `updatedAt`: Date (DATETIME)
 
