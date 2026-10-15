@@ -20,6 +20,7 @@ import {
     UpdateMemberRoleDto,
     UpdateGroupDto,
     GetMediaQueryDto,
+    SendMessageDto,
 } from './dto/index.js';
 
 @Injectable()
@@ -440,7 +441,7 @@ export class ConversationsService {
     async markAsRead(
         currentUserId: string,
         conversationId: string,
-    ): Promise<{ message: string }> {
+    ): Promise<{ message: string; lastReadMessageId?: string }> {
         // 1. Kiểm tra thành viên
         const member = await this.memberRepository.findOne({
             where: {
@@ -467,7 +468,10 @@ export class ConversationsService {
 
         await this.memberRepository.save(member);
 
-        return { message: 'Đã đánh dấu đã đọc thành công' };
+        return {
+            message: 'Đã đánh dấu đã đọc thành công',
+            lastReadMessageId: member.lastReadMessageId,
+        };
     }
 
     /**
@@ -1000,5 +1004,115 @@ export class ConversationsService {
             totalMemberCount: conversation.members.length,
         };
     }
+
+    /**
+     * Xác thực người dùng có phải thành viên của cuộc hội thoại hay không (BR-08)
+     */
+    async validateMembership(
+        conversationId: string,
+        userId: string,
+    ): Promise<ConversationMember> {
+        const member = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: userId },
+            },
+            relations: {
+                user: true,
+            },
+        });
+
+        if (!member) {
+            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
+        }
+
+        return member;
+    }
+
+    /**
+     * Tạo và lưu tin nhắn mới vào cuộc hội thoại (FR-15, BR-08, BR-09, BR-10)
+     */
+    async createMessage(
+        senderId: string,
+        dto: SendMessageDto,
+    ): Promise<Message> {
+        const { conversationId, content, type = MessageType.TEXT, fileUrl, replyToId } = dto;
+
+        // 1. Kiểm tra thành viên hội thoại (BR-08)
+        await this.validateMembership(conversationId, senderId);
+
+        // 2. Validate nội dung tin nhắn (BR-09)
+        if (!content || !content.trim()) {
+            throw new BadRequestException('Nội dung tin nhắn không được để trống');
+        }
+        if (content.trim().length > 2000) {
+            throw new BadRequestException('Nội dung tin nhắn không được vượt quá 2000 ký tự');
+        }
+
+        // 3. Nếu là replyTo, kiểm tra tin nhắn gốc có thuộc hội thoại này không
+        if (replyToId) {
+            const originalMessage = await this.messageRepository.findOne({
+                where: {
+                    id: replyToId,
+                    conversation: { id: conversationId },
+                },
+            });
+            if (!originalMessage) {
+                throw new BadRequestException('Tin nhắn trả lời không tồn tại trong cuộc hội thoại này');
+            }
+        }
+
+        // 4. Lưu tin nhắn mới vào DB
+        const message = this.messageRepository.create({
+            conversation: { id: conversationId } as Conversation,
+            sender: { id: senderId } as User,
+            content: content.trim(),
+            type,
+            fileUrl,
+            replyToId,
+        });
+        const savedMessage = await this.messageRepository.save(message);
+
+        // 5. Cập nhật lastMessageId và lastMessageAt của conversation
+        await this.conversationRepository.update(conversationId, {
+            lastMessageId: savedMessage.id,
+            lastMessageAt: savedMessage.createdAt,
+        });
+
+        // 6. Tăng unreadCount cho các thành viên khác trong nhóm (BR-10)
+        await this.memberRepository
+            .createQueryBuilder()
+            .update(ConversationMember)
+            .set({ unreadCount: () => 'unreadCount + 1' })
+            .where('conversationId = :conversationId', { conversationId })
+            .andWhere('userId != :senderId', { senderId })
+            .execute();
+
+        // 7. Lấy lại tin nhắn kèm thông tin người gửi đầy đủ
+        return await this.messageRepository.findOneOrFail({
+            where: { id: savedMessage.id },
+            relations: {
+                sender: true,
+            },
+            select: {
+                id: true,
+                content: true,
+                type: true,
+                fileUrl: true,
+                replyToId: true,
+                isRecalled: true,
+                isPinned: true,
+                createdAt: true,
+                updatedAt: true,
+                sender: {
+                    id: true,
+                    username: true,
+                    displayName: true,
+                    avatarUrl: true,
+                },
+            },
+        });
+    }
 }
+
 

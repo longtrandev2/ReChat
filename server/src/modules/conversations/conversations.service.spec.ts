@@ -30,6 +30,9 @@ describe('ConversationsService', () => {
         orderBy: vi.fn().mockReturnThis(),
         addOrderBy: vi.fn().mockReturnThis(),
         take: vi.fn().mockReturnThis(),
+        update: vi.fn().mockReturnThis(),
+        set: vi.fn().mockReturnThis(),
+        execute: vi.fn().mockResolvedValue({ affected: 1 }),
         getOne: vi.fn().mockResolvedValue(Array.isArray(result) ? result[0] || null : result),
         getMany: vi.fn().mockResolvedValue(Array.isArray(result) ? result : [result]),
     });
@@ -40,6 +43,7 @@ describe('ConversationsService', () => {
             find: vi.fn(),
             create: vi.fn((data) => ({ id: 'conv-uuid-created', ...data })),
             save: vi.fn((data) => Promise.resolve(data)),
+            update: vi.fn().mockResolvedValue({ affected: 1 }),
             delete: vi.fn().mockResolvedValue({ affected: 1 }),
             createQueryBuilder: vi.fn(() => createMockQueryBuilder()),
         };
@@ -50,10 +54,12 @@ describe('ConversationsService', () => {
             create: vi.fn((data) => ({ id: 'member-uuid-created', ...data })),
             save: vi.fn((data) => Promise.resolve(data)),
             delete: vi.fn().mockResolvedValue({ affected: 1 }),
+            createQueryBuilder: vi.fn(() => createMockQueryBuilder()),
         };
 
         mockMessageRepo = {
             findOne: vi.fn(),
+            findOneOrFail: vi.fn(),
             find: vi.fn(),
             create: vi.fn((data) => ({ id: 'msg-uuid-created', ...data })),
             save: vi.fn((data) => Promise.resolve(data)),
@@ -879,4 +885,115 @@ describe('ConversationsService', () => {
             expect(result.activeMemberCount).toBe(0);
         });
     });
+
+    describe('validateMembership (BR-08)', () => {
+        const conversationId = 'conv-123';
+        const userId = 'user-123';
+
+        it('should return member if user is a member of the conversation', async () => {
+            const mockMember = { id: 'mem-1', conversation: { id: conversationId }, user: { id: userId } };
+            mockMemberRepo.findOne.mockResolvedValue(mockMember);
+
+            const result = await service.validateMembership(conversationId, userId);
+            expect(result).toEqual(mockMember);
+            expect(mockMemberRepo.findOne).toHaveBeenCalledWith({
+                where: { conversation: { id: conversationId }, user: { id: userId } },
+                relations: { user: true },
+            });
+        });
+
+        it('should throw ForbiddenException if user is not a member (BR-08)', async () => {
+            mockMemberRepo.findOne.mockResolvedValue(null);
+
+            await expect(service.validateMembership(conversationId, userId)).rejects.toThrow(
+                ForbiddenException,
+            );
+        });
+    });
+
+    describe('createMessage (FR-15, BR-08, BR-09, BR-10)', () => {
+        const senderId = 'sender-uuid-1';
+        const conversationId = 'conv-uuid-1';
+        const validDto = {
+            conversationId,
+            content: 'Hello, this is a real-time message!',
+            type: MessageType.TEXT,
+        };
+
+        it('should throw ForbiddenException if sender is not a member of the conversation (BR-08)', async () => {
+            mockMemberRepo.findOne.mockResolvedValue(null);
+
+            await expect(service.createMessage(senderId, validDto)).rejects.toThrow(
+                ForbiddenException,
+            );
+        });
+
+        it('should throw BadRequestException if content is empty (BR-09)', async () => {
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'mem-1' });
+
+            await expect(
+                service.createMessage(senderId, { ...validDto, content: '   ' }),
+            ).rejects.toThrow(BadRequestException);
+        });
+
+        it('should throw BadRequestException if content exceeds 2000 characters (BR-09)', async () => {
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'mem-1' });
+            const longContent = 'a'.repeat(2001);
+
+            await expect(
+                service.createMessage(senderId, { ...validDto, content: longContent }),
+            ).rejects.toThrow(BadRequestException);
+        });
+
+        it('should throw BadRequestException if replyToId does not exist in the conversation', async () => {
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'mem-1' });
+            mockMessageRepo.findOne.mockResolvedValue(null);
+
+            await expect(
+                service.createMessage(senderId, { ...validDto, replyToId: 'non-existent-msg' }),
+            ).rejects.toThrow(BadRequestException);
+        });
+
+        it('should save message, update conversation lastMessage, increment unreadCount, and return message (BR-10)', async () => {
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'mem-1' });
+            const savedMsg = {
+                id: 'new-msg-uuid',
+                content: validDto.content,
+                type: MessageType.TEXT,
+                createdAt: new Date(),
+            };
+            mockMessageRepo.save.mockResolvedValue(savedMsg);
+            const populatedMsg = {
+                ...savedMsg,
+                sender: { id: senderId, username: 'sender1', displayName: 'Sender One' },
+            };
+            mockMessageRepo.findOneOrFail.mockResolvedValue(populatedMsg);
+
+            const result = await service.createMessage(senderId, validDto);
+
+            // 1. Verify Message was saved
+            expect(mockMessageRepo.create).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    conversation: { id: conversationId },
+                    sender: { id: senderId },
+                    content: validDto.content,
+                    type: MessageType.TEXT,
+                }),
+            );
+            expect(mockMessageRepo.save).toHaveBeenCalled();
+
+            // 2. Verify Conversation lastMessage was updated
+            expect(mockConversationRepo.update).toHaveBeenCalledWith(conversationId, {
+                lastMessageId: savedMsg.id,
+                lastMessageAt: savedMsg.createdAt,
+            });
+
+            // 3. Verify memberRepository updated unreadCount
+            expect(mockMemberRepo.createQueryBuilder).toHaveBeenCalled();
+
+            // 4. Return populated message
+            expect(result).toEqual(populatedMsg);
+        });
+    });
 });
+
