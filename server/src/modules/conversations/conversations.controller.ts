@@ -30,6 +30,7 @@ import {
     UpdateMemberRoleDto,
     UpdateGroupDto,
     GetMediaQueryDto,
+    EditMessageDto,
 } from './dto/index.js';
 
 @ApiTags('conversations')
@@ -1131,6 +1132,68 @@ export class ConversationsController {
     ) {
         return this.conversationsService.getConversationActiveStatus(user.id, conversationId);
     }
+
+    /**
+     * Thu hồi tin nhắn trong cuộc trò chuyện (Milestone 5, BR-M5-01 -> BR-M5-03)
+     * PATCH /api/v1/conversations/:id/messages/:messageId/recall
+     */
+    @Patch(':id/messages/:messageId/recall')
+    @ApiOperation({ summary: 'Thu hồi tin nhắn trong cuộc trò chuyện không giới hạn thời gian (Milestone 5)' })
+    @ApiParam({ name: 'id', description: 'UUID của cuộc hội thoại', format: 'uuid' })
+    @ApiParam({ name: 'messageId', description: 'UUID của tin nhắn cần thu hồi', format: 'uuid' })
+    @ApiResponse({
+        status: 200,
+        description: 'Thu hồi tin nhắn thành công',
+    })
+    @ApiResponse({
+        status: 403,
+        description: 'Người dùng không phải thành viên hoặc không phải chủ sở hữu tin nhắn',
+    })
+    @ApiResponse({
+        status: 404,
+        description: 'Không tìm thấy cuộc hội thoại hoặc tin nhắn',
+    })
+    async recallMessage(
+        @CurrentUser() user: User,
+        @Param('id', ParseUUIDPipe) conversationId: string,
+        @Param('messageId', ParseUUIDPipe) messageId: string,
+    ) {
+        return this.conversationsService.recallMessage(user.id, conversationId, messageId);
+    }
+
+    /**
+     * Chỉnh sửa nội dung tin nhắn văn bản (Milestone 5, BR-M5-04 -> BR-M5-07)
+     * PATCH /api/v1/conversations/:id/messages/:messageId/edit
+     */
+    @Patch(':id/messages/:messageId/edit')
+    @ApiOperation({ summary: 'Chỉnh sửa nội dung tin nhắn văn bản trong 15 phút (Milestone 5)' })
+    @ApiParam({ name: 'id', description: 'UUID của cuộc hội thoại', format: 'uuid' })
+    @ApiParam({ name: 'messageId', description: 'UUID của tin nhắn cần chỉnh sửa', format: 'uuid' })
+    @ApiResponse({
+        status: 200,
+        description: 'Chỉnh sửa tin nhắn thành công',
+    })
+    @ApiResponse({
+        status: 400,
+        description: 'Tin nhắn đã quá 15 phút, đã bị thu hồi hoặc nội dung không hợp lệ',
+    })
+    @ApiResponse({
+        status: 403,
+        description: 'Không phải chủ sở hữu tin nhắn',
+    })
+    @ApiResponse({
+        status: 404,
+        description: 'Không tìm thấy cuộc hội thoại hoặc tin nhắn',
+    })
+    async editMessage(
+        @CurrentUser() user: User,
+        @Param('id', ParseUUIDPipe) conversationId: string,
+        @Param('messageId', ParseUUIDPipe) messageId: string,
+        @Body() dto: EditMessageDto,
+    ) {
+        return this.conversationsService.editMessage(user.id, conversationId, messageId, dto.content);
+    }
 }
+
 
 

@@ -21,6 +21,8 @@ import {
     InboxUpdatedEvent,
     GroupMemberEvent,
     MessagePinnedEvent,
+    MessageRecalledEvent,
+    MessageEditedEvent,
 } from '../../../common/events/index.js';
 
 describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () => {
@@ -37,6 +39,9 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
     let mockConversationsService: {
         validateMembership: ReturnType<typeof vi.fn>;
         createMessage: ReturnType<typeof vi.fn>;
+        markAsRead: ReturnType<typeof vi.fn>;
+        recallMessage: ReturnType<typeof vi.fn>;
+        editMessage: ReturnType<typeof vi.fn>;
     };
     let mockUserRepository: {
         update: ReturnType<typeof vi.fn>;
@@ -89,6 +94,8 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
             validateMembership: vi.fn().mockResolvedValue({ id: 'mem-1' }),
             createMessage: vi.fn(),
             markAsRead: vi.fn(),
+            recallMessage: vi.fn(),
+            editMessage: vi.fn(),
         };
 
         mockUserRepository = {
@@ -779,8 +786,157 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
                 messageId: 'msg-1',
             });
         });
+
+        it('handleMessageRecalled should emit messageRecalled to room and conversationUpdated if last message', () => {
+            const recallEvent = new MessageRecalledEvent(
+                'conv-1',
+                'msg-1',
+                new Date(),
+                'u1',
+                true,
+                ['u1', 'u2'],
+            );
+
+            gateway.handleMessageRecalled(recallEvent);
+
+            expect(mockServer.to).toHaveBeenCalledWith('conv_conv-1');
+            expect(mockServer.emit).toHaveBeenCalledWith(
+                'messageRecalled',
+                expect.objectContaining({
+                    conversationId: 'conv-1',
+                    messageId: 'msg-1',
+                }),
+            );
+
+            expect(mockServer.to).toHaveBeenCalledWith('user_u1');
+            expect(mockServer.to).toHaveBeenCalledWith('user_u2');
+            expect(mockServer.emit).toHaveBeenCalledWith(
+                'conversationUpdated',
+                expect.objectContaining({
+                    conversationId: 'conv-1',
+                    lastMessage: expect.objectContaining({
+                        isRecalled: true,
+                    }),
+                }),
+            );
+        });
+
+        it('handleMessageEdited should emit messageEdited to room and conversationUpdated if last message', () => {
+            const editEvent = new MessageEditedEvent(
+                'conv-1',
+                'msg-1',
+                'Nội dung mới',
+                new Date(),
+                'u1',
+                true,
+                ['u1', 'u2'],
+            );
+
+            gateway.handleMessageEdited(editEvent);
+
+            expect(mockServer.to).toHaveBeenCalledWith('conv_conv-1');
+            expect(mockServer.emit).toHaveBeenCalledWith(
+                'messageEdited',
+                expect.objectContaining({
+                    conversationId: 'conv-1',
+                    messageId: 'msg-1',
+                    content: 'Nội dung mới',
+                    isEdited: true,
+                }),
+            );
+
+            expect(mockServer.to).toHaveBeenCalledWith('user_u1');
+            expect(mockServer.to).toHaveBeenCalledWith('user_u2');
+            expect(mockServer.emit).toHaveBeenCalledWith(
+                'conversationUpdated',
+                expect.objectContaining({
+                    conversationId: 'conv-1',
+                    lastMessage: expect.objectContaining({
+                        content: 'Nội dung mới',
+                        isEdited: true,
+                    }),
+                }),
+            );
+        });
+    });
+
+    describe('handleRecallMessage & handleEditMessage socket handlers', () => {
+        it('handleRecallMessage should throw WsException if client has no authenticated user', async () => {
+            const client = createMockSocket() as Socket;
+            client.data.user = undefined;
+
+            await expect(
+                gateway.handleRecallMessage(client, { conversationId: 'conv-1', messageId: 'msg-1' }),
+            ).rejects.toThrow(WsException);
+        });
+
+        it('handleRecallMessage should recall message and return success response', async () => {
+            const client = createMockSocket() as Socket;
+            client.data.user = { id: 'user-uuid-1', username: 'john_doe' };
+
+            mockConversationsService.recallMessage.mockResolvedValueOnce({
+                id: 'msg-1',
+                isRecalled: true,
+                content: '[Tin nhắn đã bị thu hồi]',
+            });
+
+            const result = await gateway.handleRecallMessage(client, {
+                conversationId: 'conv-1',
+                messageId: 'msg-1',
+            });
+
+            expect(mockConversationsService.recallMessage).toHaveBeenCalledWith(
+                'user-uuid-1',
+                'conv-1',
+                'msg-1',
+            );
+            expect(result.status).toBe('success');
+            expect(result.data.isRecalled).toBe(true);
+        });
+
+        it('handleEditMessage should throw WsException if client has no authenticated user', async () => {
+            const client = createMockSocket() as Socket;
+            client.data.user = undefined;
+
+            await expect(
+                gateway.handleEditMessage(client, {
+                    conversationId: 'conv-1',
+                    messageId: 'msg-1',
+                    content: 'Nội dung mới',
+                }),
+            ).rejects.toThrow(WsException);
+        });
+
+        it('handleEditMessage should edit message and return success response', async () => {
+            const client = createMockSocket() as Socket;
+            client.data.user = { id: 'user-uuid-1', username: 'john_doe' };
+
+            mockConversationsService.editMessage.mockResolvedValueOnce({
+                id: 'msg-1',
+                content: 'Nội dung mới',
+                isEdited: true,
+                editedAt: new Date(),
+            });
+
+            const result = await gateway.handleEditMessage(client, {
+                conversationId: 'conv-1',
+                messageId: 'msg-1',
+                content: 'Nội dung mới',
+            });
+
+            expect(mockConversationsService.editMessage).toHaveBeenCalledWith(
+                'user-uuid-1',
+                'conv-1',
+                'msg-1',
+                'Nội dung mới',
+            );
+            expect(result.status).toBe('success');
+            expect(result.data.content).toBe('Nội dung mới');
+            expect(result.data.isEdited).toBe(true);
+        });
     });
 });
+
 
 
 
