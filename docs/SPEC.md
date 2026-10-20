@@ -148,6 +148,7 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 | `GET` | `/api/v1/conversations/:id/active` | Kiểm tra trạng thái hoạt động trực tuyến (Active presence) | Bearer JWT | BR-08, BR-20 |
 | `PATCH` | `/api/v1/conversations/:id/messages/:messageId/recall` | Thu hồi tin nhắn trong cuộc trò chuyện (Không giới hạn thời gian) | Bearer JWT | BR-M5-01, BR-M5-02, BR-M5-03 |
 | `PATCH` | `/api/v1/conversations/:id/messages/:messageId/edit` | Chỉnh sửa tin nhắn văn bản trong vòng 15 phút `{ content }` | Bearer JWT | BR-M5-04 -> BR-M5-07 |
+| `POST` | `/api/v1/conversations/:id/messages/:messageId/react` | Thả hoặc hủy cảm xúc emoji (Toggle: ADDED, REMOVED, CHANGED) `{ emoji }` | Bearer JWT | BR-M5-07, BR-M5-08 |
 
 ---
 
@@ -163,6 +164,7 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 | `markAsRead` | `{ conversationId: string }` | Đánh dấu đã xem toàn bộ tin nhắn trong hội thoại | BR-08, BR-10 |
 | `recallMessage` | `{ conversationId: string, messageId: string }` | Thu hồi tin nhắn không giới hạn thời gian | BR-M5-01, BR-M5-02 |
 | `editMessage` | `{ conversationId: string, messageId: string, content: string }` | Chỉnh sửa tin nhắn văn bản trong 15 phút | BR-M5-04 -> BR-M5-07 |
+| `reactMessage` | `{ conversationId: string, messageId: string, emoji: string }` | Thả hoặc hủy cảm xúc emoji (Toggle logic) | BR-M5-07, BR-M5-08 |
 
 ### 6.2. Server ➔ Client
 
@@ -174,6 +176,7 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 | `messageRead` | `{ conversationId: string, userId: string, readAt: string }` | Người khác trong Conv | Báo tin nhắn đã được xem |
 | `messageRecalled` | `{ conversationId: string, messageId: string, recalledAt: string, senderId: string }` | Cả Conversation | Thông báo tin nhắn đã bị thu hồi |
 | `messageEdited` | `{ conversationId: string, messageId: string, content: string, isEdited: true, editedAt: string, senderId: string }` | Cả Conversation | Thông báo tin nhắn đã được chỉnh sửa |
+| `messageReactionUpdated` | `{ conversationId: string, messageId: string, user: { id, displayName, avatarUrl }, emoji: string, action: 'ADDED'\|'REMOVED'\|'CHANGED' }` | Cả Conversation | Thông báo phản ứng cảm xúc emoji được cập nhật |
 | `messagePinned` | `{ conversationId: string, message: object, pinnedBy: object }` | Cả Conversation | Thông báo tin nhắn đã được ghim |
 | `messageUnpinned` | `{ conversationId: string, messageId: string }` | Cả Conversation | Thông báo tin nhắn được bỏ ghim |
 | `groupMemberUpdated`| `{ conversationId: string, action: string, member: object, operatorId: string }` | Cả Conversation | Thông báo thay đổi thành viên nhóm (`ADDED`, `REMOVED`, `LEFT`, `ROLE_UPDATED`) |
@@ -345,12 +348,13 @@ erDiagram
   - `createdAt`: Date (DATETIME)
   - `updatedAt`: Date (DATETIME)
 
-- **MessageReaction Entity** *(Được chuẩn bị sẵn cho Phase 2)*:
+- **MessageReaction Entity** *(Milestone 5 - Scope 3)*:
   - `id`: string (UUID, Primary Key)
   - `messageId`: string (UUID, Foreign Key -> Message.id)
   - `userId`: string (UUID, Foreign Key -> User.id)
-  - `emoji`: string (VARCHAR 10)
+  - `emoji`: string (VARCHAR 32)
   - `createdAt`: Date (DATETIME)
+  - **Unique Index**: Composite `[messageId, userId]`
 
 ---
 
