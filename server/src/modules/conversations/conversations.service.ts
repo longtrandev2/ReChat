@@ -1422,6 +1422,7 @@ export class ConversationsService {
         }
 
         // 6. Áp dụng Tombstone pattern
+        const originalFileUrl = message.fileUrl;
         message.isRecalled = true;
         message.content = '[Tin nhắn đã bị thu hồi]';
         message.fileUrl = undefined;
@@ -1445,6 +1446,7 @@ export class ConversationsService {
                 currentUserId,
                 isLastMessage,
                 memberIds,
+                originalFileUrl,
             ),
         );
 

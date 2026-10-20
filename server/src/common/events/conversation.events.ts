@@ -60,6 +60,7 @@ export class MessageRecalledEvent {
         public readonly senderId: string,
         public readonly isLastMessage?: boolean,
         public readonly memberIds?: string[],
+        public readonly fileUrl?: string | null,
     ) { }
 }
 
