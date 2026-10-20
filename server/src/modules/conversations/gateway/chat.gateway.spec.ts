@@ -11,6 +11,17 @@ import { MessageType } from '../entities/message.entity.js';
 import { User } from '../../users/entities/user.entity.js';
 import { Friendship, FriendshipStatus } from '../../friends/entities/friendship.entity.js';
 import { Socket } from 'socket.io';
+import {
+    FriendRequestSentEvent,
+    FriendRequestAcceptedEvent,
+    FriendRequestRejectedEvent,
+    FriendRequestCancelledEvent,
+    FriendRemovedEvent,
+    ConversationCreatedEvent,
+    InboxUpdatedEvent,
+    GroupMemberEvent,
+    MessagePinnedEvent,
+} from '../../../common/events/index.js';
 
 describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () => {
     let gateway: ChatGateway;
@@ -600,6 +611,172 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
                 ).rejects.toThrow(ForbiddenException);
 
                 expect(mockServer.emit).not.toHaveBeenCalled();
+            });
+        });
+    });
+
+    // =========================================================================
+    // LAYER 4: NOTIFICATION EVENT LISTENERS (In-App Event Bus)
+    // =========================================================================
+    describe('Notification Event Listeners (In-App Event Bus)', () => {
+        beforeEach(() => {
+            gateway.server = mockServer as any;
+        });
+
+        it('handleFriendRequestSent should emit friendRequestReceived to recipient room', () => {
+            const event = new FriendRequestSentEvent(
+                'req-1',
+                { id: 'u1', username: 'alex', displayName: 'Alex' },
+                'u2',
+                new Date(),
+            );
+
+            gateway.handleFriendRequestSent(event);
+
+            expect(mockServer.to).toHaveBeenCalledWith('user_u2');
+            expect(mockServer.emit).toHaveBeenCalledWith(
+                'friendRequestReceived',
+                expect.objectContaining({
+                    requestId: 'req-1',
+                    requester: expect.objectContaining({ username: 'alex' }),
+                }),
+            );
+        });
+
+        it('handleFriendRequestAccepted should emit friendRequestAccepted to requester room', () => {
+            const event = new FriendRequestAcceptedEvent(
+                'f-1',
+                'u1',
+                { id: 'u2', username: 'bob', displayName: 'Bob', isOnline: true },
+                new Date(),
+            );
+
+            gateway.handleFriendRequestAccepted(event);
+
+            expect(mockServer.to).toHaveBeenCalledWith('user_u1');
+            expect(mockServer.emit).toHaveBeenCalledWith(
+                'friendRequestAccepted',
+                expect.objectContaining({
+                    friendshipId: 'f-1',
+                    friend: expect.objectContaining({ username: 'bob' }),
+                }),
+            );
+        });
+
+        it('handleFriendRequestRejected should emit friendRequestRejected to requester room', () => {
+            const event = new FriendRequestRejectedEvent('req-1', 'u1');
+
+            gateway.handleFriendRequestRejected(event);
+
+            expect(mockServer.to).toHaveBeenCalledWith('user_u1');
+            expect(mockServer.emit).toHaveBeenCalledWith('friendRequestRejected', { requestId: 'req-1' });
+        });
+
+        it('handleFriendRequestCancelled should emit friendRequestCancelled to addressee room', () => {
+            const event = new FriendRequestCancelledEvent('req-1', 'u2');
+
+            gateway.handleFriendRequestCancelled(event);
+
+            expect(mockServer.to).toHaveBeenCalledWith('user_u2');
+            expect(mockServer.emit).toHaveBeenCalledWith('friendRequestCancelled', { requestId: 'req-1' });
+        });
+
+        it('handleFriendRemoved should emit friendRemoved to both users', () => {
+            const event = new FriendRemovedEvent('u1', 'u2');
+
+            gateway.handleFriendRemoved(event);
+
+            expect(mockServer.to).toHaveBeenCalledWith('user_u2');
+            expect(mockServer.to).toHaveBeenCalledWith('user_u1');
+            expect(mockServer.emit).toHaveBeenCalledWith('friendRemoved', { friendId: 'u1' });
+            expect(mockServer.emit).toHaveBeenCalledWith('friendRemoved', { friendId: 'u2' });
+        });
+
+        it('handleConversationCreated should emit conversationCreated to all member personal rooms', () => {
+            const event = new ConversationCreatedEvent('conv-1', ['u1', 'u2'], { id: 'conv-1' });
+
+            gateway.handleConversationCreated(event);
+
+            expect(mockServer.to).toHaveBeenCalledWith('user_u1');
+            expect(mockServer.to).toHaveBeenCalledWith('user_u2');
+            expect(mockServer.emit).toHaveBeenCalledWith('conversationCreated', { id: 'conv-1' });
+        });
+
+        it('handleInboxUpdated should emit conversationUpdated to all member personal rooms', () => {
+            const event = new InboxUpdatedEvent(
+                'conv-1',
+                ['u1', 'u2'],
+                { id: 'msg-1', content: 'hello', type: 'TEXT', senderName: 'Alex', createdAt: new Date() },
+                'u1',
+            );
+
+            gateway.handleInboxUpdated(event);
+
+            expect(mockServer.to).toHaveBeenCalledWith('user_u1');
+            expect(mockServer.to).toHaveBeenCalledWith('user_u2');
+            expect(mockServer.emit).toHaveBeenCalledWith(
+                'conversationUpdated',
+                expect.objectContaining({
+                    conversationId: 'conv-1',
+                    senderId: 'u1',
+                }),
+            );
+        });
+
+        it('handleGroupMemberEvent should emit groupMemberUpdated to conversation room and groupMembershipChanged to affected users', () => {
+            const event = new GroupMemberEvent(
+                'conv-1',
+                'ADDED',
+                { id: 'u1', displayName: 'Admin' },
+                ['u2'],
+            );
+
+            gateway.handleGroupMemberEvent(event);
+
+            expect(mockServer.to).toHaveBeenCalledWith('conv_conv-1');
+            expect(mockServer.emit).toHaveBeenCalledWith(
+                'groupMemberUpdated',
+                expect.objectContaining({
+                    conversationId: 'conv-1',
+                    action: 'ADDED',
+                }),
+            );
+            expect(mockServer.to).toHaveBeenCalledWith('user_u2');
+            expect(mockServer.emit).toHaveBeenCalledWith(
+                'groupMembershipChanged',
+                expect.objectContaining({
+                    conversationId: 'conv-1',
+                    action: 'ADDED',
+                }),
+            );
+        });
+
+        it('handleMessagePinned should emit messagePinned when pinned and messageUnpinned when unpinned', () => {
+            const pinEvent = new MessagePinnedEvent(
+                'conv-1',
+                'msg-1',
+                true,
+                { id: 'msg-1', content: 'Pinned text' },
+                { id: 'u1', displayName: 'Admin' },
+            );
+
+            gateway.handleMessagePinned(pinEvent);
+
+            expect(mockServer.to).toHaveBeenCalledWith('conv_conv-1');
+            expect(mockServer.emit).toHaveBeenCalledWith(
+                'messagePinned',
+                expect.objectContaining({
+                    messageId: 'msg-1',
+                }),
+            );
+
+            const unpinEvent = new MessagePinnedEvent('conv-1', 'msg-1', false);
+            gateway.handleMessagePinned(unpinEvent);
+
+            expect(mockServer.to).toHaveBeenCalledWith('conv_conv-1');
+            expect(mockServer.emit).toHaveBeenCalledWith('messageUnpinned', {
+                conversationId: 'conv-1',
+                messageId: 'msg-1',
             });
         });
     });
