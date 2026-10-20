@@ -11,6 +11,7 @@ import { ConversationsService } from './conversations.service.js';
 import { Conversation, ConversationType } from './entities/conversation.entity.js';
 import { ConversationMember, ConversationRole } from './entities/conversation-member.entity.js';
 import { Message, MessageType } from './entities/message.entity.js';
+import { MessageReaction } from './entities/message-reaction.entity.js';
 import { User } from '../users/entities/user.entity.js';
 import { Friendship, FriendshipStatus } from '../friends/entities/friendship.entity.js';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -20,6 +21,7 @@ describe('ConversationsService', () => {
     let mockConversationRepo: any;
     let mockMemberRepo: any;
     let mockMessageRepo: any;
+    let mockReactionRepo: any;
     let mockUserRepo: any;
     let mockFriendshipRepo: any;
     let mockEventEmitter: any;
@@ -82,12 +84,22 @@ describe('ConversationsService', () => {
             emit: vi.fn(),
         };
 
+        mockReactionRepo = {
+            findOne: vi.fn().mockResolvedValue(null),
+            find: vi.fn().mockResolvedValue([]),
+            create: vi.fn((data) => ({ id: 'reaction-uuid', ...data })),
+            save: vi.fn((data) => Promise.resolve(data)),
+            remove: vi.fn().mockResolvedValue({ affected: 1 }),
+            delete: vi.fn().mockResolvedValue({ affected: 1 }),
+        };
+
         const module: TestingModule = await Test.createTestingModule({
             providers: [
                 ConversationsService,
                 { provide: getRepositoryToken(Conversation), useValue: mockConversationRepo },
                 { provide: getRepositoryToken(ConversationMember), useValue: mockMemberRepo },
                 { provide: getRepositoryToken(Message), useValue: mockMessageRepo },
+                { provide: getRepositoryToken(MessageReaction), useValue: mockReactionRepo },
                 { provide: getRepositoryToken(User), useValue: mockUserRepo },
                 { provide: getRepositoryToken(Friendship), useValue: mockFriendshipRepo },
                 { provide: EventEmitter2, useValue: mockEventEmitter },
@@ -1026,7 +1038,13 @@ describe('ConversationsService', () => {
             expect(mockMemberRepo.createQueryBuilder).toHaveBeenCalled();
 
             // 4. Return populated message
-            expect(result).toEqual(populatedMsg);
+            expect(result).toEqual(
+                expect.objectContaining({
+                    ...populatedMsg,
+                    replyTo: null,
+                    reactions: [],
+                }),
+            );
 
             // 5. Verify inbox.updated event was emitted
             expect(mockEventEmitter.emit).toHaveBeenCalledWith(
@@ -1305,6 +1323,299 @@ describe('ConversationsService', () => {
                     memberIds: [currentUserId, otherUserId],
                 }),
             );
+        });
+    });
+
+    // ==========================================
+    // Reactions & Reply Context (Milestone 5, Scope 3)
+    // ==========================================
+    describe('Reactions & Reply Context (Milestone 5, Scope 3)', () => {
+        const conversationId = 'conv-123';
+        const currentUserId = 'user-me';
+        const otherUserId = 'user-other';
+        const messageId = 'msg-123';
+
+        describe('reactMessage', () => {
+            it('nên ném lỗi NotFoundException nếu cuộc trò chuyện không tồn tại', async () => {
+                mockConversationRepo.findOne.mockResolvedValueOnce(null);
+
+                await expect(
+                    service.reactMessage(currentUserId, conversationId, messageId, '👍'),
+                ).rejects.toThrow(NotFoundException);
+            });
+
+            it('nên ném lỗi ForbiddenException nếu người dùng không phải thành viên', async () => {
+                mockConversationRepo.findOne.mockResolvedValueOnce({ id: conversationId });
+                mockMemberRepo.findOne.mockResolvedValueOnce(null);
+
+                await expect(
+                    service.reactMessage(currentUserId, conversationId, messageId, '👍'),
+                ).rejects.toThrow(ForbiddenException);
+            });
+
+            it('nên ném lỗi NotFoundException nếu tin nhắn không tồn tại', async () => {
+                mockConversationRepo.findOne.mockResolvedValueOnce({ id: conversationId });
+                mockMemberRepo.findOne.mockResolvedValueOnce({ id: 'mem-1', user: { id: currentUserId } });
+                mockMessageRepo.findOne.mockResolvedValueOnce(null);
+
+                await expect(
+                    service.reactMessage(currentUserId, conversationId, messageId, '👍'),
+                ).rejects.toThrow(NotFoundException);
+            });
+
+            it('nên ném lỗi BadRequestException nếu tin nhắn đã bị thu hồi', async () => {
+                mockConversationRepo.findOne.mockResolvedValueOnce({ id: conversationId });
+                mockMemberRepo.findOne.mockResolvedValueOnce({ id: 'mem-1', user: { id: currentUserId } });
+                mockMessageRepo.findOne.mockResolvedValueOnce({ id: messageId, isRecalled: true });
+
+                await expect(
+                    service.reactMessage(currentUserId, conversationId, messageId, '👍'),
+                ).rejects.toThrow(BadRequestException);
+            });
+
+            it('nên thêm reaction mới (ADDED) khi người dùng chưa thả reaction cho tin nhắn', async () => {
+                mockConversationRepo.findOne.mockResolvedValueOnce({ id: conversationId });
+                mockMemberRepo.findOne.mockResolvedValueOnce({
+                    id: 'mem-1',
+                    user: { id: currentUserId, displayName: 'My Name', avatarUrl: 'avatar.png' },
+                });
+                mockMessageRepo.findOne.mockResolvedValueOnce({ id: messageId, isRecalled: false });
+                mockReactionRepo.findOne.mockResolvedValueOnce(null); // chưa có reaction
+                mockReactionRepo.find.mockResolvedValueOnce([
+                    {
+                        id: 'r-1',
+                        emoji: '❤️',
+                        user: { id: currentUserId, displayName: 'My Name' },
+                        message: { id: messageId },
+                    },
+                ]);
+
+                const result = await service.reactMessage(currentUserId, conversationId, messageId, '❤️');
+
+                expect(result.action).toBe('ADDED');
+                expect(result.emoji).toBe('❤️');
+                expect(result.reactions).toHaveLength(1);
+                expect(result.reactions[0]).toEqual({
+                    emoji: '❤️',
+                    count: 1,
+                    hasReacted: true,
+                    users: [{ id: currentUserId, displayName: 'My Name' }],
+                });
+                expect(mockReactionRepo.create).toHaveBeenCalled();
+                expect(mockReactionRepo.save).toHaveBeenCalled();
+                expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                    'message.reaction_updated',
+                    expect.objectContaining({
+                        conversationId,
+                        messageId,
+                        emoji: '❤️',
+                        action: 'ADDED',
+                        user: expect.objectContaining({ id: currentUserId, displayName: 'My Name' }),
+                    }),
+                );
+            });
+
+            it('nên gỡ reaction (REMOVED) khi người dùng thả cùng emoji (toggle off)', async () => {
+                const existingReaction = {
+                    id: 'r-1',
+                    emoji: '❤️',
+                    user: { id: currentUserId },
+                    message: { id: messageId },
+                };
+
+                mockConversationRepo.findOne.mockResolvedValueOnce({ id: conversationId });
+                mockMemberRepo.findOne.mockResolvedValueOnce({
+                    id: 'mem-1',
+                    user: { id: currentUserId, displayName: 'My Name' },
+                });
+                mockMessageRepo.findOne.mockResolvedValueOnce({ id: messageId, isRecalled: false });
+                mockReactionRepo.findOne.mockResolvedValueOnce(existingReaction);
+                mockReactionRepo.find.mockResolvedValueOnce([]); // sau khi xóa thì rỗng
+
+                const result = await service.reactMessage(currentUserId, conversationId, messageId, '❤️');
+
+                expect(result.action).toBe('REMOVED');
+                expect(result.emoji).toBeNull();
+                expect(result.reactions).toEqual([]);
+                expect(mockReactionRepo.remove).toHaveBeenCalledWith(existingReaction);
+                expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                    'message.reaction_updated',
+                    expect.objectContaining({
+                        conversationId,
+                        messageId,
+                        emoji: '❤️',
+                        action: 'REMOVED',
+                    }),
+                );
+            });
+
+            it('nên đổi emoji (CHANGED) khi người dùng chọn emoji khác emoji hiện tại', async () => {
+                const existingReaction = {
+                    id: 'r-1',
+                    emoji: '❤️',
+                    user: { id: currentUserId },
+                    message: { id: messageId },
+                };
+
+                mockConversationRepo.findOne.mockResolvedValueOnce({ id: conversationId });
+                mockMemberRepo.findOne.mockResolvedValueOnce({
+                    id: 'mem-1',
+                    user: { id: currentUserId, displayName: 'My Name' },
+                });
+                mockMessageRepo.findOne.mockResolvedValueOnce({ id: messageId, isRecalled: false });
+                mockReactionRepo.findOne.mockResolvedValueOnce(existingReaction);
+                mockReactionRepo.find.mockResolvedValueOnce([
+                    {
+                        id: 'r-1',
+                        emoji: '🔥',
+                        user: { id: currentUserId, displayName: 'My Name' },
+                        message: { id: messageId },
+                    },
+                ]);
+
+                const result = await service.reactMessage(currentUserId, conversationId, messageId, '🔥');
+
+                expect(result.action).toBe('CHANGED');
+                expect(result.emoji).toBe('🔥');
+                expect(existingReaction.emoji).toBe('🔥');
+                expect(mockReactionRepo.save).toHaveBeenCalledWith(existingReaction);
+                expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                    'message.reaction_updated',
+                    expect.objectContaining({
+                        conversationId,
+                        messageId,
+                        emoji: '🔥',
+                        action: 'CHANGED',
+                    }),
+                );
+            });
+        });
+
+        describe('getMessages enrichment', () => {
+            it('nên tổng hợp reactions và enrich replyTo context (bao gồm xử lý tombstone tin bị thu hồi)', async () => {
+                mockConversationRepo.findOne.mockResolvedValueOnce({ id: conversationId });
+                mockMemberRepo.findOne.mockResolvedValueOnce({ id: 'mem-1' });
+
+                const msgWithReplyAndReaction = {
+                    id: 'msg-child',
+                    content: 'Child msg',
+                    replyToId: 'msg-parent-recalled',
+                    createdAt: new Date('2026-10-14T10:00:00Z'),
+                };
+
+                mockMessageRepo.createQueryBuilder.mockReturnValue(
+                    createMockQueryBuilder([msgWithReplyAndReaction]),
+                );
+
+                mockReactionRepo.find.mockResolvedValueOnce([
+                    {
+                        id: 'r-1',
+                        emoji: '👍',
+                        user: { id: otherUserId, displayName: 'Other User' },
+                        message: { id: 'msg-child' },
+                    },
+                    {
+                        id: 'r-2',
+                        emoji: '👍',
+                        user: { id: currentUserId, displayName: 'Me' },
+                        message: { id: 'msg-child' },
+                    },
+                ]);
+
+                mockMessageRepo.find.mockResolvedValueOnce([
+                    {
+                        id: 'msg-parent-recalled',
+                        content: 'Original secret',
+                        type: MessageType.TEXT,
+                        fileUrl: 'https://secret.png',
+                        isRecalled: true,
+                        sender: {
+                            id: otherUserId,
+                            username: 'other',
+                            displayName: 'Other',
+                            avatarUrl: null,
+                        },
+                    },
+                ]);
+
+                const result = await service.getMessages(currentUserId, conversationId, { limit: 10 });
+
+                expect(result).toHaveLength(1);
+                const enriched = result[0] as any;
+                // Check aggregated reactions
+                expect(enriched.reactions).toHaveLength(1);
+                expect(enriched.reactions[0]).toEqual({
+                    emoji: '👍',
+                    count: 2,
+                    hasReacted: true,
+                    users: [
+                        { id: otherUserId, displayName: 'Other User' },
+                        { id: currentUserId, displayName: 'Me' },
+                    ],
+                });
+                // Check tombstoned replyTo
+                expect(enriched.replyTo).toEqual({
+                    id: 'msg-parent-recalled',
+                    content: '[Tin nhắn đã bị thu hồi]',
+                    type: MessageType.TEXT,
+                    fileUrl: null,
+                    sender: {
+                        id: otherUserId,
+                        username: 'other',
+                        displayName: 'Other',
+                        avatarUrl: null,
+                    },
+                });
+            });
+        });
+
+        describe('createMessage with reply context', () => {
+            it('nên lưu tin nhắn và đính kèm replyToSummary (tombstone nếu bị thu hồi)', async () => {
+                mockMemberRepo.findOne.mockResolvedValue({ id: 'mem-1' });
+                const parentMsg = {
+                    id: 'parent-msg-id',
+                    content: 'Hello parent',
+                    type: MessageType.TEXT,
+                    fileUrl: null,
+                    isRecalled: false,
+                    sender: { id: otherUserId, username: 'user2', displayName: 'User Two', avatarUrl: null },
+                };
+                mockMessageRepo.findOne.mockResolvedValueOnce(parentMsg);
+
+                const savedMsg = {
+                    id: 'new-msg-with-reply',
+                    content: 'I reply to you',
+                    type: MessageType.TEXT,
+                    replyToId: parentMsg.id,
+                    createdAt: new Date(),
+                };
+                mockMessageRepo.save.mockResolvedValue(savedMsg);
+                mockMessageRepo.findOneOrFail.mockResolvedValue({
+                    ...savedMsg,
+                    sender: { id: currentUserId, username: 'user1', displayName: 'User One' },
+                });
+
+                const result = await service.createMessage(currentUserId, {
+                    conversationId,
+                    content: 'I reply to you',
+                    type: MessageType.TEXT,
+                    replyToId: parentMsg.id,
+                });
+
+                expect((result as any).replyTo).toEqual({
+                    id: parentMsg.id,
+                    content: 'Hello parent',
+                    type: MessageType.TEXT,
+                    fileUrl: null,
+                    sender: {
+                        id: otherUserId,
+                        username: 'user2',
+                        displayName: 'User Two',
+                        avatarUrl: null,
+                    },
+                });
+                expect((result as any).reactions).toEqual([]);
+            });
         });
     });
 });

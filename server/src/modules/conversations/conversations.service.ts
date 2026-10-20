@@ -10,6 +10,7 @@ import { In, Repository } from 'typeorm';
 import { Conversation, ConversationType } from './entities/conversation.entity.js';
 import { ConversationMember, ConversationRole } from './entities/conversation-member.entity.js';
 import { Message, MessageType } from './entities/message.entity.js';
+import { MessageReaction } from './entities/message-reaction.entity.js';
 import { User } from '../users/entities/user.entity.js';
 import { Friendship, FriendshipStatus } from '../friends/entities/friendship.entity.js';
 import {
@@ -31,6 +32,7 @@ import {
     MessagePinnedEvent,
     MessageRecalledEvent,
     MessageEditedEvent,
+    MessageReactionEvent,
 } from '../../common/events/index.js';
 
 @Injectable()
@@ -44,6 +46,9 @@ export class ConversationsService {
 
         @InjectRepository(Message)
         private readonly messageRepository: Repository<Message>,
+
+        @InjectRepository(MessageReaction)
+        private readonly reactionRepository: Repository<MessageReaction>,
 
         @InjectRepository(User)
         private readonly userRepository: Repository<User>,
@@ -495,7 +500,96 @@ export class ConversationsService {
 
         const messages = await qb.getMany();
 
-        // 4. Đảo ngược mảng để trả về theo thứ tự thời gian tăng dần (ASC: cũ -> mới)
+        // 4. Enrich Reactions & Reply Context
+        const messageIds = messages.map((m) => m.id);
+        const replyToIds = messages
+            .map((m) => m.replyToId)
+            .filter((id): id is string => Boolean(id));
+
+        const reactionsMap = new Map<
+            string,
+            Array<{
+                emoji: string;
+                count: number;
+                users: Array<{ id: string; displayName: string }>;
+                hasReacted: boolean;
+            }>
+        >();
+
+        if (messageIds.length > 0) {
+            const rawReactions = await this.reactionRepository.find({
+                where: { message: { id: In(messageIds) } },
+                relations: { user: true },
+                order: { createdAt: 'ASC' },
+            });
+
+            for (const r of rawReactions) {
+                const msgId = (r.message as any)?.id || (r as any).messageId;
+                if (!reactionsMap.has(msgId)) {
+                    reactionsMap.set(msgId, []);
+                }
+                const list = reactionsMap.get(msgId)!;
+                let group = list.find((g) => g.emoji === r.emoji);
+                if (!group) {
+                    group = { emoji: r.emoji, count: 0, users: [], hasReacted: false };
+                    list.push(group);
+                }
+                group.count += 1;
+                group.users.push({
+                    id: r.user.id,
+                    displayName: r.user.displayName || r.user.username,
+                });
+                if (r.user.id === currentUserId) {
+                    group.hasReacted = true;
+                }
+            }
+        }
+
+        const parentMap = new Map<string, any>();
+        if (replyToIds.length > 0) {
+            const parents = await this.messageRepository.find({
+                where: { id: In(replyToIds) },
+                relations: { sender: true },
+                select: {
+                    id: true,
+                    content: true,
+                    type: true,
+                    fileUrl: true,
+                    isRecalled: true,
+                    createdAt: true,
+                    sender: {
+                        id: true,
+                        username: true,
+                        displayName: true,
+                        avatarUrl: true,
+                    },
+                },
+            });
+
+            for (const p of parents) {
+                parentMap.set(p.id, {
+                    id: p.id,
+                    content: p.isRecalled ? '[Tin nhắn đã bị thu hồi]' : p.content,
+                    type: p.type,
+                    fileUrl: p.isRecalled ? null : p.fileUrl,
+                    sender: {
+                        id: p.sender?.id,
+                        username: p.sender?.username,
+                        displayName: p.sender?.displayName || p.sender?.username,
+                        avatarUrl: p.sender?.avatarUrl,
+                    },
+                });
+            }
+        }
+
+        for (const m of messages) {
+            (m as any).reactions = reactionsMap.get(m.id) || [];
+            if (m.replyToId) {
+                (m as any).replyTo = parentMap.get(m.replyToId) || null;
+            }
+        }
+
+        // 5. Đảo ngược mảng để trả về theo thứ tự thời gian tăng dần (ASC: cũ -> mới)
         return messages.reverse();
     }
 
@@ -1152,16 +1246,43 @@ export class ConversationsService {
         }
 
         // 3. Nếu là replyTo, kiểm tra tin nhắn gốc có thuộc hội thoại này không
+        let replyToSummary: any = null;
         if (replyToId) {
             const originalMessage = await this.messageRepository.findOne({
                 where: {
                     id: replyToId,
                     conversation: { id: conversationId },
                 },
+                relations: { sender: true },
+                select: {
+                    id: true,
+                    content: true,
+                    type: true,
+                    fileUrl: true,
+                    isRecalled: true,
+                    sender: {
+                        id: true,
+                        username: true,
+                        displayName: true,
+                        avatarUrl: true,
+                    },
+                },
             });
             if (!originalMessage) {
                 throw new BadRequestException('Tin nhắn trả lời không tồn tại trong cuộc hội thoại này');
             }
+            replyToSummary = {
+                id: originalMessage.id,
+                content: originalMessage.isRecalled ? '[Tin nhắn đã bị thu hồi]' : originalMessage.content,
+                type: originalMessage.type,
+                fileUrl: originalMessage.isRecalled ? null : originalMessage.fileUrl,
+                sender: {
+                    id: originalMessage.sender?.id,
+                    username: originalMessage.sender?.username,
+                    displayName: originalMessage.sender?.displayName || originalMessage.sender?.username,
+                    avatarUrl: originalMessage.sender?.avatarUrl,
+                },
+            };
         }
 
         // 4. Lưu tin nhắn mới vào DB
@@ -1240,6 +1361,9 @@ export class ConversationsService {
                 senderId,
             ),
         );
+
+        (fullMessage as any).replyTo = replyToSummary;
+        (fullMessage as any).reactions = [];
 
         return fullMessage;
     }
@@ -1428,6 +1552,166 @@ export class ConversationsService {
         );
 
         return savedMessage;
+    }
+
+    /**
+     * Thả hoặc hủy cảm xúc vào tin nhắn (Milestone 5, BR-M5-07, BR-M5-08)
+     * - Toggle logic:
+     *   + Nếu chưa có reaction -> Tạo mới (action: 'ADDED')
+     *   + Nếu đã có cùng emoji -> Xóa (action: 'REMOVED')
+     *   + Nếu đã có nhưng khác emoji -> Cập nhật sang emoji mới (action: 'CHANGED')
+     * - Phát event domain 'message.reaction_updated'
+     */
+    async reactMessage(
+        currentUserId: string,
+        conversationId: string,
+        messageId: string,
+        emoji: string,
+    ): Promise<{
+        action: 'ADDED' | 'REMOVED' | 'CHANGED';
+        emoji: string | null;
+        messageId: string;
+        reactions: Array<{
+            emoji: string;
+            count: number;
+            users: Array<{ id: string; displayName: string }>;
+            hasReacted: boolean;
+        }>;
+    }> {
+        // 1. Kiểm tra cuộc trò chuyện
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+        });
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        // 2. Kiểm tra thành viên cuộc trò chuyện (kèm user info)
+        const member = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+            relations: { user: true },
+        });
+        if (!member) {
+            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
+        }
+
+        // 3. Tìm tin nhắn
+        const message = await this.messageRepository.findOne({
+            where: {
+                id: messageId,
+                conversation: { id: conversationId },
+            },
+        });
+        if (!message) {
+            throw new NotFoundException('Tin nhắn không tồn tại trong cuộc hội thoại này');
+        }
+
+        // 4. Không cho phép thả reaction vào tin nhắn đã thu hồi
+        if (message.isRecalled) {
+            throw new BadRequestException('Không thể thả cảm xúc vào tin nhắn đã bị thu hồi');
+        }
+
+        // 5. Kiểm tra reaction hiện có
+        const existingReaction = await this.reactionRepository.findOne({
+            where: {
+                message: { id: messageId },
+                user: { id: currentUserId },
+            },
+        });
+
+        let action: 'ADDED' | 'REMOVED' | 'CHANGED';
+        if (!existingReaction) {
+            action = 'ADDED';
+            const newReaction = this.reactionRepository.create({
+                message: { id: messageId } as Message,
+                user: { id: currentUserId } as User,
+                emoji,
+            });
+            await this.reactionRepository.save(newReaction);
+        } else if (existingReaction.emoji === emoji) {
+            action = 'REMOVED';
+            await this.reactionRepository.remove(existingReaction);
+        } else {
+            action = 'CHANGED';
+            existingReaction.emoji = emoji;
+            await this.reactionRepository.save(existingReaction);
+        }
+
+        // 6. Phát event domain
+        const userDisplayName = member.user?.displayName || member.user?.username || 'User';
+        this.eventEmitter.emit(
+            'message.reaction_updated',
+            new MessageReactionEvent(
+                conversationId,
+                messageId,
+                {
+                    id: currentUserId,
+                    displayName: userDisplayName,
+                    avatarUrl: member.user?.avatarUrl,
+                },
+                emoji,
+                action,
+            ),
+        );
+
+        // 7. Lấy danh sách reactions tổng hợp sau khi cập nhật
+        const reactions = await this.getMessageReactions(messageId, currentUserId);
+
+        return {
+            action,
+            emoji: action === 'REMOVED' ? null : emoji,
+            messageId,
+            reactions,
+        };
+    }
+
+    /**
+     * Lấy danh sách aggregated reactions cho 1 tin nhắn
+     */
+    async getMessageReactions(
+        messageId: string,
+        currentUserId: string,
+    ): Promise<
+        Array<{
+            emoji: string;
+            count: number;
+            users: Array<{ id: string; displayName: string }>;
+            hasReacted: boolean;
+        }>
+    > {
+        const rawReactions = await this.reactionRepository.find({
+            where: { message: { id: messageId } },
+            relations: { user: true },
+            order: { createdAt: 'ASC' },
+        });
+
+        const list: Array<{
+            emoji: string;
+            count: number;
+            users: Array<{ id: string; displayName: string }>;
+            hasReacted: boolean;
+        }> = [];
+
+        for (const r of rawReactions) {
+            let group = list.find((g) => g.emoji === r.emoji);
+            if (!group) {
+                group = { emoji: r.emoji, count: 0, users: [], hasReacted: false };
+                list.push(group);
+            }
+            group.count += 1;
+            group.users.push({
+                id: r.user.id,
+                displayName: r.user.displayName || r.user.username,
+            });
+            if (r.user.id === currentUserId) {
+                group.hasReacted = true;
+            }
+        }
+
+        return list;
     }
 }
 
