@@ -24,8 +24,20 @@ services:
     networks:
       - rechat_network
 
+  redis:
+    image: redis:7-alpine
+    container_name: rechat_redis
+    restart: always
+    ports:
+      - ${REDIS_PORT:-6379}:6379
+    volumes:
+      - redis_data:/data
+    networks:
+      - rechat_network
+
 volumes:
   mysql_data:
+  redis_data:
 
 networks:
   rechat_network:
