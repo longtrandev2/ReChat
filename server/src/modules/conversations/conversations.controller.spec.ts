@@ -34,6 +34,8 @@ describe('ConversationsController', () => {
             getPinnedMessages: vi.fn(),
             getMediaMessages: vi.fn(),
             getConversationActiveStatus: vi.fn(),
+            recallMessage: vi.fn(),
+            editMessage: vi.fn(),
         };
 
         const module: TestingModule = await Test.createTestingModule({
@@ -247,4 +249,28 @@ describe('ConversationsController', () => {
             expect(result).toEqual(mockStatus);
         });
     });
+
+    describe('recallMessage', () => {
+        it('should delegate to service.recallMessage with user id, conversation id and message id', async () => {
+            const mockRecalled = { id: 'msg-1', isRecalled: true, content: '[Tin nhắn đã bị thu hồi]' };
+            mockConversationsService.recallMessage.mockResolvedValue(mockRecalled);
+
+            const result = await controller.recallMessage(mockCurrentUser, 'conv-1', 'msg-1');
+            expect(mockConversationsService.recallMessage).toHaveBeenCalledWith(mockCurrentUser.id, 'conv-1', 'msg-1');
+            expect(result).toEqual(mockRecalled);
+        });
+    });
+
+    describe('editMessage', () => {
+        it('should delegate to service.editMessage with user id, conversation id, message id and content', async () => {
+            const dto = { content: 'Nội dung mới' };
+            const mockEdited = { id: 'msg-1', isEdited: true, content: 'Nội dung mới' };
+            mockConversationsService.editMessage.mockResolvedValue(mockEdited);
+
+            const result = await controller.editMessage(mockCurrentUser, 'conv-1', 'msg-1', dto);
+            expect(mockConversationsService.editMessage).toHaveBeenCalledWith(mockCurrentUser.id, 'conv-1', 'msg-1', dto.content);
+            expect(result).toEqual(mockEdited);
+        });
+    });
 });
+

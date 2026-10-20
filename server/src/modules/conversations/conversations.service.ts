@@ -29,6 +29,8 @@ import {
     InboxUpdatedEvent,
     GroupMemberEvent,
     MessagePinnedEvent,
+    MessageRecalledEvent,
+    MessageEditedEvent,
 } from '../../common/events/index.js';
 
 @Injectable()
@@ -1201,6 +1203,8 @@ export class ConversationsService {
                 fileUrl: true,
                 replyToId: true,
                 isRecalled: true,
+                isEdited: true,
+                editedAt: true,
                 isPinned: true,
                 createdAt: true,
                 updatedAt: true,
@@ -1239,6 +1243,193 @@ export class ConversationsService {
 
         return fullMessage;
     }
+
+    /**
+     * Thu hồi tin nhắn trong cuộc trò chuyện (Milestone 5, BR-M5-01, BR-M5-02, BR-M5-03)
+     * - Chỉ người gửi tin nhắn (sender) mới có quyền thu hồi
+     * - Không giới hạn thời gian (cho phép thu hồi bất kỳ lúc nào)
+     * - Áp dụng Tombstone pattern: isRecalled = true, content = '[Tin nhắn đã bị thu hồi]', fileUrl = null
+     */
+    async recallMessage(
+        currentUserId: string,
+        conversationId: string,
+        messageId: string,
+    ): Promise<Message> {
+        // 1. Kiểm tra cuộc trò chuyện
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+        });
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        // 2. Kiểm tra thành viên cuộc trò chuyện
+        const member = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+        });
+        if (!member) {
+            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
+        }
+
+        // 3. Tìm tin nhắn
+        const message = await this.messageRepository.findOne({
+            where: {
+                id: messageId,
+                conversation: { id: conversationId },
+            },
+            relations: { sender: true },
+        });
+
+        if (!message) {
+            throw new NotFoundException('Tin nhắn không tồn tại trong cuộc hội thoại này');
+        }
+
+        // 4. Kiểm tra quyền sở hữu
+        if (message.sender.id !== currentUserId) {
+            throw new ForbiddenException('Bạn không có quyền thu hồi tin nhắn của người khác');
+        }
+
+        // 5. Kiểm tra nếu tin nhắn đã thu hồi rồi
+        if (message.isRecalled) {
+            return message;
+        }
+
+        // 6. Áp dụng Tombstone pattern
+        message.isRecalled = true;
+        message.content = '[Tin nhắn đã bị thu hồi]';
+        message.fileUrl = undefined;
+
+        const savedMessage = await this.messageRepository.save(message);
+
+        // 7. Lấy danh sách thành viên để thông báo
+        const members = await this.memberRepository.find({
+            where: { conversation: { id: conversationId } },
+            relations: { user: true },
+        });
+        const memberIds = members.map((m) => m.user?.id || (m as any).userId).filter(Boolean);
+        const isLastMessage = conversation.lastMessageId === messageId;
+
+        this.eventEmitter.emit(
+            'message.recalled',
+            new MessageRecalledEvent(
+                conversationId,
+                messageId,
+                new Date(),
+                currentUserId,
+                isLastMessage,
+                memberIds,
+            ),
+        );
+
+        return savedMessage;
+    }
+
+    /**
+     * Chỉnh sửa nội dung tin nhắn văn bản (Milestone 5, BR-M5-04 -> BR-M5-07)
+     * - Chỉ người gửi tin nhắn mới có quyền chỉnh sửa
+     * - Chỉ được sửa trong vòng 15 phút kể từ thời điểm gửi (createdAt + 15m >= NOW)
+     * - Không cho phép chỉnh sửa tin nhắn đã bị thu hồi
+     * - Nội dung mới không được rỗng và không được trùng với nội dung hiện tại
+     */
+    async editMessage(
+        currentUserId: string,
+        conversationId: string,
+        messageId: string,
+        newContent: string,
+    ): Promise<Message> {
+        // 1. Kiểm tra cuộc trò chuyện
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+        });
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        // 2. Kiểm tra thành viên cuộc trò chuyện
+        const member = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+        });
+        if (!member) {
+            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
+        }
+
+        // 3. Tìm tin nhắn
+        const message = await this.messageRepository.findOne({
+            where: {
+                id: messageId,
+                conversation: { id: conversationId },
+            },
+            relations: { sender: true },
+        });
+
+        if (!message) {
+            throw new NotFoundException('Tin nhắn không tồn tại trong cuộc hội thoại này');
+        }
+
+        // 4. Kiểm tra quyền sở hữu
+        if (message.sender.id !== currentUserId) {
+            throw new ForbiddenException('Bạn không có quyền chỉnh sửa tin nhắn của người khác');
+        }
+
+        // 5. Kiểm tra nếu tin nhắn đã bị thu hồi
+        if (message.isRecalled) {
+            throw new BadRequestException('Không thể chỉnh sửa tin nhắn đã bị thu hồi');
+        }
+
+        // 6. Kiểm tra giới hạn 15 phút (BR-M5-05)
+        const fifteenMinutesMs = 15 * 60 * 1000;
+        const now = new Date();
+        if (now.getTime() - new Date(message.createdAt).getTime() > fifteenMinutesMs) {
+            throw new BadRequestException('Chỉ có thể chỉnh sửa tin nhắn trong vòng 15 phút kể từ khi gửi');
+        }
+
+        // 7. Validate nội dung mới
+        const trimmedContent = newContent ? newContent.trim() : '';
+        if (!trimmedContent) {
+            throw new BadRequestException('Nội dung tin nhắn không được để trống');
+        }
+
+        if (trimmedContent === message.content) {
+            throw new BadRequestException('Nội dung mới không được trùng với nội dung hiện tại');
+        }
+
+        // 8. Cập nhật tin nhắn
+        message.content = trimmedContent;
+        message.isEdited = true;
+        message.editedAt = now;
+
+        const savedMessage = await this.messageRepository.save(message);
+
+        // 9. Lấy danh sách thành viên để thông báo
+        const members = await this.memberRepository.find({
+            where: { conversation: { id: conversationId } },
+            relations: { user: true },
+        });
+        const memberIds = members.map((m) => m.user?.id || (m as any).userId).filter(Boolean);
+        const isLastMessage = conversation.lastMessageId === messageId;
+
+        this.eventEmitter.emit(
+            'message.edited',
+            new MessageEditedEvent(
+                conversationId,
+                messageId,
+                savedMessage.content,
+                message.editedAt,
+                currentUserId,
+                isLastMessage,
+                memberIds,
+            ),
+        );
+
+        return savedMessage;
+    }
 }
+
 
 

@@ -10,4 +10,6 @@ export * from './send-message.dto.js';
 export * from './join-conversation.dto.js';
 export * from './typing.dto.js';
 export * from './mark-as-read.dto.js';
+export * from './edit-message.dto.js';
+export * from './recall-message.dto.js';
 

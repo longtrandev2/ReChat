@@ -17,7 +17,14 @@ import { JwtService } from '@nestjs/jwt';
 import { WsExceptionsFilter } from './ws-exception.filter.js';
 import { ConnectionManagerService } from './connection-manager.service.js';
 import { ConversationsService } from '../conversations.service.js';
-import { SendMessageDto, JoinConversationDto, TypingDto, MarkAsReadDto } from '../dto/index.js';
+import {
+    SendMessageDto,
+    JoinConversationDto,
+    TypingDto,
+    MarkAsReadDto,
+    RecallMessageDto,
+    EditMessageDto,
+} from '../dto/index.js';
 import { User } from '../../users/entities/user.entity.js';
 import { Friendship, FriendshipStatus } from '../../friends/entities/friendship.entity.js';
 import { OnEvent } from '@nestjs/event-emitter';
@@ -31,6 +38,8 @@ import {
     InboxUpdatedEvent,
     GroupMemberEvent,
     MessagePinnedEvent,
+    MessageRecalledEvent,
+    MessageEditedEvent,
 } from '../../../common/events/index.js';
 
 @WebSocketGateway({
@@ -289,6 +298,8 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             fileUrl: message.fileUrl,
             replyToId: message.replyToId,
             isRecalled: message.isRecalled,
+            isEdited: message.isEdited,
+            editedAt: message.editedAt,
             isPinned: message.isPinned,
             createdAt: message.createdAt,
             sender: {
@@ -373,6 +384,72 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         return {
             status: 'success',
             data: result,
+        };
+    }
+
+    /**
+     * Thu hồi tin nhắn qua WebSocket (Milestone 5, BR-M5-01 -> BR-M5-03)
+     */
+    @SubscribeMessage('recallMessage')
+    async handleRecallMessage(
+        @ConnectedSocket() client: Socket,
+        @MessageBody() dto: RecallMessageDto,
+    ) {
+        const user = client.data?.user;
+        if (!user?.id) {
+            throw new WsException('Unauthorized: Missing authenticated session');
+        }
+
+        const recalledMessage = await this.conversationsService.recallMessage(
+            user.id,
+            dto.conversationId,
+            dto.messageId,
+        );
+
+        return {
+            status: 'success',
+            data: {
+                messageId: recalledMessage.id,
+                conversationId: dto.conversationId,
+                isRecalled: recalledMessage.isRecalled,
+                content: recalledMessage.content,
+            },
+        };
+    }
+
+    /**
+     * Chỉnh sửa tin nhắn văn bản qua WebSocket (Milestone 5, BR-M5-04 -> BR-M5-07)
+     */
+    @SubscribeMessage('editMessage')
+    async handleEditMessage(
+        @ConnectedSocket() client: Socket,
+        @MessageBody() dto: EditMessageDto,
+    ) {
+        const user = client.data?.user;
+        if (!user?.id) {
+            throw new WsException('Unauthorized: Missing authenticated session');
+        }
+
+        if (!dto.conversationId || !dto.messageId) {
+            throw new BadRequestException('conversationId và messageId không được để trống');
+        }
+
+        const editedMessage = await this.conversationsService.editMessage(
+            user.id,
+            dto.conversationId,
+            dto.messageId,
+            dto.content,
+        );
+
+        return {
+            status: 'success',
+            data: {
+                messageId: editedMessage.id,
+                conversationId: dto.conversationId,
+                content: editedMessage.content,
+                isEdited: editedMessage.isEdited,
+                editedAt: editedMessage.editedAt,
+            },
         };
     }
 
@@ -511,7 +588,69 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             });
         }
     }
+
+    /**
+     * Broadcast sự kiện thu hồi tin nhắn tới phòng chat (conv_${conversationId})
+     */
+    @OnEvent('message.recalled')
+    handleMessageRecalled(event: MessageRecalledEvent) {
+        if (!this.server) return;
+        const roomId = `conv_${event.conversationId}`;
+        this.server.to(roomId).emit('messageRecalled', {
+            conversationId: event.conversationId,
+            messageId: event.messageId,
+            recalledAt: event.recalledAt,
+            senderId: event.senderId,
+        });
+
+        // Nếu là tin nhắn cuối cùng, cập nhật preview cho inbox của các thành viên
+        if (event.isLastMessage && event.memberIds) {
+            for (const memberId of event.memberIds) {
+                this.server.to(`user_${memberId}`).emit('conversationUpdated', {
+                    conversationId: event.conversationId,
+                    lastMessage: {
+                        id: event.messageId,
+                        content: '[Tin nhắn đã bị thu hồi]',
+                        isRecalled: true,
+                    },
+                });
+            }
+        }
+    }
+
+    /**
+     * Broadcast sự kiện chỉnh sửa tin nhắn tới phòng chat (conv_${conversationId})
+     */
+    @OnEvent('message.edited')
+    handleMessageEdited(event: MessageEditedEvent) {
+        if (!this.server) return;
+        const roomId = `conv_${event.conversationId}`;
+        this.server.to(roomId).emit('messageEdited', {
+            conversationId: event.conversationId,
+            messageId: event.messageId,
+            content: event.content,
+            isEdited: true,
+            editedAt: event.editedAt,
+            senderId: event.senderId,
+        });
+
+        // Nếu là tin nhắn cuối cùng, cập nhật preview cho inbox của các thành viên
+        if (event.isLastMessage && event.memberIds) {
+            for (const memberId of event.memberIds) {
+                this.server.to(`user_${memberId}`).emit('conversationUpdated', {
+                    conversationId: event.conversationId,
+                    lastMessage: {
+                        id: event.messageId,
+                        content: event.content,
+                        isEdited: true,
+                        editedAt: event.editedAt,
+                    },
+                });
+            }
+        }
+    }
 }
+
 
 
 
