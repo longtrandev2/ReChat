@@ -18,6 +18,7 @@ import { RequestLoggingMiddleware } from './common/middleware/request-logging.mi
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
 
 import { AppThrottlerGuard } from './common/guards/app-throttler.guard.js';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { AppThrottlerGuard } from './common/guards/app-throttler.guard.js';
       isGlobal: true,
       envFilePath: ['../.env', '.env'],
     }),
+    EventEmitterModule.forRoot(),
     RedisModule,
     BullModule.forRootAsync({
       imports: [ConfigModule],

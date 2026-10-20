@@ -1,0 +1,53 @@
+export class ConversationCreatedEvent {
+    constructor(
+        public readonly conversationId: string,
+        public readonly memberIds: string[],
+        public readonly conversation: any,
+    ) { }
+}
+
+export class InboxUpdatedEvent {
+    constructor(
+        public readonly conversationId: string,
+        public readonly memberIds: string[],
+        public readonly lastMessage: {
+            id: string;
+            content: string;
+            type: string;
+            fileUrl?: string | null;
+            senderName: string;
+            createdAt: Date;
+        },
+        public readonly senderId: string,
+    ) { }
+}
+
+export class GroupMemberEvent {
+    constructor(
+        public readonly conversationId: string,
+        public readonly action: 'ADDED' | 'REMOVED' | 'LEFT',
+        public readonly actor: {
+            id: string;
+            displayName: string;
+        },
+        public readonly targetUserIds: string[],
+        public readonly members?: any[],
+    ) { }
+}
+
+export class MessagePinnedEvent {
+    constructor(
+        public readonly conversationId: string,
+        public readonly messageId: string,
+        public readonly isPinned: boolean,
+        public readonly message?: {
+            id: string;
+            content: string;
+            senderName?: string;
+        },
+        public readonly pinnedBy?: {
+            id: string;
+            displayName: string;
+        },
+    ) { }
+}
