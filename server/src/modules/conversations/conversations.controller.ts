@@ -3,6 +3,8 @@ import {
     Controller,
     Delete,
     Get,
+    HttpCode,
+    HttpStatus,
     Param,
     ParseUUIDPipe,
     Patch,
@@ -31,6 +33,7 @@ import {
     UpdateGroupDto,
     GetMediaQueryDto,
     EditMessageDto,
+    ReactMessageDto,
 } from './dto/index.js';
 
 @ApiTags('conversations')
@@ -1192,6 +1195,40 @@ export class ConversationsController {
         @Body() dto: EditMessageDto,
     ) {
         return this.conversationsService.editMessage(user.id, conversationId, messageId, dto.content);
+    }
+
+    /**
+     * Thả hoặc hủy cảm xúc vào tin nhắn (Milestone 5, BR-M5-07, BR-M5-08)
+     * POST /api/v1/conversations/:id/messages/:messageId/react
+     */
+    @Post(':id/messages/:messageId/react')
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({ summary: 'Thả hoặc hủy cảm xúc vào tin nhắn (Milestone 5)' })
+    @ApiParam({ name: 'id', description: 'UUID của cuộc hội thoại', format: 'uuid' })
+    @ApiParam({ name: 'messageId', description: 'UUID của tin nhắn cần thả cảm xúc', format: 'uuid' })
+    @ApiResponse({
+        status: 200,
+        description: 'Thả hoặc hủy cảm xúc thành công',
+    })
+    @ApiResponse({
+        status: 400,
+        description: 'Tin nhắn đã bị thu hồi hoặc dữ liệu không hợp lệ',
+    })
+    @ApiResponse({
+        status: 403,
+        description: 'Không phải thành viên cuộc hội thoại',
+    })
+    @ApiResponse({
+        status: 404,
+        description: 'Không tìm thấy cuộc hội thoại hoặc tin nhắn',
+    })
+    async reactMessage(
+        @CurrentUser() user: User,
+        @Param('id', ParseUUIDPipe) conversationId: string,
+        @Param('messageId', ParseUUIDPipe) messageId: string,
+        @Body() dto: ReactMessageDto,
+    ) {
+        return this.conversationsService.reactMessage(user.id, conversationId, messageId, dto.emoji);
     }
 }
 

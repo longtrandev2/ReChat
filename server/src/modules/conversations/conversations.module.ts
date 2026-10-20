@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Conversation } from './entities/conversation.entity.js';
 import { ConversationMember } from './entities/conversation-member.entity.js';
 import { Message } from './entities/message.entity.js';
+import { MessageReaction } from './entities/message-reaction.entity.js';
 import { ConversationsService } from './conversations.service.js';
 import { ConversationsController } from './conversations.controller.js';
 import { UsersModule } from '../users/user.module.js';
@@ -20,6 +21,7 @@ import { Friendship } from '../friends/entities/friendship.entity.js';
             Conversation,
             ConversationMember,
             Message,
+            MessageReaction,
             User,
             Friendship,
         ]),

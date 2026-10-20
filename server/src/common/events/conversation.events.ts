@@ -74,3 +74,18 @@ export class MessageEditedEvent {
         public readonly memberIds?: string[],
     ) { }
 }
+
+export class MessageReactionEvent {
+    constructor(
+        public readonly conversationId: string,
+        public readonly messageId: string,
+        public readonly user: {
+            id: string;
+            displayName: string;
+            avatarUrl?: string;
+        },
+        public readonly emoji: string,
+        public readonly action: 'ADDED' | 'REMOVED' | 'CHANGED',
+    ) { }
+}
+

@@ -23,6 +23,7 @@ import {
     MessagePinnedEvent,
     MessageRecalledEvent,
     MessageEditedEvent,
+    MessageReactionEvent,
 } from '../../../common/events/index.js';
 
 describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () => {
@@ -42,6 +43,7 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
         markAsRead: ReturnType<typeof vi.fn>;
         recallMessage: ReturnType<typeof vi.fn>;
         editMessage: ReturnType<typeof vi.fn>;
+        reactMessage: ReturnType<typeof vi.fn>;
     };
     let mockUserRepository: {
         update: ReturnType<typeof vi.fn>;
@@ -96,6 +98,7 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
             markAsRead: vi.fn(),
             recallMessage: vi.fn(),
             editMessage: vi.fn(),
+            reactMessage: vi.fn(),
         };
 
         mockUserRepository = {
@@ -489,7 +492,11 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
                     type: mockSavedMessage.type,
                     fileUrl: undefined,
                     replyToId: undefined,
+                    replyTo: null,
+                    reactions: [],
                     isRecalled: false,
+                    isEdited: undefined,
+                    editedAt: undefined,
                     isPinned: false,
                     createdAt: mockSavedMessage.createdAt,
                     sender: mockSavedMessage.sender,
@@ -858,6 +865,27 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
                 }),
             );
         });
+
+        it('handleMessageReactionUpdated should emit messageReactionUpdated to conversation room', () => {
+            const reactionEvent = new MessageReactionEvent(
+                'conv-1',
+                'msg-1',
+                { id: 'u1', displayName: 'User One', avatarUrl: 'avatar.png' },
+                '❤️',
+                'ADDED',
+            );
+
+            gateway.handleMessageReactionUpdated(reactionEvent);
+
+            expect(mockServer.to).toHaveBeenCalledWith('conv_conv-1');
+            expect(mockServer.emit).toHaveBeenCalledWith('messageReactionUpdated', {
+                conversationId: 'conv-1',
+                messageId: 'msg-1',
+                user: { id: 'u1', displayName: 'User One', avatarUrl: 'avatar.png' },
+                emoji: '❤️',
+                action: 'ADDED',
+            });
+        });
     });
 
     describe('handleRecallMessage & handleEditMessage socket handlers', () => {
@@ -933,6 +961,60 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
             expect(result.status).toBe('success');
             expect(result.data.content).toBe('Nội dung mới');
             expect(result.data.isEdited).toBe(true);
+        });
+
+        it('handleReactMessage should throw WsException if client has no authenticated user', async () => {
+            const client = createMockSocket() as Socket;
+            client.data.user = undefined;
+
+            await expect(
+                gateway.handleReactMessage(client, {
+                    conversationId: 'conv-1',
+                    messageId: 'msg-1',
+                    emoji: '❤️',
+                }),
+            ).rejects.toThrow(WsException);
+        });
+
+        it('handleReactMessage should throw BadRequestException if parameters are missing', async () => {
+            const client = createMockSocket() as Socket;
+            client.data.user = { id: 'user-uuid-1', username: 'john_doe' };
+
+            await expect(
+                gateway.handleReactMessage(client, {
+                    conversationId: '',
+                    messageId: 'msg-1',
+                    emoji: '❤️',
+                }),
+            ).rejects.toThrow(BadRequestException);
+        });
+
+        it('handleReactMessage should delegate to service.reactMessage and return success response', async () => {
+            const client = createMockSocket() as Socket;
+            client.data.user = { id: 'user-uuid-1', username: 'john_doe' };
+
+            const mockReactionResult = {
+                action: 'ADDED' as const,
+                emoji: '❤️',
+                messageId: 'msg-1',
+                reactions: [{ emoji: '❤️', count: 1, users: [{ id: 'user-uuid-1', displayName: 'John Doe' }], hasReacted: true }],
+            };
+            mockConversationsService.reactMessage.mockResolvedValueOnce(mockReactionResult);
+
+            const result = await gateway.handleReactMessage(client, {
+                conversationId: 'conv-1',
+                messageId: 'msg-1',
+                emoji: '❤️',
+            });
+
+            expect(mockConversationsService.reactMessage).toHaveBeenCalledWith(
+                'user-uuid-1',
+                'conv-1',
+                'msg-1',
+                '❤️',
+            );
+            expect(result.status).toBe('success');
+            expect(result.data).toEqual(mockReactionResult);
         });
     });
 });

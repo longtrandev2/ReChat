@@ -4,12 +4,14 @@ import {
     Entity,
     Index,
     ManyToOne,
+    OneToMany,
     PrimaryGeneratedColumn,
     UpdateDateColumn,
 } from 'typeorm';
 import type { Relation } from 'typeorm';
 import { Conversation } from './conversation.entity.js';
 import { User } from '../../users/entities/user.entity.js';
+import { MessageReaction } from './message-reaction.entity.js';
 
 export enum MessageType {
     TEXT = 'TEXT',
@@ -71,6 +73,9 @@ export class Message {
         onDelete: 'SET NULL',
     })
     pinnedBy?: User;
+
+    @OneToMany(() => MessageReaction, (reaction) => reaction.message)
+    reactions?: Relation<MessageReaction[]>;
 
     @CreateDateColumn()
     createdAt: Date;
