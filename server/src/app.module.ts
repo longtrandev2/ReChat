@@ -11,6 +11,7 @@ import { UsersModule } from './modules/users/user.module.js';
 import { ConversationsModule } from './modules/conversations/conversations.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { FriendsModule } from './modules/friends/friends.module.js';
+import { MediaModule } from './modules/media/media.module.js';
 import { RedisModule } from './common/redis/redis.module.js';
 import { MailModule } from './common/mail/mail.module.js';
 import { ThrottlerStorageRedisService } from './common/redis/throttler-storage-redis.service.js';
@@ -58,6 +59,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
     ConversationsModule,
     AuthModule,
     FriendsModule,
+    MediaModule,
     TypeOrmModule.forRoot({
       type: 'mysql',
       host: process.env.MYSQL_HOST,
