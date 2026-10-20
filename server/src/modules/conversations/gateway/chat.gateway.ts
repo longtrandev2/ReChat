@@ -24,6 +24,7 @@ import {
     MarkAsReadDto,
     RecallMessageDto,
     EditMessageDto,
+    ReactMessageDto,
 } from '../dto/index.js';
 import { User } from '../../users/entities/user.entity.js';
 import { Friendship, FriendshipStatus } from '../../friends/entities/friendship.entity.js';
@@ -40,6 +41,7 @@ import {
     MessagePinnedEvent,
     MessageRecalledEvent,
     MessageEditedEvent,
+    MessageReactionEvent,
 } from '../../../common/events/index.js';
 
 @WebSocketGateway({
@@ -297,6 +299,8 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             type: message.type,
             fileUrl: message.fileUrl,
             replyToId: message.replyToId,
+            replyTo: (message as any).replyTo || null,
+            reactions: (message as any).reactions || [],
             isRecalled: message.isRecalled,
             isEdited: message.isEdited,
             editedAt: message.editedAt,
@@ -450,6 +454,36 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                 isEdited: editedMessage.isEdited,
                 editedAt: editedMessage.editedAt,
             },
+        };
+    }
+
+    /**
+     * Thả hoặc hủy cảm xúc vào tin nhắn qua WebSocket (Milestone 5, BR-M5-07, BR-M5-08)
+     */
+    @SubscribeMessage('reactMessage')
+    async handleReactMessage(
+        @ConnectedSocket() client: Socket,
+        @MessageBody() dto: ReactMessageDto,
+    ) {
+        const user = client.data?.user;
+        if (!user?.id) {
+            throw new WsException('Unauthorized: Missing authenticated session');
+        }
+
+        if (!dto.conversationId || !dto.messageId || !dto.emoji) {
+            throw new BadRequestException('conversationId, messageId và emoji không được để trống');
+        }
+
+        const result = await this.conversationsService.reactMessage(
+            user.id,
+            dto.conversationId,
+            dto.messageId,
+            dto.emoji,
+        );
+
+        return {
+            status: 'success',
+            data: result,
         };
     }
 
@@ -648,6 +682,22 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                 });
             }
         }
+    }
+
+    /**
+     * Broadcast sự kiện cập nhật cảm xúc tới phòng chat (conv_${conversationId})
+     */
+    @OnEvent('message.reaction_updated')
+    handleMessageReactionUpdated(event: MessageReactionEvent) {
+        if (!this.server) return;
+        const roomId = `conv_${event.conversationId}`;
+        this.server.to(roomId).emit('messageReactionUpdated', {
+            conversationId: event.conversationId,
+            messageId: event.messageId,
+            user: event.user,
+            emoji: event.emoji,
+            action: event.action,
+        });
     }
 }
 

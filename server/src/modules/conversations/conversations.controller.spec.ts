@@ -36,6 +36,7 @@ describe('ConversationsController', () => {
             getConversationActiveStatus: vi.fn(),
             recallMessage: vi.fn(),
             editMessage: vi.fn(),
+            reactMessage: vi.fn(),
         };
 
         const module: TestingModule = await Test.createTestingModule({
@@ -270,6 +271,28 @@ describe('ConversationsController', () => {
             const result = await controller.editMessage(mockCurrentUser, 'conv-1', 'msg-1', dto);
             expect(mockConversationsService.editMessage).toHaveBeenCalledWith(mockCurrentUser.id, 'conv-1', 'msg-1', dto.content);
             expect(result).toEqual(mockEdited);
+        });
+    });
+
+    describe('reactMessage', () => {
+        it('should delegate to service.reactMessage with user id, conversation id, message id and emoji', async () => {
+            const dto = { emoji: '❤️' };
+            const mockResult = {
+                action: 'ADDED',
+                emoji: '❤️',
+                messageId: 'msg-1',
+                reactions: [],
+            };
+            mockConversationsService.reactMessage.mockResolvedValue(mockResult);
+
+            const result = await controller.reactMessage(mockCurrentUser, 'conv-1', 'msg-1', dto);
+            expect(mockConversationsService.reactMessage).toHaveBeenCalledWith(
+                mockCurrentUser.id,
+                'conv-1',
+                'msg-1',
+                dto.emoji,
+            );
+            expect(result).toEqual(mockResult);
         });
     });
 });
