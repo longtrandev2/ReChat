@@ -1142,7 +1142,7 @@ describe('ConversationsService', () => {
             });
             mockMemberRepo.findOne.mockResolvedValueOnce({ id: 'mem-1' });
             mockMessageRepo.findOne.mockResolvedValueOnce(msg);
-            mockMessageRepo.save.mockImplementationOnce((m) => Promise.resolve(m));
+            mockMessageRepo.save.mockImplementationOnce((m: any) => Promise.resolve(m));
             mockMemberRepo.find.mockResolvedValueOnce([
                 { user: { id: currentUserId } },
                 { user: { id: otherUserId } },
@@ -1296,7 +1296,7 @@ describe('ConversationsService', () => {
             });
             mockMemberRepo.findOne.mockResolvedValueOnce({ id: 'mem-1' });
             mockMessageRepo.findOne.mockResolvedValueOnce(originalMsg);
-            mockMessageRepo.save.mockImplementationOnce((m) => Promise.resolve(m));
+            mockMessageRepo.save.mockImplementationOnce((m: any) => Promise.resolve(m));
             mockMemberRepo.find.mockResolvedValueOnce([
                 { user: { id: currentUserId } },
                 { user: { id: otherUserId } },

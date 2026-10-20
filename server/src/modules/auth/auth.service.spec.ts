@@ -180,7 +180,7 @@ describe('AuthService', () => {
                 createdAt: new Date('2026-10-05T00:00:00.000Z'),
             });
 
-            const result = await service.login(loginDto);
+            const result: any = await service.login(loginDto);
 
             expect(result).toBeDefined();
             expect(result.accessToken).toBe('mock-jwt-token');

@@ -120,7 +120,7 @@ export class FriendsService {
                 {
                     id: friendship.addressee.id,
                     username: friendship.addressee.username,
-                    displayName: friendship.addressee.displayName,
+                    displayName: friendship.addressee.displayName || friendship.addressee.username,
                     avatarUrl: friendship.addressee.avatarUrl,
                     isOnline: friendship.addressee.isOnline,
                 },
