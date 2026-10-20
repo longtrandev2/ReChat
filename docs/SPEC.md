@@ -161,12 +161,37 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 | `markAsRead` | `{ conversationId: string }` | Đánh dấu đã xem toàn bộ tin nhắn trong hội thoại | BR-08, BR-10 |
 
 ### 6.2. Server ➔ Client
+
+#### a. Tin nhắn & Tương tác trong phòng (`conv_${conversationId}`)
 | Event | Payload | Người nhận | Mô tả |
 |-------|---------|-----------|-------|
 | `newMessage` | `{ id, conversationId, content, sender: { id, username, displayName, avatarUrl }, createdAt }` | Cả Conversation | Tin nhắn mới gửi thành công |
 | `userTyping` | `{ conversationId: string, userId: string, displayName: string, isTyping: boolean }` | Người khác trong Conv | Hiển thị ai đang gõ tin nhắn |
 | `messageRead` | `{ conversationId: string, userId: string, readAt: string }` | Người khác trong Conv | Báo tin nhắn đã được xem |
-| `userPresence` | `{ userId: string, isOnline: boolean, lastSeen: string }` | Bạn bè liên quan | Cập nhật Online / Offline |
+| `messagePinned` | `{ conversationId: string, message: object, pinnedBy: object }` | Cả Conversation | Thông báo tin nhắn đã được ghim |
+| `messageUnpinned` | `{ conversationId: string, messageId: string }` | Cả Conversation | Thông báo tin nhắn được bỏ ghim |
+| `groupMemberUpdated`| `{ conversationId: string, action: string, member: object, operatorId: string }` | Cả Conversation | Thông báo thay đổi thành viên nhóm (`ADDED`, `REMOVED`, `LEFT`, `ROLE_UPDATED`) |
+
+#### b. Hộp thư & Thông báo cá nhân (`user_${userId}`)
+| Event | Payload | Người nhận | Mô tả |
+|-------|---------|-----------|-------|
+| `conversationCreated` | `{ id, type, name, avatarUrl, members, lastMessage, unreadCount }` | Thành viên mới | Thông báo khi được thêm vào hội thoại hoặc group chat mới |
+| `conversationUpdated` | `{ conversationId: string, lastMessage: object, unreadCount: number }` | Thành viên ngoài room | Đẩy hội thoại lên đầu inbox, cập nhật badge chưa đọc |
+| `groupMembershipChanged` | `{ conversationId: string, action: string }` | Thành viên bị kick/rời | Báo hiệu cho client đóng hội thoại hoặc cập nhật UI |
+
+#### c. Lời mời kết bạn & Bạn bè (`user_${userId}`)
+| Event | Payload | Người nhận | Mô tả |
+|-------|---------|-----------|-------|
+| `friendRequestReceived` | `{ requestId: string, requester: object, createdAt: string }` | Người nhận lời mời | Thông báo có lời mời kết bạn mới, tăng badge tab Bạn bè |
+| `friendRequestAccepted` | `{ friendshipId: string, friend: object }` | Người gửi ban đầu | Thông báo đối phương đã chấp nhận kết bạn |
+| `friendRequestRejected` | `{ requestId: string }` | Người gửi ban đầu | Thông báo lời mời kết bạn đã bị từ chối |
+| `friendRequestCancelled`| `{ requestId: string }` | Người nhận ban đầu | Thông báo người gửi đã thu hồi lời mời kết bạn |
+| `friendRemoved` | `{ friendId: string }` | Bạn bè cũ | Thông báo bị xóa khỏi danh sách bạn bè |
+
+#### d. Trạng thái & Hệ thống
+| Event | Payload | Người nhận | Mô tả |
+|-------|---------|-----------|-------|
+| `userPresence` | `{ userId: string, isOnline: boolean, lastSeen: string }` | Bạn bè liên quan | Cập nhật trạng thái Online / Offline |
 | `exception` | `{ status: string, message: string }` | Sender Socket | Báo lỗi socket (WsException) |
 
 ---
@@ -406,9 +431,9 @@ erDiagram
 ## 12. Lộ trình triển khai (Milestones)
 
 - [x] **Milestone 1:** Auth Module & User Entities (Đã hoàn thành và test coverage ~95%).
-- [ ] **Milestone 2:** Friendship Module (Tìm kiếm User, Gửi/Nhận/Hủy lời mời, Danh sách bạn bè kèm Presence).
-- [ ] **Milestone 3:** Conversations & Messages Module (Tạo Direct chat, Tạo Group chat, Danh sách Inbox, Cursor-based pagination).
-- [ ] **Milestone 4:** Real-time Chat Gateway (Socket connection auth, Broadcast message, Typing indicator, Read receipts, Online Presence).
+- [x] **Milestone 2:** Friendship Module (Tìm kiếm User, Gửi/Nhận/Hủy lời mời, Danh sách bạn bè kèm Presence).
+- [x] **Milestone 3:** Conversations & Messages Module (Tạo Direct chat, Tạo Group chat, Danh sách Inbox, Cursor-based pagination).
+- [x] **Milestone 4:** Real-time Chat Gateway (Socket connection auth, Broadcast message, Typing indicator, Read receipts, Online Presence).
 - [ ] **Milestone 5:** Rich Messaging (Phase 2: Upload ảnh/file, Reply, Reaction emoji, Thu hồi tin nhắn).
 - [ ] **Milestone 6:** Frontend Web Client (React + Vite + TailwindCSS + Socket.io-client).
 
