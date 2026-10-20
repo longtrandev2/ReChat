@@ -12,4 +12,5 @@ export * from './typing.dto.js';
 export * from './mark-as-read.dto.js';
 export * from './edit-message.dto.js';
 export * from './recall-message.dto.js';
+export * from './react-message.dto.js';
 
