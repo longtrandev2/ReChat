@@ -2,6 +2,8 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule, ObserveInstrument } from './app.module.js';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { TransformInterceptor } from './common/interceptors/transform.interceptor.js';
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -22,6 +24,10 @@ async function bootstrap() {
       transform: true, // Tự động ép kiểu dữ liệu
     })
   );
+
+  // Đăng ký Response Envelope và Exception Filter toàn cục (Envelope Pattern)
+  app.useGlobalInterceptors(new TransformInterceptor());
+  app.useGlobalFilters(new AllExceptionsFilter());
 
   // Swagger Documentation Setup
   const config = new DocumentBuilder()

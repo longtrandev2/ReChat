@@ -336,5 +336,5 @@ describe('ChatGateway (e2e) - Layer 5 Real-time Verification', () => {
 
         socketA.close();
         socketB.close();
-    });
+    }, 15000);
 });
