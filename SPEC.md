@@ -1,6 +1,6 @@
 # SPEC.md — ReChat (Real-time Web Messenger)
 
-**Version:** 2.0 · **Ngày:** 06/10/2026 · **Trạng thái:** [x] Draft → [x] Approved
+**Version:** 3.0 · **Ngày:** 20/10/2026 · **Trạng thái:** [x] Draft → [x] Approved
 
 ---
 
@@ -8,14 +8,16 @@
 
 Xây dựng ứng dụng web nhắn tin thời gian thực (**Real-time Web Messenger**) cho phép người dùng cá nhân kết bạn, trò chuyện trực tiếp 1-1 (**Direct Messaging**), tạo và quản lý nhóm trò chuyện (**Group Chat**) với trải nghiệm giao tiếp hiện đại: trạng thái trực tuyến (Online/Offline presence), hiển thị đang gõ (Typing indicator), trạng thái đã xem (Read receipts), và quản lý hộp thư (Inbox) với bộ đếm tin chưa đọc.
 
+Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-Gen Security & Redis Engine**): Xác thực Email OTP, Đăng nhập linh hoạt (Username/Email), Quên và đặt lại mật khẩu an toàn, Xác thực 2 bước (2FA qua Email OTP), Quản lý phiên đa thiết bị (Sessions), Thu hồi Token tức thì qua Redis Blacklist, và Hàng đợi gửi mail bất đồng bộ (BullMQ + Redis + Nodemailer).
+
 ---
 
 ## 2. Vai trò (Actors)
 
 | Role | Quyền hạn |
 |---|---|
-| **Guest** | Đăng ký tài khoản, Đăng nhập hệ thống để nhận JWT Token. |
-| **User** | - Xem và cập nhật Profile cá nhân (`displayName`, `avatarUrl`).<br>- Tìm kiếm người dùng khác theo username hoặc tên hiển thị.<br>- Quản lý quan hệ bạn bè: Gửi, Chấp nhận, Từ chối lời mời kết bạn, xem danh sách bạn bè.<br>- Khởi tạo và tham gia cuộc hội thoại 1-1 (Direct Chat) với bạn bè.<br>- Tạo nhóm chat (Group Chat), thêm thành viên, rời nhóm.<br>- Gửi/nhận tin nhắn real-time trong các cuộc hội thoại mà mình tham gia.<br>- Xem lịch sử tin nhắn với phân trang con trỏ (Cursor-based pagination).<br>- Đánh dấu đã đọc tin nhắn trong cuộc hội thoại. |
+| **Guest** | Đăng ký tài khoản bằng Username/Email, Xác thực OTP Email, Đăng nhập hệ thống (kèm thử thách 2FA nếu có), Yêu cầu đặt lại mật khẩu khi quên. |
+| **User** | - Xem và cập nhật Profile cá nhân (`displayName`, `avatarUrl`).<br>- Thiết lập bảo mật tài khoản: Bật/Tắt 2FA qua Email OTP trong Cài đặt.<br>- Quản lý phiên đăng nhập: Xem danh sách thiết bị đang hoạt động, Đăng xuất từ xa thiết bị khác.<br>- Đăng xuất tài khoản (Token bị thu hồi tức thì vào Blacklist).<br>- Tìm kiếm người dùng khác theo username hoặc tên hiển thị.<br>- Quản lý quan hệ bạn bè: Gửi, Chấp nhận, Từ chối lời mời kết bạn, xem danh sách bạn bè.<br>- Khởi tạo và tham gia cuộc hội thoại 1-1 (Direct Chat) với bạn bè.<br>- Tạo nhóm chat (Group Chat), thêm thành viên, rời nhóm.<br>- Gửi/nhận tin nhắn real-time trong các cuộc hội thoại mà mình tham gia.<br>- Xem lịch sử tin nhắn với phân trang con trỏ (Cursor-based pagination).<br>- Đánh dấu đã đọc tin nhắn trong cuộc hội thoại. |
 
 ---
 
@@ -23,9 +25,9 @@ Xây dựng ứng dụng web nhắn tin thời gian thực (**Real-time Web Mess
 
 | ID | Module | Tên yêu cầu chức năng |
 |----|--------|-----------------------|
-| **FR-01** | Auth | Đăng ký tài khoản mới bằng `username`, `password`, `confirmPassword`. |
-| **FR-02** | Auth | Đăng nhập hệ thống để nhận JWT Access Token và Profile cơ bản. |
-| **FR-03** | Auth | Đăng xuất khỏi hệ thống (`POST /auth/logout`). |
+| **FR-01** | Auth | Đăng ký tài khoản mới bằng `username`, `email`, `password`, `confirmPassword`. |
+| **FR-02** | Auth | Đăng nhập hệ thống bằng `username` hoặc `email` để nhận JWT Access Token và Profile cơ bản. |
+| **FR-03** | Auth | Đăng xuất khỏi hệ thống (`POST /auth/logout`), đưa token vào Blacklist và xóa session thiết bị. |
 | **FR-04** | Profile | Xem thông tin cá nhân và cập nhật Profile (`displayName`, `avatarUrl`). |
 | **FR-05** | Profile | Tìm kiếm người dùng theo `username` hoặc `displayName`. |
 | **FR-06** | Friends | Gửi lời mời kết bạn và Hủy/thu hồi lời mời kết bạn đã gửi. |
@@ -45,6 +47,12 @@ Xây dựng ứng dụng web nhắn tin thời gian thực (**Real-time Web Mess
 | **FR-20** | Messages | Ghim và bỏ ghim tin nhắn quan trọng trong cuộc trò chuyện; xem danh sách tin nhắn đã ghim. |
 | **FR-21** | Messages | Kho lưu trữ tệp & phương tiện (Media Gallery): Lọc và xem lại các ảnh (`IMAGE`) và tệp tin (`FILE`) đã gửi trong hội thoại bằng Cursor pagination. |
 | **FR-22** | Conversations | Kiểm tra trạng thái hoạt động (Active status) của nhóm hoặc cuộc hội thoại 1-1 (đồng bộ với trạng thái Online/Offline của thành viên). |
+| **FR-23** | Auth | Xác thực kích hoạt tài khoản bằng mã OTP 6 số gửi về email (`POST /auth/verify-email`, `POST /auth/resend-verification`). |
+| **FR-24** | Auth | Quên mật khẩu và đặt lại mật khẩu mới an toàn qua liên kết/mã gửi về email (`POST /auth/forgot-password`, `POST /auth/reset-password`). |
+| **FR-25** | Auth | Thiết lập xác thực 2 bước (2FA qua Email OTP) trong Cài đặt (`/auth/2fa/send-setup-otp`, `/auth/2fa/enable`, `/auth/2fa/disable`). |
+| **FR-26** | Auth | Thử thách xác thực 2FA khi đăng nhập (`/auth/2fa/verify-login`, `/auth/2fa/resend-login-otp`). |
+| **FR-27** | Auth | Quản lý phiên đăng nhập đa thiết bị và hỗ trợ đăng xuất từ xa (`GET /auth/sessions`, `DELETE /auth/sessions/:deviceId`). |
+| **FR-28** | Auth | Thu hồi Token tức thì qua Redis Blacklist ngay khi đăng xuất để vô hiệu hóa JWT trước khi hết hạn. |
 
 ---
 
@@ -72,18 +80,36 @@ Xây dựng ứng dụng web nhắn tin thời gian thực (**Real-time Web Mess
 | **BR-18** | **Ghim tin nhắn (Pinned Messages):** Thành viên trong cuộc trò chuyện có quyền ghim tin nhắn. Không thể ghim tin nhắn đã bị thu hồi (`isRecalled = true`). Người ghim tin nhắn hoặc `OWNER`/`ADMIN` của cuộc trò chuyện có quyền bỏ ghim. Tin nhắn ghim phải thuộc cuộc hội thoại chỉ định. | FR-20 | `400 Bad Request` / `403 Forbidden` / `404 Not Found` |
 | **BR-19** | **Kho tập tin & phương tiện (Media Gallery):** Chỉ thành viên trong cuộc hội thoại mới có quyền truy cập kho media. Hỗ trợ lọc theo loại tin nhắn (`IMAGE` hoặc `FILE`) kèm Cursor-based pagination (`before`, `limit`). | FR-21 | `403 Forbidden` / `400 Bad Request` |
 | **BR-20** | **Trạng thái Active của Hội thoại:** Đối với `DIRECT`, hội thoại active khi đối phương `isOnline = true`. Đối với `GROUP`, nhóm active khi có ít nhất 1 thành viên khác (ngoại trừ user hiện tại) đang `isOnline = true` (đồng bộ presence). Người gọi phải là thành viên hội thoại. | FR-22 | `403 Forbidden` |
+| **BR-21** | `email` là duy nhất trong hệ thống và phải tuân thủ định dạng email chuẩn RFC 5322. | FR-01, FR-23 | `409 Conflict` (trùng) hoặc `400 Bad Request` |
+| **BR-22** | **Xác thực Email OTP:** Mã OTP kích hoạt tài khoản có độ dài 6 chữ số ngẫu nhiên, lưu trên Redis với thời hạn (TTL) 10 phút. Khoảng thời gian giãn cách giữa 2 lần bấm gửi lại OTP (`resend`) tối thiểu là 60 giây. | FR-23 | `400 Bad Request` / `429 Too Many Requests` |
+| **BR-23** | **Kích hoạt tài khoản:** Tài khoản có đăng ký email bắt buộc phải xác thực email thành công (`isEmailVerified = true`) trước khi được cấp JWT Access Token để đăng nhập. | FR-02, FR-23 | `403 Forbidden` |
+| **BR-24** | **Đặt lại mật khẩu:** Token đặt lại mật khẩu (`pwd_reset`) có độ dài ngẫu nhiên bảo mật cao (UUID/Crypto 256-bit), lưu trên Redis với TTL 15 phút và chỉ được dùng 1 lần duy nhất. Sau khi đặt lại mật khẩu thành công, hệ thống tự động thu hồi/xóa sạch toàn bộ phiên đăng nhập cũ trên mọi thiết bị (`deleteAllUserSessions`) để phòng ngừa chiếm đoạt tài khoản. | FR-24, FR-27 | `400 Bad Request` |
+| **BR-25** | **Xác thực 2 bước (2FA Challenge):** Khi người dùng bật 2FA (`twoFactorEnabled = true`), server chỉ cấp JWT Token sau khi xác thực 2 bước. Sau khi xác thực đúng username/password, server sinh `mfaToken` tạm (TTL 5 phút) và gửi mã OTP 6 số qua email. Nhập sai OTP quá 5 lần liên tiếp sẽ lập tức hủy bỏ phiên 2FA tạm để chống brute-force. | FR-25, FR-26 | `400 Bad Request` / `429 Too Many Requests` |
+| **BR-26** | **Distributed Rate Limiting:** Áp dụng rate limiting phân tán lưu trữ trên Redis. Hạn mức toàn hệ thống là 100 requests/phút. Các endpoint nhạy cảm (`/auth/login`, `/auth/register`, `/auth/resend-verification`, `/auth/reset-password`, `/auth/2fa/verify-login`) có hạn mức nghiêm ngặt từ 3 đến 5 requests/phút. | FR-01, FR-02, FR-23, FR-24, FR-26 | `429 Too Many Requests` |
+| **BR-27** | **Token Blacklist & Multi-Device Sessions:** Khi người dùng bấm Đăng xuất (`POST /auth/logout`) hoặc bị Đăng xuất từ xa (`DELETE /auth/sessions/:deviceId`), token JWT sẽ được đưa vào Redis Blacklist (`auth:blacklist:{token}`) với thời gian sống bằng thời gian còn lại của token. Bất kỳ request nào mang token trong blacklist đều bị từ chối ngay lập tức. | FR-03, FR-27, FR-28 | `401 Unauthorized` |
 
 ---
 
 ## 5. API Endpoints
 
-### 5.1. Authentication & Users
+### 5.1. Authentication, Security & Users
 | Method | Path | Mô tả | Auth | Rules |
 |--------|------|-------|------|-------|
-| `POST` | `/api/v1/auth/register` | Đăng ký tài khoản mới | None | BR-01, BR-02 |
-| `POST` | `/api/v1/auth/login` | Đăng nhập lấy JWT access token | None | BR-02 |
-| `POST` | `/api/v1/auth/logout` | Đăng xuất tài khoản | Bearer JWT | BR-11 |
-| `GET` | `/api/v1/auth/me` | Lấy thông tin user đang đăng nhập | Bearer JWT | BR-11 |
+| `POST` | `/api/v1/auth/register` | Đăng ký tài khoản mới (gửi OTP về email) | None | BR-01, BR-02, BR-21, BR-26 |
+| `POST` | `/api/v1/auth/verify-email` | Xác thực tài khoản bằng mã OTP 6 số từ email | None | BR-22, BR-23 |
+| `POST` | `/api/v1/auth/resend-verification` | Gửi lại mã OTP kích hoạt tài khoản (Cooldown 60s) | None | BR-22, BR-26 |
+| `POST` | `/api/v1/auth/login` | Đăng nhập bằng Username hoặc Email (trả về JWT hoặc 2FA Challenge) | None | BR-02, BR-23, BR-25, BR-26 |
+| `POST` | `/api/v1/auth/2fa/verify-login` | Xác thực mã OTP 2FA để hoàn tất đăng nhập | None | BR-25, BR-26 |
+| `POST` | `/api/v1/auth/2fa/resend-login-otp` | Gửi lại mã OTP 2FA trong phiên đăng nhập (Cooldown 60s) | None | BR-25, BR-26 |
+| `POST` | `/api/v1/auth/2fa/send-setup-otp` | Gửi mã OTP xác nhận chuẩn bị bật 2FA trong Cài đặt | Bearer JWT | BR-11, BR-25, BR-26 |
+| `POST` | `/api/v1/auth/2fa/enable` | Xác nhận mã OTP để chính thức kích hoạt 2FA | Bearer JWT | BR-11, BR-25 |
+| `POST` | `/api/v1/auth/2fa/disable` | Tắt tính năng 2FA (yêu cầu mật khẩu hiện tại) | Bearer JWT | BR-11 |
+| `GET` | `/api/v1/auth/sessions` | Lấy danh sách các thiết bị đang đăng nhập tài khoản | Bearer JWT | BR-11, BR-27 |
+| `DELETE` | `/api/v1/auth/sessions/:deviceId` | Thu hồi phiên đăng xuất từ xa một thiết bị cụ thể | Bearer JWT | BR-11, BR-27 |
+| `POST` | `/api/v1/auth/forgot-password` | Yêu cầu gửi email hướng dẫn đặt lại mật khẩu | None | BR-24, BR-26 |
+| `POST` | `/api/v1/auth/reset-password` | Đặt lại mật khẩu mới bằng token nhận từ email | None | BR-02, BR-24, BR-26 |
+| `GET` | `/api/v1/auth/me` | Lấy thông tin tài khoản đang đăng nhập | Bearer JWT | BR-11, BR-27 |
+| `POST` | `/api/v1/auth/logout` | Đăng xuất, đưa token vào blacklist và xóa session | Bearer JWT | BR-11, BR-27 |
 | `PATCH` | `/api/v1/users/me` | Cập nhật Profile cá nhân (`displayName`, `avatarUrl`) | Bearer JWT | BR-11 |
 | `GET` | `/api/v1/users/search?q={keyword}` | Tìm kiếm user theo username/displayName | Bearer JWT | BR-11 |
 | `GET` | `/api/v1/users/:id` | Lấy thông tin công khai của một user | Bearer JWT | BR-11 |
@@ -159,6 +185,9 @@ erDiagram
     USERS {
         uuid id PK
         varchar username UK
+        varchar email UK "Nullable"
+        boolean isEmailVerified "Default false"
+        boolean twoFactorEnabled "Default false"
         varchar password
         varchar displayName
         varchar avatarUrl
@@ -228,6 +257,9 @@ erDiagram
 - **User Entity**:
   - `id`: string (UUID, Primary Key)
   - `username`: string (VARCHAR 20, Unique, Not Null)
+  - `email`: string (VARCHAR 100, Unique, Nullable)
+  - `isEmailVerified`: boolean (Default false)
+  - `twoFactorEnabled`: boolean (Default false)
   - `password`: string (VARCHAR 255, Hashed với bcrypt)
   - `displayName`: string (VARCHAR 50, Nullable)
   - `avatarUrl`: string (VARCHAR 255, Nullable)
@@ -290,14 +322,27 @@ erDiagram
 ## 8. Validation & Error Handling
 
 - **Validation**: Sử dụng `ValidationPipe` toàn cục (`whitelist: true`, `transform: true`) kết hợp `class-validator` và `class-transformer`.
-- **HTTP Error Format**:
+- **HTTP Success Response Envelope** (`TransformInterceptor`): Toàn bộ response thành công được đóng gói đồng nhất:
   ```json
   {
+    "success": true,
+    "statusCode": 200,
+    "data": {
+      "id": "conv-uuid",
+      "name": "Nhóm bạn thân"
+    },
+    "timestamp": "2026-10-20T10:00:00.000Z"
+  }
+  ```
+- **HTTP Error Format** (`AllExceptionsFilter`): Bắt toàn bộ ngoại lệ và trả về JSON chuẩn:
+  ```json
+  {
+    "success": false,
     "statusCode": 403,
-    "message": "You are not a member of this conversation",
+    "message": "Tài khoản chưa được kích hoạt qua email",
     "error": "Forbidden",
-    "timestamp": "2026-10-06T10:00:00.000Z",
-    "path": "/api/v1/conversations/conv-uuid/messages"
+    "timestamp": "2026-10-20T10:00:00.000Z",
+    "path": "/api/v1/auth/login"
   }
   ```
 - **WebSocket Error Format**: Sử dụng Custom `WsExceptionFilter` bắt lỗi và emit event `exception`:
@@ -312,13 +357,15 @@ erDiagram
 
 ## 9. Yêu cầu phi chức năng
 
-- **Unit Test Coverage**: Mục tiêu ≥ 70% coverage cho Auth, Friendship, Conversations & Chat Gateway logic.
-- **Môi trường**:
-  - Node.js: >= 20.x (Khuyên dùng v22 LTS)
-  - Framework: NestJS 12.x
-  - Database: MySQL 8.0 (Docker container)
-  - Real-time: Socket.io + `@nestjs/websockets`
-  - Client: React 18 + Vite + TypeScript + Socket.io-client.
+- **Unit Test Coverage**: Mục tiêu ≥ 70% coverage (Hiện đạt 227/227 tests ~ 95% cho Auth, Friendship, Conversations, Gateway).
+- **Môi trường & Công nghệ**:
+  - **Runtime**: Node.js >= 20.x (Khuyên dùng Node v22 LTS)
+  - **Framework**: NestJS 12.x
+  - **Database (SSOT)**: MySQL 8.0 (Docker container)
+  - **In-Memory Cache & Storage**: Redis 7.x Alpine (Lưu Sessions, Token Blacklist, OTP, Rate Limiting)
+  - **Async Job Queue**: BullMQ kết nối Redis worker xử lý gửi email ngầm (Nodemailer)
+  - **Real-time Engine**: Socket.io + `@nestjs/websockets`
+  - **Client**: React 18 + Vite + TypeScript + Socket.io-client.
 
 ---
 
