@@ -6,6 +6,7 @@ describe('JwtStrategy', () => {
     let strategy: JwtStrategy;
     let mockUserRepository: any;
     let mockConfigService: any;
+    let mockRedisService: any;
 
     beforeEach(() => {
         mockUserRepository = {
@@ -16,7 +17,11 @@ describe('JwtStrategy', () => {
             get: vi.fn().mockReturnValue('test-secret'),
         };
 
-        strategy = new JwtStrategy(mockUserRepository, mockConfigService);
+        mockRedisService = {
+            isTokenBlacklisted: vi.fn().mockResolvedValue(false),
+        };
+
+        strategy = new JwtStrategy(mockUserRepository, mockConfigService, mockRedisService);
     });
 
     it('should be defined', () => {
@@ -51,6 +56,20 @@ describe('JwtStrategy', () => {
             await expect(strategy.validate({ sub: 'non-existent', username: 'ghost' })).rejects.toThrow(
                 UnauthorizedException,
             );
+        });
+
+        it('should throw UnauthorizedException if token is blacklisted in Redis', async () => {
+            mockRedisService.isTokenBlacklisted.mockResolvedValue(true);
+            const mockReq = {
+                headers: {
+                    authorization: 'Bearer blacklisted-token-xyz',
+                },
+            };
+
+            await expect(
+                strategy.validate(mockReq, { sub: 'user-uuid', username: 'alice' }),
+            ).rejects.toThrow(UnauthorizedException);
+            expect(mockRedisService.isTokenBlacklisted).toHaveBeenCalledWith('blacklisted-token-xyz');
         });
     });
 });
