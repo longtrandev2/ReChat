@@ -64,3 +64,8 @@ Thumbs.db
 coverage/
 .nyc_output/
 server/tsconfig.build.tsbuildinfo
+
+# ==========================================
+# 9. AG KIT & AI ASSISTANT (Cấu hình Kit)
+# ==========================================
+.agents/
