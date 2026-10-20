@@ -204,6 +204,12 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 | `userPresence` | `{ userId: string, isOnline: boolean, lastSeen: string }` | Bạn bè liên quan | Cập nhật trạng thái Online / Offline |
 | `exception` | `{ status: string, message: string }` | Sender Socket | Báo lỗi socket (WsException) |
 
+### 6.3. Kiến trúc Đa Pod & Phân tán Realtime (Multi-Pod Redis Adapter)
+Nhằm đảm bảo khả năng mở rộng ngang (horizontal scaling) không giới hạn khi hệ thống triển khai trên Kubernetes/Docker Swarm gồm nhiều Pods/Instances backend:
+- **WebSocket Adapter (`RedisIoAdapter`):** Kế thừa từ `IoAdapter` của NestJS, tích hợp `@socket.io/redis-adapter` song hành cùng 2 kết nối Redis chuyên dụng (`pubClient` và `subClient` thông qua `ioredis`).
+- **Pub/Sub Room Synchronization:** Khi một client gửi tin nhắn hoặc trigger realtime event ở Pod A, event đó được broadcast qua Redis channel tới tất cả các Pod B, C... để chuyển tiếp tới socket clients đang kết nối tại các room tương ứng (`conv_{id}`, `user_{id}`).
+- **Graceful Fallback Resilience:** Khi khởi tạo ứng dụng, nếu Redis Pub/Sub chưa sẵn sàng hoặc gặp sự cố ngắt kết nối, adapter tự động fallback về cơ chế In-Memory mặc định của Socket.io, ghi log cảnh báo và không làm gián đoạn server, đảm bảo tính sẵn sàng cao (High Availability).
+
 ---
 
 ## 7. Mô hình dữ liệu (Database Schema)
@@ -449,7 +455,7 @@ erDiagram
 - [x] **Milestone 2:** Friendship Module (Tìm kiếm User, Gửi/Nhận/Hủy lời mời, Danh sách bạn bè kèm Presence).
 - [x] **Milestone 3:** Conversations & Messages Module (Tạo Direct chat, Tạo Group chat, Danh sách Inbox, Cursor-based pagination).
 - [x] **Milestone 4:** Real-time Chat Gateway (Socket connection auth, Broadcast message, Typing indicator, Read receipts, Online Presence).
-- [ ] **Milestone 5:** Rich Messaging (Phase 2: Upload ảnh/file, Reply, Reaction emoji, Thu hồi tin nhắn).
+- [x] **Milestone 5:** Rich Messaging (Phase 2: Upload ảnh/file Cloudinary, Reply, Reaction emoji, Thu hồi tin nhắn, WebSocket Redis Adapter đa pod, E2E Verification 100% PASS).
 - [ ] **Milestone 6:** Frontend Web Client (React + Vite + TailwindCSS + Socket.io-client).
 
 ---
