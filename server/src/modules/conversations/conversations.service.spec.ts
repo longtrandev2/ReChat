@@ -13,6 +13,7 @@ import { ConversationMember, ConversationRole } from './entities/conversation-me
 import { Message, MessageType } from './entities/message.entity.js';
 import { User } from '../users/entities/user.entity.js';
 import { Friendship, FriendshipStatus } from '../friends/entities/friendship.entity.js';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 
 describe('ConversationsService', () => {
     let service: ConversationsService;
@@ -21,6 +22,7 @@ describe('ConversationsService', () => {
     let mockMessageRepo: any;
     let mockUserRepo: any;
     let mockFriendshipRepo: any;
+    let mockEventEmitter: any;
 
     const createMockQueryBuilder = (result: any = []) => ({
         innerJoin: vi.fn().mockReturnThis(),
@@ -50,7 +52,7 @@ describe('ConversationsService', () => {
 
         mockMemberRepo = {
             findOne: vi.fn(),
-            find: vi.fn(),
+            find: vi.fn().mockResolvedValue([]),
             create: vi.fn((data) => ({ id: 'member-uuid-created', ...data })),
             save: vi.fn((data) => Promise.resolve(data)),
             delete: vi.fn().mockResolvedValue({ affected: 1 }),
@@ -76,6 +78,10 @@ describe('ConversationsService', () => {
             findOne: vi.fn(),
         };
 
+        mockEventEmitter = {
+            emit: vi.fn(),
+        };
+
         const module: TestingModule = await Test.createTestingModule({
             providers: [
                 ConversationsService,
@@ -84,6 +90,7 @@ describe('ConversationsService', () => {
                 { provide: getRepositoryToken(Message), useValue: mockMessageRepo },
                 { provide: getRepositoryToken(User), useValue: mockUserRepo },
                 { provide: getRepositoryToken(Friendship), useValue: mockFriendshipRepo },
+                { provide: EventEmitter2, useValue: mockEventEmitter },
             ],
         }).compile();
 
@@ -144,6 +151,12 @@ describe('ConversationsService', () => {
             expect(result).toBeDefined();
             expect(mockConversationRepo.create).toHaveBeenCalledWith({ type: ConversationType.DIRECT });
             expect(mockMemberRepo.save).toHaveBeenCalled();
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'conversation.created',
+                expect.objectContaining({
+                    memberIds: [currentUserId, targetUserId],
+                }),
+            );
         });
     });
 
@@ -176,6 +189,12 @@ describe('ConversationsService', () => {
                 name: 'Group Alpha',
             });
             expect(mockMemberRepo.save).toHaveBeenCalled();
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'conversation.created',
+                expect.objectContaining({
+                    memberIds: [ownerId, ...memberIds],
+                }),
+            );
         });
     });
 
@@ -234,6 +253,13 @@ describe('ConversationsService', () => {
             const result = await service.addMembers(currentUserId, conversationId, { memberIds: ['user-2', 'user-3'] });
             expect(result.addedCount).toBe(1);
             expect(mockMemberRepo.save).toHaveBeenCalled();
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'group.member_event',
+                expect.objectContaining({
+                    action: 'ADDED',
+                    targetUserIds: ['user-3'],
+                }),
+            );
         });
     });
 
@@ -706,6 +732,14 @@ describe('ConversationsService', () => {
             expect(result.isPinned).toBe(true);
             expect(result.pinnedAt).toBeDefined();
             expect(mockMessageRepo.save).toHaveBeenCalled();
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'message.pinned',
+                expect.objectContaining({
+                    conversationId,
+                    messageId,
+                    isPinned: true,
+                }),
+            );
         });
 
         it('should throw BadRequestException if trying to unpin an unpinned message', async () => {
@@ -993,6 +1027,19 @@ describe('ConversationsService', () => {
 
             // 4. Return populated message
             expect(result).toEqual(populatedMsg);
+
+            // 5. Verify inbox.updated event was emitted
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'inbox.updated',
+                expect.objectContaining({
+                    conversationId,
+                    senderId,
+                    lastMessage: expect.objectContaining({
+                        id: savedMsg.id,
+                        content: validDto.content,
+                    }),
+                }),
+            );
         });
     });
 });
