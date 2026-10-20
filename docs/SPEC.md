@@ -146,6 +146,8 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 | `GET` | `/api/v1/conversations/:id/pinned-messages` | Lấy danh sách tin nhắn đang được ghim | Bearer JWT | BR-08, BR-18 |
 | `GET` | `/api/v1/conversations/:id/media` | Kho ảnh & tệp tin đã gửi (`type=IMAGE\|FILE`, `before`, `limit`) | Bearer JWT | BR-08, BR-19 |
 | `GET` | `/api/v1/conversations/:id/active` | Kiểm tra trạng thái hoạt động trực tuyến (Active presence) | Bearer JWT | BR-08, BR-20 |
+| `PATCH` | `/api/v1/conversations/:id/messages/:messageId/recall` | Thu hồi tin nhắn trong cuộc trò chuyện (Không giới hạn thời gian) | Bearer JWT | BR-M5-01, BR-M5-02, BR-M5-03 |
+| `PATCH` | `/api/v1/conversations/:id/messages/:messageId/edit` | Chỉnh sửa tin nhắn văn bản trong vòng 15 phút `{ content }` | Bearer JWT | BR-M5-04 -> BR-M5-07 |
 
 ---
 
@@ -159,6 +161,8 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 | `sendMessage` | `{ conversationId: string, content: string }` | Gửi tin nhắn mới vào cuộc trò chuyện | BR-08, BR-09 |
 | `typing` | `{ conversationId: string, isTyping: boolean }` | Bật/tắt thông báo đang gõ tin nhắn | BR-08 |
 | `markAsRead` | `{ conversationId: string }` | Đánh dấu đã xem toàn bộ tin nhắn trong hội thoại | BR-08, BR-10 |
+| `recallMessage` | `{ conversationId: string, messageId: string }` | Thu hồi tin nhắn không giới hạn thời gian | BR-M5-01, BR-M5-02 |
+| `editMessage` | `{ conversationId: string, messageId: string, content: string }` | Chỉnh sửa tin nhắn văn bản trong 15 phút | BR-M5-04 -> BR-M5-07 |
 
 ### 6.2. Server ➔ Client
 
@@ -168,6 +172,8 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 | `newMessage` | `{ id, conversationId, content, sender: { id, username, displayName, avatarUrl }, createdAt }` | Cả Conversation | Tin nhắn mới gửi thành công |
 | `userTyping` | `{ conversationId: string, userId: string, displayName: string, isTyping: boolean }` | Người khác trong Conv | Hiển thị ai đang gõ tin nhắn |
 | `messageRead` | `{ conversationId: string, userId: string, readAt: string }` | Người khác trong Conv | Báo tin nhắn đã được xem |
+| `messageRecalled` | `{ conversationId: string, messageId: string, recalledAt: string, senderId: string }` | Cả Conversation | Thông báo tin nhắn đã bị thu hồi |
+| `messageEdited` | `{ conversationId: string, messageId: string, content: string, isEdited: true, editedAt: string, senderId: string }` | Cả Conversation | Thông báo tin nhắn đã được chỉnh sửa |
 | `messagePinned` | `{ conversationId: string, message: object, pinnedBy: object }` | Cả Conversation | Thông báo tin nhắn đã được ghim |
 | `messageUnpinned` | `{ conversationId: string, messageId: string }` | Cả Conversation | Thông báo tin nhắn được bỏ ghim |
 | `groupMemberUpdated`| `{ conversationId: string, action: string, member: object, operatorId: string }` | Cả Conversation | Thông báo thay đổi thành viên nhóm (`ADDED`, `REMOVED`, `LEFT`, `ROLE_UPDATED`) |
@@ -261,6 +267,8 @@ erDiagram
         varchar fileUrl "Nullable"
         uuid replyToId FK "Nullable (Self-relation)"
         boolean isRecalled "Default false"
+        boolean isEdited "Default false"
+        datetime editedAt "Nullable"
         boolean isPinned "Default false"
         datetime pinnedAt "Nullable"
         uuid pinnedById FK "Nullable"
@@ -329,6 +337,8 @@ erDiagram
   - `fileUrl`: string (VARCHAR 500, Nullable)
   - `replyToId`: string (UUID, Nullable, Self-relation -> Message.id)
   - `isRecalled`: boolean (Default false)
+  - `isEdited`: boolean (Default false)
+  - `editedAt`: Date (DATETIME, Nullable)
   - `isPinned`: boolean (Default false)
   - `pinnedAt`: Date (DATETIME, Nullable)
   - `pinnedById`: string (UUID, Foreign Key -> User.id, Nullable)
