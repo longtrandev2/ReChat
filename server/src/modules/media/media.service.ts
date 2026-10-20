@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { v2 as cloudinary } from 'cloudinary';
 import streamifier from 'streamifier';
 import * as path from 'path';
+import 'multer';
 import { MessageType } from '../conversations/entities/message.entity.js';
 import { OnEvent } from '@nestjs/event-emitter';
 import { MessageRecalledEvent } from '../../common/events/index.js';

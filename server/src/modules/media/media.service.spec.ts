@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { BadRequestException } from '@nestjs/common';
 import { MediaService } from './media.service.js';
 import { MessageType } from '../conversations/entities/message.entity.js';
+import 'multer';
 
 vi.mock('cloudinary', () => ({
     v2: {

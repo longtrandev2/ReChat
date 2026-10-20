@@ -4,6 +4,7 @@ import { MediaController } from './media.controller.js';
 import { MediaService } from './media.service.js';
 import { ConversationsService } from '../conversations/conversations.service.js';
 import { MessageType } from '../conversations/entities/message.entity.js';
+import 'multer';
 
 describe('MediaController', () => {
     let controller: MediaController;

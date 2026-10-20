@@ -8,6 +8,7 @@ import {
     HttpCode,
     HttpStatus,
 } from '@nestjs/common';
+import 'multer';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '@nestjs/passport';
 import {

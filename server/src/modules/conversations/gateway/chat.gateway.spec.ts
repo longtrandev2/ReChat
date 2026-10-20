@@ -46,6 +46,7 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
         reactMessage: ReturnType<typeof vi.fn>;
     };
     let mockUserRepository: {
+        findOne: ReturnType<typeof vi.fn>;
         update: ReturnType<typeof vi.fn>;
     };
     let mockFriendshipRepository: {
