@@ -1,9 +1,17 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Friendship, FriendshipStatus } from './entities/friendship.entity.js';
 import { User } from '../users/entities/user.entity.js';
 import { PaginationQueryDto, PaginatedResponse } from '../../common/dto/pagination.dto.js';
+import {
+    FriendRequestSentEvent,
+    FriendRequestAcceptedEvent,
+    FriendRequestRejectedEvent,
+    FriendRequestCancelledEvent,
+    FriendRemovedEvent,
+} from '../../common/events/index.js';
 
 @Injectable()
 export class FriendsService {
@@ -13,6 +21,8 @@ export class FriendsService {
 
         @InjectRepository(User)
         private readonly userRepository: Repository<User>,
+
+        private readonly eventEmitter: EventEmitter2,
     ) { }
 
     /**
@@ -64,7 +74,32 @@ export class FriendsService {
             status: FriendshipStatus.PENDING,
         });
 
-        return await this.friendshipRepository.save(newFriendship);
+        const saved = await this.friendshipRepository.save(newFriendship);
+
+        // 5. Lấy thông tin requester để phát domain event realtime
+        const requester = await this.userRepository.findOne({
+            where: { id: currentUserId },
+            select: { id: true, username: true, displayName: true, avatarUrl: true },
+        });
+
+        if (requester) {
+            this.eventEmitter.emit(
+                'friend.request_sent',
+                new FriendRequestSentEvent(
+                    saved.id,
+                    {
+                        id: requester.id,
+                        username: requester.username,
+                        displayName: requester.displayName || requester.username,
+                        avatarUrl: requester.avatarUrl,
+                    },
+                    targetUserId,
+                    saved.createdAt,
+                ),
+            );
+        }
+
+        return saved;
     }
 
     async acceptFriendRequest(currentUserId: string, requestId: string) {
@@ -74,7 +109,26 @@ export class FriendsService {
             throw new ForbiddenException('Bạn không có quyền chấp nhận lời mời kết bạn này')
 
         friendship.status = FriendshipStatus.ACCEPTED;
-        return await this.friendshipRepository.save(friendship);
+        const saved = await this.friendshipRepository.save(friendship);
+
+        // Bắn domain event báo cho người gửi lời mời ban đầu (requester)
+        this.eventEmitter.emit(
+            'friend.request_accepted',
+            new FriendRequestAcceptedEvent(
+                saved.id,
+                friendship.requester.id,
+                {
+                    id: friendship.addressee.id,
+                    username: friendship.addressee.username,
+                    displayName: friendship.addressee.displayName,
+                    avatarUrl: friendship.addressee.avatarUrl,
+                    isOnline: friendship.addressee.isOnline,
+                },
+                new Date(),
+            ),
+        );
+
+        return saved;
     }
 
     async rejectFriendRequest(currentUserId: string, requestId: string) {
@@ -83,8 +137,14 @@ export class FriendsService {
         if (friendship.addressee.id !== currentUserId)
             throw new ForbiddenException('Bạn không có quyền từ chối lời mời kết bạn này')
 
-
         await this.friendshipRepository.delete(requestId);
+
+        // Bắn domain event báo cho requester biết lời mời bị từ chối
+        this.eventEmitter.emit(
+            'friend.request_rejected',
+            new FriendRequestRejectedEvent(requestId, friendship.requester.id),
+        );
+
         return { message: 'Đã từ chối lời mời kết bạn' }
     }
 
@@ -94,8 +154,14 @@ export class FriendsService {
         if (friendship.requester.id !== currentUserId)
             throw new ForbiddenException('Bạn không có quyền từ chối lời mời kết bạn này')
 
-
         await this.friendshipRepository.delete(requestId);
+
+        // Bắn domain event báo cho addressee biết lời mời đã bị hủy
+        this.eventEmitter.emit(
+            'friend.request_cancelled',
+            new FriendRequestCancelledEvent(requestId, friendship.addressee.id),
+        );
+
         return { message: 'Đã hủy chối lời mời kết bạn' }
     }
 
@@ -128,6 +194,13 @@ export class FriendsService {
             throw new NotFoundException('Hai người không phải bạn bè')
 
         await this.friendshipRepository.delete(friendship.id);
+
+        // Bắn domain event báo cho cả 2 phía về việc hủy kết bạn
+        this.eventEmitter.emit(
+            'friend.removed',
+            new FriendRemovedEvent(currentUserId, friendId),
+        );
+
         return { message: 'Đã hủy kết bạn thành công' }
     }
 

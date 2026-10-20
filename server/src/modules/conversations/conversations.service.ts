@@ -23,6 +23,14 @@ import {
     SendMessageDto,
 } from './dto/index.js';
 
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import {
+    ConversationCreatedEvent,
+    InboxUpdatedEvent,
+    GroupMemberEvent,
+    MessagePinnedEvent,
+} from '../../common/events/index.js';
+
 @Injectable()
 export class ConversationsService {
     constructor(
@@ -40,6 +48,8 @@ export class ConversationsService {
 
         @InjectRepository(Friendship)
         private readonly friendshipRepository: Repository<Friendship>,
+
+        private readonly eventEmitter: EventEmitter2,
     ) { }
 
     /**
@@ -105,6 +115,16 @@ export class ConversationsService {
 
         await this.memberRepository.save([member1, member2]);
 
+        // Phát domain event để FE của cả 2 phía lập tức hiển thị conversation mới vào danh sách Inbox
+        this.eventEmitter.emit(
+            'conversation.created',
+            new ConversationCreatedEvent(
+                savedConversation.id,
+                [currentUserId, targetUserId],
+                savedConversation,
+            ),
+        );
+
         return savedConversation;
     }
 
@@ -153,6 +173,16 @@ export class ConversationsService {
         );
 
         await this.memberRepository.save([ownerMember, ...otherMembers]);
+
+        // Phát domain event để FE của tất cả thành viên trong nhóm lập tức thấy nhóm mới trong Inbox
+        this.eventEmitter.emit(
+            'conversation.created',
+            new ConversationCreatedEvent(
+                savedGroup.id,
+                [ownerId, ...uniqueMemberIds],
+                savedGroup,
+            ),
+        );
 
         return savedGroup;
     }
@@ -229,7 +259,19 @@ export class ConversationsService {
             }),
         );
 
-        await this.memberRepository.save(newMembers);
+        const savedMembers = await this.memberRepository.save(newMembers);
+
+        // Phát domain event để FE cập nhật danh sách thành viên và thông báo vào room
+        this.eventEmitter.emit(
+            'group.member_event',
+            new GroupMemberEvent(
+                conversationId,
+                'ADDED',
+                { id: currentUserId, displayName: currentUserId },
+                newMemberIds,
+                savedMembers,
+            ),
+        );
 
         return {
             message: 'Thêm thành viên thành công',
@@ -287,6 +329,16 @@ export class ConversationsService {
                 nextOwner.role = ConversationRole.OWNER;
                 await this.memberRepository.save(nextOwner);
 
+                this.eventEmitter.emit(
+                    'group.member_event',
+                    new GroupMemberEvent(
+                        conversationId,
+                        'LEFT',
+                        { id: currentUserId, displayName: currentUserId },
+                        [currentUserId],
+                    ),
+                );
+
                 return { message: 'Đã rời nhóm thành công. Quyền trưởng nhóm đã được chuyển giao.' };
             }
 
@@ -294,6 +346,16 @@ export class ConversationsService {
             await this.conversationRepository.delete(conversationId);
             return { message: 'Đã rời nhóm và giải tán nhóm thành công' };
         }
+
+        this.eventEmitter.emit(
+            'group.member_event',
+            new GroupMemberEvent(
+                conversationId,
+                'LEFT',
+                { id: currentUserId, displayName: currentUserId },
+                [currentUserId],
+            ),
+        );
 
         return { message: 'Đã rời nhóm thành công' };
     }
@@ -644,6 +706,16 @@ export class ConversationsService {
 
         await this.memberRepository.delete(targetMember.id);
 
+        this.eventEmitter.emit(
+            'group.member_event',
+            new GroupMemberEvent(
+                conversationId,
+                'REMOVED',
+                { id: currentUserId, displayName: currentUserId },
+                [targetUserId],
+            ),
+        );
+
         return { message: 'Đã xóa thành viên khỏi nhóm chat thành công' };
     }
 
@@ -805,7 +877,25 @@ export class ConversationsService {
         message.pinnedAt = new Date();
         message.pinnedBy = { id: currentUserId } as User;
 
-        return this.messageRepository.save(message);
+        const saved = await this.messageRepository.save(message);
+
+        // Bắn domain event để FE hiển thị thanh Pin Bar trên đỉnh khung chat
+        this.eventEmitter.emit(
+            'message.pinned',
+            new MessagePinnedEvent(
+                conversationId,
+                messageId,
+                true,
+                {
+                    id: saved.id,
+                    content: saved.content,
+                    senderName: saved.sender?.displayName || saved.sender?.username,
+                },
+                { id: currentUserId, displayName: currentUserId },
+            ),
+        );
+
+        return saved;
     }
 
     /**
@@ -856,6 +946,16 @@ export class ConversationsService {
         message.pinnedBy = null as any;
 
         await this.messageRepository.save(message);
+
+        // Bắn domain event để FE gỡ tin nhắn khỏi thanh Pin Bar
+        this.eventEmitter.emit(
+            'message.pinned',
+            new MessagePinnedEvent(
+                conversationId,
+                messageId,
+                false,
+            ),
+        );
 
         return { message: 'Bỏ ghim tin nhắn thành công' };
     }
@@ -1089,7 +1189,7 @@ export class ConversationsService {
             .execute();
 
         // 7. Lấy lại tin nhắn kèm thông tin người gửi đầy đủ
-        return await this.messageRepository.findOneOrFail({
+        const fullMessage = await this.messageRepository.findOneOrFail({
             where: { id: savedMessage.id },
             relations: {
                 sender: true,
@@ -1112,6 +1212,32 @@ export class ConversationsService {
                 },
             },
         });
+
+        // 8. Lấy danh sách thành viên để phát event inbox.updated cho những ai ngoài phòng
+        const members = await this.memberRepository.find({
+            where: { conversation: { id: conversationId } },
+            relations: { user: true },
+        });
+        const memberIds = members.map((m) => m.user?.id || (m as any).userId).filter(Boolean);
+
+        this.eventEmitter.emit(
+            'inbox.updated',
+            new InboxUpdatedEvent(
+                conversationId,
+                memberIds,
+                {
+                    id: fullMessage.id,
+                    content: fullMessage.content,
+                    type: fullMessage.type,
+                    fileUrl: fullMessage.fileUrl,
+                    senderName: fullMessage.sender.displayName || fullMessage.sender.username,
+                    createdAt: fullMessage.createdAt,
+                },
+                senderId,
+            ),
+        );
+
+        return fullMessage;
     }
 }
 

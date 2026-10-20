@@ -20,6 +20,18 @@ import { ConversationsService } from '../conversations.service.js';
 import { SendMessageDto, JoinConversationDto, TypingDto, MarkAsReadDto } from '../dto/index.js';
 import { User } from '../../users/entities/user.entity.js';
 import { Friendship, FriendshipStatus } from '../../friends/entities/friendship.entity.js';
+import { OnEvent } from '@nestjs/event-emitter';
+import {
+    FriendRequestSentEvent,
+    FriendRequestAcceptedEvent,
+    FriendRequestRejectedEvent,
+    FriendRequestCancelledEvent,
+    FriendRemovedEvent,
+    ConversationCreatedEvent,
+    InboxUpdatedEvent,
+    GroupMemberEvent,
+    MessagePinnedEvent,
+} from '../../../common/events/index.js';
 
 @WebSocketGateway({
     cors: {
@@ -362,6 +374,142 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             status: 'success',
             data: result,
         };
+    }
+
+    // =========================================================================
+    // REALTIME NOTIFICATION EVENT LISTENERS (In-App Event Bus Mediator)
+    // =========================================================================
+
+    /**
+     * Thông báo lời mời kết bạn mới tới người nhận (user_${addresseeId})
+     */
+    @OnEvent('friend.request_sent')
+    handleFriendRequestSent(event: FriendRequestSentEvent) {
+        if (!this.server) return;
+        this.server.to(`user_${event.addresseeId}`).emit('friendRequestReceived', {
+            requestId: event.requestId,
+            requester: event.requester,
+            createdAt: event.createdAt,
+        });
+        this.logger.log(`[Notification] Lời mời kết bạn từ ${event.requester.username} gửi tới user_${event.addresseeId}`);
+    }
+
+    /**
+     * Thông báo đối phương đã chấp nhận kết bạn tới người gửi ban đầu (user_${requesterId})
+     */
+    @OnEvent('friend.request_accepted')
+    handleFriendRequestAccepted(event: FriendRequestAcceptedEvent) {
+        if (!this.server) return;
+        this.server.to(`user_${event.requesterId}`).emit('friendRequestAccepted', {
+            friendshipId: event.friendshipId,
+            friend: event.friend,
+            createdAt: event.createdAt,
+        });
+        this.logger.log(`[Notification] Đối phương chấp nhận kết bạn phát tới user_${event.requesterId}`);
+    }
+
+    /**
+     * Thông báo lời mời kết bạn bị từ chối tới người gửi ban đầu
+     */
+    @OnEvent('friend.request_rejected')
+    handleFriendRequestRejected(event: FriendRequestRejectedEvent) {
+        if (!this.server) return;
+        this.server.to(`user_${event.requesterId}`).emit('friendRequestRejected', {
+            requestId: event.requestId,
+        });
+    }
+
+    /**
+     * Thông báo người gửi đã thu hồi lời mời kết bạn tới người nhận
+     */
+    @OnEvent('friend.request_cancelled')
+    handleFriendRequestCancelled(event: FriendRequestCancelledEvent) {
+        if (!this.server) return;
+        this.server.to(`user_${event.addresseeId}`).emit('friendRequestCancelled', {
+            requestId: event.requestId,
+        });
+    }
+
+    /**
+     * Thông báo hủy kết bạn cho cả 2 phía
+     */
+    @OnEvent('friend.removed')
+    handleFriendRemoved(event: FriendRemovedEvent) {
+        if (!this.server) return;
+        this.server.to(`user_${event.friendId}`).emit('friendRemoved', { friendId: event.userId });
+        this.server.to(`user_${event.userId}`).emit('friendRemoved', { friendId: event.friendId });
+    }
+
+    /**
+     * Thông báo có cuộc trò chuyện mới (Direct hoặc Group) cho tất cả các thành viên tham gia
+     */
+    @OnEvent('conversation.created')
+    handleConversationCreated(event: ConversationCreatedEvent) {
+        if (!this.server) return;
+        for (const memberId of event.memberIds) {
+            this.server.to(`user_${memberId}`).emit('conversationCreated', event.conversation);
+        }
+        this.logger.log(`[Notification] Cuộc trò chuyện mới ${event.conversationId} phát tới ${event.memberIds.length} thành viên`);
+    }
+
+    /**
+     * Cập nhật Inbox toàn cục (lastMessage & unreadCount) tới các thành viên ngoài phòng chat
+     */
+    @OnEvent('inbox.updated')
+    handleInboxUpdated(event: InboxUpdatedEvent) {
+        if (!this.server) return;
+        for (const memberId of event.memberIds) {
+            this.server.to(`user_${memberId}`).emit('conversationUpdated', {
+                conversationId: event.conversationId,
+                lastMessage: event.lastMessage,
+                senderId: event.senderId,
+            });
+        }
+    }
+
+    /**
+     * Thông báo thay đổi thành viên trong nhóm (Thêm, Xóa, Rời nhóm)
+     */
+    @OnEvent('group.member_event')
+    handleGroupMemberEvent(event: GroupMemberEvent) {
+        if (!this.server) return;
+        // Bắn vào phòng chat cho những người đang mở cửa sổ nhóm
+        this.server.to(`conv_${event.conversationId}`).emit('groupMemberUpdated', {
+            conversationId: event.conversationId,
+            action: event.action,
+            actor: event.actor,
+            targetUserIds: event.targetUserIds,
+        });
+
+        // Bắn vào kênh cá nhân của các user bị tác động (đặc biệt khi bị KICK hoặc được ADD)
+        for (const targetId of event.targetUserIds) {
+            this.server.to(`user_${targetId}`).emit('groupMembershipChanged', {
+                conversationId: event.conversationId,
+                action: event.action,
+            });
+        }
+    }
+
+    /**
+     * Thông báo ghim / bỏ ghim tin nhắn trong phòng hội thoại
+     */
+    @OnEvent('message.pinned')
+    handleMessagePinned(event: MessagePinnedEvent) {
+        if (!this.server) return;
+        const roomId = `conv_${event.conversationId}`;
+        if (event.isPinned) {
+            this.server.to(roomId).emit('messagePinned', {
+                conversationId: event.conversationId,
+                messageId: event.messageId,
+                message: event.message,
+                pinnedBy: event.pinnedBy,
+            });
+        } else {
+            this.server.to(roomId).emit('messageUnpinned', {
+                conversationId: event.conversationId,
+                messageId: event.messageId,
+            });
+        }
     }
 }
 
