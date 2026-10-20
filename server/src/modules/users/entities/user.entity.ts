@@ -9,6 +9,15 @@ export class User {
     @Column({ unique: true, length: 20 })
     username: string;
 
+    @Column({ unique: true, length: 100, nullable: true })
+    email?: string;
+
+    @Column({ default: false })
+    isEmailVerified: boolean;
+
+    @Column({ default: false })
+    twoFactorEnabled: boolean;
+
     @Column()
     password: string;
 
