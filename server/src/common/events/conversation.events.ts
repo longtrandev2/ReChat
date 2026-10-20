@@ -51,3 +51,26 @@ export class MessagePinnedEvent {
         },
     ) { }
 }
+
+export class MessageRecalledEvent {
+    constructor(
+        public readonly conversationId: string,
+        public readonly messageId: string,
+        public readonly recalledAt: Date,
+        public readonly senderId: string,
+        public readonly isLastMessage?: boolean,
+        public readonly memberIds?: string[],
+    ) { }
+}
+
+export class MessageEditedEvent {
+    constructor(
+        public readonly conversationId: string,
+        public readonly messageId: string,
+        public readonly content: string,
+        public readonly editedAt: Date,
+        public readonly senderId: string,
+        public readonly isLastMessage?: boolean,
+        public readonly memberIds?: string[],
+    ) { }
+}

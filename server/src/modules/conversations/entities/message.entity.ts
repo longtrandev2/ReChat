@@ -55,6 +55,12 @@ export class Message {
     isRecalled: boolean;
 
     @Column({ default: false })
+    isEdited: boolean;
+
+    @Column({ nullable: true, type: 'datetime' })
+    editedAt?: Date;
+
+    @Column({ default: false })
     isPinned: boolean;
 
     @Column({ nullable: true, type: 'datetime' })
