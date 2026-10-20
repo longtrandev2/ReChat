@@ -1042,5 +1042,271 @@ describe('ConversationsService', () => {
             );
         });
     });
+
+    describe('recallMessage', () => {
+        const conversationId = 'conv-1';
+        const currentUserId = 'user-1';
+        const otherUserId = 'user-2';
+        const messageId = 'msg-1';
+
+        it('nên ném lỗi NotFoundException nếu cuộc trò chuyện không tồn tại', async () => {
+            mockConversationRepo.findOne.mockResolvedValueOnce(null);
+
+            await expect(
+                service.recallMessage(currentUserId, conversationId, messageId),
+            ).rejects.toThrow(NotFoundException);
+        });
+
+        it('nên ném lỗi ForbiddenException nếu người dùng không thuộc cuộc trò chuyện', async () => {
+            mockConversationRepo.findOne.mockResolvedValueOnce({ id: conversationId });
+            mockMemberRepo.findOne.mockResolvedValueOnce(null);
+
+            await expect(
+                service.recallMessage(currentUserId, conversationId, messageId),
+            ).rejects.toThrow(ForbiddenException);
+        });
+
+        it('nên ném lỗi NotFoundException nếu tin nhắn không tồn tại', async () => {
+            mockConversationRepo.findOne.mockResolvedValueOnce({ id: conversationId });
+            mockMemberRepo.findOne.mockResolvedValueOnce({ id: 'mem-1' });
+            mockMessageRepo.findOne.mockResolvedValueOnce(null);
+
+            await expect(
+                service.recallMessage(currentUserId, conversationId, messageId),
+            ).rejects.toThrow(NotFoundException);
+        });
+
+        it('nên ném lỗi ForbiddenException nếu người thu hồi không phải người gửi', async () => {
+            mockConversationRepo.findOne.mockResolvedValueOnce({ id: conversationId });
+            mockMemberRepo.findOne.mockResolvedValueOnce({ id: 'mem-1' });
+            mockMessageRepo.findOne.mockResolvedValueOnce({
+                id: messageId,
+                sender: { id: otherUserId },
+                isRecalled: false,
+            });
+
+            await expect(
+                service.recallMessage(currentUserId, conversationId, messageId),
+            ).rejects.toThrow(ForbiddenException);
+        });
+
+        it('nên trả về tin nhắn ngay nếu đã được thu hồi trước đó', async () => {
+            const recalledMsg = {
+                id: messageId,
+                sender: { id: currentUserId },
+                isRecalled: true,
+                content: '[Tin nhắn đã bị thu hồi]',
+            };
+            mockConversationRepo.findOne.mockResolvedValueOnce({ id: conversationId });
+            mockMemberRepo.findOne.mockResolvedValueOnce({ id: 'mem-1' });
+            mockMessageRepo.findOne.mockResolvedValueOnce(recalledMsg);
+
+            const result = await service.recallMessage(currentUserId, conversationId, messageId);
+            expect(result).toEqual(recalledMsg);
+            expect(mockMessageRepo.save).not.toHaveBeenCalled();
+        });
+
+        it('nên thu hồi tin nhắn thành công bất kể thời gian gửi (Không giới hạn thời gian)', async () => {
+            // Giả lập tin nhắn gửi từ 3 ngày trước (không giới hạn 60 phút)
+            const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+            const msg = {
+                id: messageId,
+                sender: { id: currentUserId },
+                content: 'Nội dung cũ',
+                fileUrl: 'http://example.com/file.png',
+                isRecalled: false,
+                createdAt: threeDaysAgo,
+            };
+
+            mockConversationRepo.findOne.mockResolvedValueOnce({
+                id: conversationId,
+                lastMessageId: messageId,
+            });
+            mockMemberRepo.findOne.mockResolvedValueOnce({ id: 'mem-1' });
+            mockMessageRepo.findOne.mockResolvedValueOnce(msg);
+            mockMessageRepo.save.mockImplementationOnce((m) => Promise.resolve(m));
+            mockMemberRepo.find.mockResolvedValueOnce([
+                { user: { id: currentUserId } },
+                { user: { id: otherUserId } },
+            ]);
+
+            const result = await service.recallMessage(currentUserId, conversationId, messageId);
+
+            expect(result.isRecalled).toBe(true);
+            expect(result.content).toBe('[Tin nhắn đã bị thu hồi]');
+            expect(result.fileUrl).toBeUndefined();
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'message.recalled',
+                expect.objectContaining({
+                    conversationId,
+                    messageId,
+                    senderId: currentUserId,
+                    isLastMessage: true,
+                    memberIds: [currentUserId, otherUserId],
+                }),
+            );
+        });
+    });
+
+    describe('editMessage', () => {
+        const conversationId = 'conv-1';
+        const currentUserId = 'user-1';
+        const otherUserId = 'user-2';
+        const messageId = 'msg-1';
+
+        it('nên ném lỗi NotFoundException nếu cuộc trò chuyện không tồn tại', async () => {
+            mockConversationRepo.findOne.mockResolvedValueOnce(null);
+
+            await expect(
+                service.editMessage(currentUserId, conversationId, messageId, 'Tin nhắn mới'),
+            ).rejects.toThrow(NotFoundException);
+        });
+
+        it('nên ném lỗi ForbiddenException nếu người dùng không thuộc cuộc trò chuyện', async () => {
+            mockConversationRepo.findOne.mockResolvedValueOnce({ id: conversationId });
+            mockMemberRepo.findOne.mockResolvedValueOnce(null);
+
+            await expect(
+                service.editMessage(currentUserId, conversationId, messageId, 'Tin nhắn mới'),
+            ).rejects.toThrow(ForbiddenException);
+        });
+
+        it('nên ném lỗi NotFoundException nếu tin nhắn không tồn tại', async () => {
+            mockConversationRepo.findOne.mockResolvedValueOnce({ id: conversationId });
+            mockMemberRepo.findOne.mockResolvedValueOnce({ id: 'mem-1' });
+            mockMessageRepo.findOne.mockResolvedValueOnce(null);
+
+            await expect(
+                service.editMessage(currentUserId, conversationId, messageId, 'Tin nhắn mới'),
+            ).rejects.toThrow(NotFoundException);
+        });
+
+        it('nên ném lỗi ForbiddenException nếu không phải người gửi', async () => {
+            mockConversationRepo.findOne.mockResolvedValueOnce({ id: conversationId });
+            mockMemberRepo.findOne.mockResolvedValueOnce({ id: 'mem-1' });
+            mockMessageRepo.findOne.mockResolvedValueOnce({
+                id: messageId,
+                sender: { id: otherUserId },
+            });
+
+            await expect(
+                service.editMessage(currentUserId, conversationId, messageId, 'Tin nhắn mới'),
+            ).rejects.toThrow(ForbiddenException);
+        });
+
+        it('nên ném lỗi BadRequestException nếu tin nhắn đã bị thu hồi', async () => {
+            mockConversationRepo.findOne.mockResolvedValueOnce({ id: conversationId });
+            mockMemberRepo.findOne.mockResolvedValueOnce({ id: 'mem-1' });
+            mockMessageRepo.findOne.mockResolvedValueOnce({
+                id: messageId,
+                sender: { id: currentUserId },
+                isRecalled: true,
+            });
+
+            await expect(
+                service.editMessage(currentUserId, conversationId, messageId, 'Tin nhắn mới'),
+            ).rejects.toThrow(BadRequestException);
+        });
+
+        it('nên ném lỗi BadRequestException nếu tin nhắn gửi quá 15 phút', async () => {
+            // Giả lập tin nhắn gửi cách đây 16 phút
+            const sixteenMinutesAgo = new Date(Date.now() - 16 * 60 * 1000);
+            mockConversationRepo.findOne.mockResolvedValueOnce({ id: conversationId });
+            mockMemberRepo.findOne.mockResolvedValueOnce({ id: 'mem-1' });
+            mockMessageRepo.findOne.mockResolvedValueOnce({
+                id: messageId,
+                sender: { id: currentUserId },
+                isRecalled: false,
+                content: 'Nội dung gốc',
+                createdAt: sixteenMinutesAgo,
+            });
+
+            await expect(
+                service.editMessage(currentUserId, conversationId, messageId, 'Tin nhắn mới'),
+            ).rejects.toThrow(BadRequestException);
+        });
+
+        it('nên ném lỗi BadRequestException nếu nội dung mới để trống', async () => {
+            const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+            mockConversationRepo.findOne.mockResolvedValueOnce({ id: conversationId });
+            mockMemberRepo.findOne.mockResolvedValueOnce({ id: 'mem-1' });
+            mockMessageRepo.findOne.mockResolvedValueOnce({
+                id: messageId,
+                sender: { id: currentUserId },
+                isRecalled: false,
+                content: 'Nội dung gốc',
+                createdAt: fiveMinutesAgo,
+            });
+
+            await expect(
+                service.editMessage(currentUserId, conversationId, messageId, '   '),
+            ).rejects.toThrow(BadRequestException);
+        });
+
+        it('nên ném lỗi BadRequestException nếu nội dung mới trùng nội dung cũ', async () => {
+            const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+            mockConversationRepo.findOne.mockResolvedValueOnce({ id: conversationId });
+            mockMemberRepo.findOne.mockResolvedValueOnce({ id: 'mem-1' });
+            mockMessageRepo.findOne.mockResolvedValueOnce({
+                id: messageId,
+                sender: { id: currentUserId },
+                isRecalled: false,
+                content: 'Nội dung gốc',
+                createdAt: fiveMinutesAgo,
+            });
+
+            await expect(
+                service.editMessage(currentUserId, conversationId, messageId, 'Nội dung gốc'),
+            ).rejects.toThrow(BadRequestException);
+        });
+
+        it('nên chỉnh sửa tin nhắn thành công trong vòng 15 phút', async () => {
+            const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+            const originalMsg = {
+                id: messageId,
+                sender: { id: currentUserId },
+                isRecalled: false,
+                content: 'Nội dung gốc',
+                createdAt: tenMinutesAgo,
+                isEdited: false,
+                editedAt: null,
+            };
+
+            mockConversationRepo.findOne.mockResolvedValueOnce({
+                id: conversationId,
+                lastMessageId: messageId,
+            });
+            mockMemberRepo.findOne.mockResolvedValueOnce({ id: 'mem-1' });
+            mockMessageRepo.findOne.mockResolvedValueOnce(originalMsg);
+            mockMessageRepo.save.mockImplementationOnce((m) => Promise.resolve(m));
+            mockMemberRepo.find.mockResolvedValueOnce([
+                { user: { id: currentUserId } },
+                { user: { id: otherUserId } },
+            ]);
+
+            const result = await service.editMessage(
+                currentUserId,
+                conversationId,
+                messageId,
+                'Nội dung đã chỉnh sửa',
+            );
+
+            expect(result.content).toBe('Nội dung đã chỉnh sửa');
+            expect(result.isEdited).toBe(true);
+            expect(result.editedAt).toBeInstanceOf(Date);
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'message.edited',
+                expect.objectContaining({
+                    conversationId,
+                    messageId,
+                    content: 'Nội dung đã chỉnh sửa',
+                    senderId: currentUserId,
+                    isLastMessage: true,
+                    memberIds: [currentUserId, otherUserId],
+                }),
+            );
+        });
+    });
 });
+
 
