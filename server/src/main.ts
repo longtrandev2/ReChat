@@ -4,6 +4,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor.js';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
+import { RedisIoAdapter } from './common/adapters/index.js';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -28,6 +29,11 @@ async function bootstrap() {
   // Đăng ký Response Envelope và Exception Filter toàn cục (Envelope Pattern)
   app.useGlobalInterceptors(new TransformInterceptor());
   app.useGlobalFilters(new AllExceptionsFilter());
+
+  // Cấu hình WebSocket Redis Adapter (Horizontal Scaling đa pods)
+  const redisIoAdapter = new RedisIoAdapter(app);
+  await redisIoAdapter.connectToRedis();
+  app.useWebSocketAdapter(redisIoAdapter);
 
   // Swagger Documentation Setup
   const config = new DocumentBuilder()
