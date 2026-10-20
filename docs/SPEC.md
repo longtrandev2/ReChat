@@ -149,6 +149,7 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 | `PATCH` | `/api/v1/conversations/:id/messages/:messageId/recall` | Thu hồi tin nhắn trong cuộc trò chuyện (Không giới hạn thời gian) | Bearer JWT | BR-M5-01, BR-M5-02, BR-M5-03 |
 | `PATCH` | `/api/v1/conversations/:id/messages/:messageId/edit` | Chỉnh sửa tin nhắn văn bản trong vòng 15 phút `{ content }` | Bearer JWT | BR-M5-04 -> BR-M5-07 |
 | `POST` | `/api/v1/conversations/:id/messages/:messageId/react` | Thả hoặc hủy cảm xúc emoji (Toggle: ADDED, REMOVED, CHANGED) `{ emoji }` | Bearer JWT | BR-M5-07, BR-M5-08 |
+| `POST` | `/api/v1/media/upload` | Tải lên ảnh (max 5MB) hoặc tài liệu (max 25MB) lên Cloudinary (Hỗ trợ kèm conversationId để tự động publish tin nhắn) | Bearer JWT | BR-M5-09, BR-M5-10 |
 
 ---
 
