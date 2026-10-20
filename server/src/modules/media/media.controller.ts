@@ -24,6 +24,9 @@ import { UploadMediaDto } from './dto/index.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { ConversationsService } from '../conversations/conversations.service.js';
 
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { MessageCreatedEvent } from '../../common/events/index.js';
+
 @ApiTags('media')
 @ApiBearerAuth('JWT-auth')
 @Controller('media')
@@ -32,6 +35,7 @@ export class MediaController {
     constructor(
         private readonly mediaService: MediaService,
         private readonly conversationsService: ConversationsService,
+        private readonly eventEmitter: EventEmitter2,
     ) { }
 
     /**
@@ -100,6 +104,31 @@ export class MediaController {
                 type: uploaded.type,
                 fileUrl: uploaded.url,
             });
+
+            this.eventEmitter.emit(
+                'message.created',
+                new MessageCreatedEvent(dto.conversationId, {
+                    id: message.id,
+                    conversationId: dto.conversationId,
+                    content: message.content,
+                    type: message.type,
+                    fileUrl: message.fileUrl,
+                    replyToId: message.replyToId,
+                    replyTo: null,
+                    reactions: [],
+                    isRecalled: message.isRecalled,
+                    isEdited: message.isEdited,
+                    editedAt: message.editedAt,
+                    isPinned: message.isPinned,
+                    createdAt: message.createdAt,
+                    sender: {
+                        id: message.sender?.id ?? userId,
+                        username: message.sender?.username ?? '',
+                        displayName: message.sender?.displayName ?? '',
+                        avatarUrl: message.sender?.avatarUrl ?? null,
+                    },
+                }),
+            );
 
             return {
                 ...uploaded,

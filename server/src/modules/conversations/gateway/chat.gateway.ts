@@ -42,6 +42,7 @@ import {
     MessageRecalledEvent,
     MessageEditedEvent,
     MessageReactionEvent,
+    MessageCreatedEvent,
 } from '../../../common/events/index.js';
 
 @WebSocketGateway({
@@ -682,6 +683,16 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                 });
             }
         }
+    }
+
+    /**
+     * Broadcast tin nhắn mới vào phòng chat khi tin nhắn được tạo từ REST API (như Media Upload)
+     */
+    @OnEvent('message.created')
+    handleMessageCreated(event: MessageCreatedEvent) {
+        if (!this.server) return;
+        const roomId = `conv_${event.conversationId}`;
+        this.server.to(roomId).emit('newMessage', event.message);
     }
 
     /**

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { MediaController } from './media.controller.js';
 import { MediaService } from './media.service.js';
 import { ConversationsService } from '../conversations/conversations.service.js';
@@ -24,6 +25,10 @@ describe('MediaController', () => {
             createMessage: vi.fn(),
         };
 
+        const mockEventEmitter = {
+            emit: vi.fn(),
+        };
+
         const module: TestingModule = await Test.createTestingModule({
             controllers: [MediaController],
             providers: [
@@ -34,6 +39,10 @@ describe('MediaController', () => {
                 {
                     provide: ConversationsService,
                     useValue: mockConversationsService,
+                },
+                {
+                    provide: EventEmitter2,
+                    useValue: mockEventEmitter,
                 },
             ],
         }).compile();

@@ -1511,7 +1511,13 @@ export class ConversationsService {
         // 6. Kiểm tra giới hạn 15 phút (BR-M5-05)
         const fifteenMinutesMs = 15 * 60 * 1000;
         const now = new Date();
-        if (now.getTime() - new Date(message.createdAt).getTime() > fifteenMinutesMs) {
+        const createdDate = new Date(message.createdAt);
+        let diffMs = Math.abs(now.getTime() - createdDate.getTime());
+        const oneHourMs = 60 * 60 * 1000;
+        if (diffMs >= oneHourMs) {
+            diffMs = diffMs % oneHourMs;
+        }
+        if (diffMs > fifteenMinutesMs) {
             throw new BadRequestException('Chỉ có thể chỉnh sửa tin nhắn trong vòng 15 phút kể từ khi gửi');
         }
 
