@@ -7,6 +7,7 @@ import {
     ForbiddenException,
     NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { FriendsService } from './friends.service.js';
 import { Friendship, FriendshipStatus } from './entities/friendship.entity.js';
 import { User } from '../users/entities/user.entity.js';
@@ -16,6 +17,7 @@ describe('FriendsService', () => {
     let service: FriendsService;
     let mockFriendshipRepo: any;
     let mockUserRepo: any;
+    let mockEventEmitter: any;
 
     beforeEach(async () => {
         mockFriendshipRepo = {
@@ -37,6 +39,10 @@ describe('FriendsService', () => {
             findOne: vi.fn(),
         };
 
+        mockEventEmitter = {
+            emit: vi.fn(),
+        };
+
         const module: TestingModule = await Test.createTestingModule({
             providers: [
                 FriendsService,
@@ -47,6 +53,10 @@ describe('FriendsService', () => {
                 {
                     provide: getRepositoryToken(User),
                     useValue: mockUserRepo,
+                },
+                {
+                    provide: EventEmitter2,
+                    useValue: mockEventEmitter,
                 },
             ],
         }).compile();
@@ -154,6 +164,12 @@ describe('FriendsService', () => {
                 status: FriendshipStatus.PENDING,
             });
             expect(mockFriendshipRepo.save).toHaveBeenCalled();
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'friend.request_sent',
+                expect.objectContaining({
+                    addresseeId: targetUserId,
+                }),
+            );
         });
     });
 
@@ -225,6 +241,13 @@ describe('FriendsService', () => {
                     status: FriendshipStatus.ACCEPTED,
                 }),
             );
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'friend.request_accepted',
+                expect.objectContaining({
+                    friendshipId: requestId,
+                    requesterId: 'user-requester-id',
+                }),
+            );
         });
     });
 
@@ -289,6 +312,13 @@ describe('FriendsService', () => {
 
             // Assert
             expect(mockFriendshipRepo.delete).toHaveBeenCalledWith(requestId);
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'friend.request_rejected',
+                expect.objectContaining({
+                    requestId,
+                    requesterId: 'user-sender',
+                }),
+            );
             expect(result).toEqual({ message: 'Đã từ chối lời mời kết bạn' });
         });
     });
@@ -354,6 +384,13 @@ describe('FriendsService', () => {
 
             // Assert
             expect(mockFriendshipRepo.delete).toHaveBeenCalledWith(requestId);
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'friend.request_cancelled',
+                expect.objectContaining({
+                    requestId,
+                    addresseeId: 'user-target',
+                }),
+            );
             expect(result).toEqual({ message: 'Đã hủy chối lời mời kết bạn' });
         });
     });
@@ -387,6 +424,13 @@ describe('FriendsService', () => {
 
             // Assert
             expect(mockFriendshipRepo.delete).toHaveBeenCalledWith('friendship-uuid-to-delete');
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'friend.removed',
+                expect.objectContaining({
+                    userId: currentUserId,
+                    friendId,
+                }),
+            );
             expect(result).toEqual({ message: 'Đã hủy kết bạn thành công' });
         });
     });
