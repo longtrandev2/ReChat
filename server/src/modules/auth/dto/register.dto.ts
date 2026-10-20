@@ -1,5 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { IsNotEmpty, IsString, Matches, MaxLength, MinLength } from "class-validator";
+import { IsEmail, IsNotEmpty, IsString, Matches, MaxLength, MinLength } from "class-validator";
 
 export class RegisterDto {
     @ApiProperty({
@@ -14,6 +14,15 @@ export class RegisterDto {
         message: "Tài khoản chỉ được chứa chữ cái, chữ số và dấu gạch dưới (_)",
     })
     username: string;
+
+    @ApiProperty({
+        description: 'Địa chỉ Email người dùng',
+        example: 'nguyenvana@gmail.com',
+    })
+    @IsNotEmpty({ message: 'Email không được phép để trống' })
+    @IsEmail({}, { message: 'Định dạng email không hợp lệ' })
+    @MaxLength(100, { message: 'Email tối đa 100 kí tự' })
+    email: string;
 
     @ApiProperty({
         description: 'Mật khẩu (tối thiểu 6 ký tự)',

@@ -10,3 +10,11 @@ export class AuthResponse {
         createdAt: Date;
     };
 }
+
+export class LoginChallengeResponse {
+    requires2FA: true;
+    mfaToken: string;
+    maskedEmail: string;
+}
+
+export type LoginResult = AuthResponse | LoginChallengeResponse;
