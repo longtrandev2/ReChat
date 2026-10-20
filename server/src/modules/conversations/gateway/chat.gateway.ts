@@ -47,7 +47,7 @@ import {
 
 @WebSocketGateway({
     cors: {
-        origin: '*',
+        origin: true,
         credentials: true,
     },
 })

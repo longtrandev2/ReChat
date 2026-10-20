@@ -46,6 +46,17 @@ describe('Milestone 5 - Rich Messaging & Real-time Notifications (e2e)', () => {
         });
     };
 
+    const createAuthenticatedSocket = async (token: string): Promise<Socket> => {
+        const socket = io(wsUrl, {
+            auth: { token },
+            transports: ['websocket'],
+            forceNew: true,
+        });
+        await waitForEvent(socket, 'connect');
+        await new Promise((r) => setTimeout(r, 80));
+        return socket;
+    };
+
     beforeAll(async () => {
         const moduleFixture: TestingModule = await Test.createTestingModule({
             imports: [AppModule],
@@ -149,11 +160,7 @@ describe('Milestone 5 - Rich Messaging & Real-time Notifications (e2e)', () => {
     });
 
     it('1. Friend Notification Bridge: REST friend request triggers realtime friendRequestReceived to socket', async () => {
-        const socketB = io(wsUrl, {
-            auth: { token: tokenB },
-            transports: ['websocket'],
-        });
-        await waitForEvent(socketB, 'connect');
+        const socketB = await createAuthenticatedSocket(tokenB);
 
         const friendRequestPromise = waitForEvent(socketB, 'friendRequestReceived');
 
@@ -175,20 +182,12 @@ describe('Milestone 5 - Rich Messaging & Real-time Notifications (e2e)', () => {
 
     it('2. Global Inbox Sync: sending message triggers conversationUpdated in personal room', async () => {
         // User B chỉ kết nối socket (ở personal room user_B), CHƯA vào phòng conv_${id}
-        const socketB = io(wsUrl, {
-            auth: { token: tokenB },
-            transports: ['websocket'],
-        });
-        await waitForEvent(socketB, 'connect');
+        const socketB = await createAuthenticatedSocket(tokenB);
 
         const inboxUpdatedPromise = waitForEvent(socketB, 'conversationUpdated');
 
         // User A kết nối và vào phòng chat để gửi tin nhắn
-        const socketA = io(wsUrl, {
-            auth: { token: tokenA },
-            transports: ['websocket'],
-        });
-        await waitForEvent(socketA, 'connect');
+        const socketA = await createAuthenticatedSocket(tokenA);
 
         await new Promise((resolve) => socketA.emit('joinConversation', { conversationId: testConversation.id }, resolve));
 
@@ -208,15 +207,8 @@ describe('Milestone 5 - Rich Messaging & Real-time Notifications (e2e)', () => {
     }, 15000);
 
     it('3. Edit Message: editing message within 15 mins triggers messageEdited event in room', async () => {
-        const socketA = io(wsUrl, {
-            auth: { token: tokenA },
-            transports: ['websocket'],
-        });
-        const socketB = io(wsUrl, {
-            auth: { token: tokenB },
-            transports: ['websocket'],
-        });
-        await Promise.all([waitForEvent(socketA, 'connect'), waitForEvent(socketB, 'connect')]);
+        const socketA = await createAuthenticatedSocket(tokenA);
+        const socketB = await createAuthenticatedSocket(tokenB);
 
         await new Promise((resolve) => socketA.emit('joinConversation', { conversationId: testConversation.id }, resolve));
         await new Promise((resolve) => socketB.emit('joinConversation', { conversationId: testConversation.id }, resolve));
@@ -253,15 +245,8 @@ describe('Milestone 5 - Rich Messaging & Real-time Notifications (e2e)', () => {
     }, 15000);
 
     it('4. Recall Message: recalling message triggers messageRecalled and sanitizes content', async () => {
-        const socketA = io(wsUrl, {
-            auth: { token: tokenA },
-            transports: ['websocket'],
-        });
-        const socketB = io(wsUrl, {
-            auth: { token: tokenB },
-            transports: ['websocket'],
-        });
-        await Promise.all([waitForEvent(socketA, 'connect'), waitForEvent(socketB, 'connect')]);
+        const socketA = await createAuthenticatedSocket(tokenA);
+        const socketB = await createAuthenticatedSocket(tokenB);
 
         await new Promise((resolve) => socketA.emit('joinConversation', { conversationId: testConversation.id }, resolve));
         await new Promise((resolve) => socketB.emit('joinConversation', { conversationId: testConversation.id }, resolve));
@@ -299,15 +284,8 @@ describe('Milestone 5 - Rich Messaging & Real-time Notifications (e2e)', () => {
     }, 15000);
 
     it('5. Emoji Reactions: toggling emoji triggers messageReactionUpdated with ADDED and REMOVED', async () => {
-        const socketA = io(wsUrl, {
-            auth: { token: tokenA },
-            transports: ['websocket'],
-        });
-        const socketB = io(wsUrl, {
-            auth: { token: tokenB },
-            transports: ['websocket'],
-        });
-        await Promise.all([waitForEvent(socketA, 'connect'), waitForEvent(socketB, 'connect')]);
+        const socketA = await createAuthenticatedSocket(tokenA);
+        const socketB = await createAuthenticatedSocket(tokenB);
 
         await new Promise((resolve) => socketA.emit('joinConversation', { conversationId: testConversation.id }, resolve));
         await new Promise((resolve) => socketB.emit('joinConversation', { conversationId: testConversation.id }, resolve));
@@ -359,13 +337,7 @@ describe('Milestone 5 - Rich Messaging & Real-time Notifications (e2e)', () => {
     }, 15000);
 
     it('6. Media Upload & Auto-publish: REST upload auto-publishes newMessage to room', async () => {
-        const socketB = io(wsUrl, {
-            auth: { token: tokenB },
-            transports: ['websocket'],
-            forceNew: true,
-        });
-        await waitForEvent(socketB, 'connect');
-        await new Promise((r) => setTimeout(r, 100));
+        const socketB = await createAuthenticatedSocket(tokenB);
         await new Promise((resolve) => socketB.emit('joinConversation', { conversationId: testConversation.id }, resolve));
 
         const mediaService = app.get(MediaService);
