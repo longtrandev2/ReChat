@@ -113,6 +113,7 @@ export function LoginPage() {
             />
             <button
               type="button"
+              aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
               onClick={() => setShowPassword(!showPassword)}
               tabIndex={-1}
               className="absolute right-3.5 top-1/2 -translate-y-1/2 text-ink-muted hover:text-ink-primary dark:hover:text-ink-primary-dark transition-colors"
