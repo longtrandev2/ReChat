@@ -30,6 +30,7 @@ import {
     Verify2faLoginDto,
     Resend2faOtpDto,
 } from "./dto/index.js";
+import { ConfigService } from "@nestjs/config";
 
 @Injectable()
 export class AuthService {
@@ -39,6 +40,7 @@ export class AuthService {
         private readonly jwtService: JwtService,
         private readonly redisService: RedisService,
         private readonly mailService: MailService,
+        private readonly configService: ConfigService,
     ) { }
 
     async register(dto: RegisterDto): Promise<{ message: string; email?: string }> {
@@ -415,7 +417,8 @@ export class AuthService {
             const resetToken = randomUUID();
             await this.redisService.set(`pwd_reset:${resetToken}`, user.id, 900); // 15 phút
 
-            const resetLink = `https://rechat.app/reset-password?token=${resetToken}`;
+            const clientUrl = (this.configService.get<string>('CLIENT_URL') || 'http://localhost:5173').replace(/\/+$/, '');
+            const resetLink = `${clientUrl}/reset-password?token=${resetToken}`;
             await this.mailService.sendPasswordResetEmail(normalizedEmail, user.username, resetLink);
         }
 

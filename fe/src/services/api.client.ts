@@ -30,7 +30,22 @@ apiClient.interceptors.request.use(
  * Catches 401 Unauthorized and clears local session.
  */
 apiClient.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Tự động unwrap envelope { success: true, data: T } của NestJS backend
+    if (
+      response.data &&
+      typeof response.data === 'object' &&
+      'data' in response.data &&
+      'success' in response.data &&
+      response.data.success === true
+    ) {
+      return {
+        ...response,
+        data: response.data.data,
+      }
+    }
+    return response
+  },
   (error) => {
     if (error.response?.status === 401) {
       // Token expired or blacklisted in Redis

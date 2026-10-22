@@ -27,13 +27,22 @@ export interface Verify2FAPayload {
   otp: string
 }
 
+export interface ForgotPasswordPayload {
+  email: string
+}
+
+export interface ResetPasswordPayload {
+  token: string
+  newPassword: string
+  confirmPassword: string
+}
+
 export const authApi = {
   /**
    * POST /api/v1/auth/login
    * Returns JWT token + User or 2FA challenge
    */
   login: async (data: LoginPayload): Promise<AuthSuccessResponse | Login2FAChallengeResponse> => {
-    // Determine whether usernameOrEmail is an email or username
     const payload = data.usernameOrEmail.includes('@')
       ? { email: data.usernameOrEmail, password: data.password }
       : { username: data.usernameOrEmail, password: data.password }
@@ -74,6 +83,22 @@ export const authApi = {
    */
   verify2FALogin: async (data: Verify2FAPayload): Promise<AuthSuccessResponse> => {
     const res = await apiClient.post<AuthSuccessResponse>('/auth/2fa/verify-login', data)
+    return res.data
+  },
+
+  /**
+   * POST /api/v1/auth/forgot-password
+   */
+  forgotPassword: async (data: ForgotPasswordPayload): Promise<{ message: string }> => {
+    const res = await apiClient.post<{ message: string }>('/auth/forgot-password', data)
+    return res.data
+  },
+
+  /**
+   * POST /api/v1/auth/reset-password
+   */
+  resetPassword: async (data: ResetPasswordPayload): Promise<{ message: string }> => {
+    const res = await apiClient.post<{ message: string }>('/auth/reset-password', data)
     return res.data
   },
 
