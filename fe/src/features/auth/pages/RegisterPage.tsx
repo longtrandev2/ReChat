@@ -46,21 +46,21 @@ export function RegisterPage() {
   return (
     <AuthLayout
       title="Tạo tài khoản"
-      subtitle="Đăng ký tài khoản mới để bắt đầu trò chuyện"
+      subtitle="Nhập thông tin cá nhân để tạo tài khoản ReChat mới."
     >
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-3.5">
         {/* Username */}
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           <label
             htmlFor="username"
-            className="block text-xs font-medium text-ink-secondary dark:text-ink-secondary-dark"
+            className="block text-xs font-semibold text-ink-secondary dark:text-ink-secondary-dark uppercase tracking-wider"
           >
-            Tên người dùng (Username)
+            Tên người dùng
           </label>
           <Input
             id="username"
             type="text"
-            placeholder="Username"
+            placeholder="hoang_nguyen"
             autoComplete="username"
             disabled={isSubmitting}
             error={Boolean(errors.username)}
@@ -74,17 +74,17 @@ export function RegisterPage() {
         </div>
 
         {/* Email */}
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           <label
             htmlFor="email"
-            className="block text-xs font-medium text-ink-secondary dark:text-ink-secondary-dark"
+            className="block text-xs font-semibold text-ink-secondary dark:text-ink-secondary-dark uppercase tracking-wider"
           >
             Địa chỉ Email
           </label>
           <Input
             id="email"
             type="email"
-            placeholder="user@gmail.com"
+            placeholder="hoang@rechat.io"
             autoComplete="email"
             disabled={isSubmitting}
             error={Boolean(errors.email)}
@@ -98,34 +98,34 @@ export function RegisterPage() {
         </div>
 
         {/* Mật khẩu */}
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           <label
             htmlFor="password"
-            className="block text-xs font-medium text-ink-secondary dark:text-ink-secondary-dark"
+            className="block text-xs font-semibold text-ink-secondary dark:text-ink-secondary-dark uppercase tracking-wider"
           >
-            Mật khẩu (tối thiểu 6 ký tự)
+            Mật khẩu
           </label>
           <div className="relative">
             <Input
               id="password"
               type={showPassword ? 'text' : 'password'}
-              placeholder="••••••••"
+              placeholder="Tối thiểu 6 ký tự"
               autoComplete="new-password"
               disabled={isSubmitting}
               error={Boolean(errors.password)}
-              className="pr-10"
+              className="pr-11"
               {...register('password')}
             />
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
               tabIndex={-1}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-muted hover:text-ink-primary dark:hover:text-ink-primary-dark transition-colors"
+              className="absolute right-3.5 top-1/2 -translate-y-1/2 text-ink-muted hover:text-ink-primary dark:hover:text-ink-primary-dark transition-colors"
             >
               {showPassword ? (
-                <EyeOff className="w-4 h-4" />
+                <EyeOff className="w-5 h-5" />
               ) : (
-                <Eye className="w-4 h-4" />
+                <Eye className="w-5 h-5" />
               )}
             </button>
           </div>
@@ -137,34 +137,34 @@ export function RegisterPage() {
         </div>
 
         {/* Xác nhận mật khẩu */}
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           <label
             htmlFor="confirmPassword"
-            className="block text-xs font-medium text-ink-secondary dark:text-ink-secondary-dark"
+            className="block text-xs font-semibold text-ink-secondary dark:text-ink-secondary-dark uppercase tracking-wider"
           >
-            Xác nhận lại mật khẩu
+            Xác nhận mật khẩu
           </label>
           <div className="relative">
             <Input
               id="confirmPassword"
               type={showConfirmPassword ? 'text' : 'password'}
-              placeholder="••••••••"
+              placeholder="Nhập lại mật khẩu"
               autoComplete="new-password"
               disabled={isSubmitting}
               error={Boolean(errors.confirmPassword)}
-              className="pr-10"
+              className="pr-11"
               {...register('confirmPassword')}
             />
             <button
               type="button"
               onClick={() => setShowConfirmPassword(!showConfirmPassword)}
               tabIndex={-1}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-muted hover:text-ink-primary dark:hover:text-ink-primary-dark transition-colors"
+              className="absolute right-3.5 top-1/2 -translate-y-1/2 text-ink-muted hover:text-ink-primary dark:hover:text-ink-primary-dark transition-colors"
             >
               {showConfirmPassword ? (
-                <EyeOff className="w-4 h-4" />
+                <EyeOff className="w-5 h-5" />
               ) : (
-                <Eye className="w-4 h-4" />
+                <Eye className="w-5 h-5" />
               )}
             </button>
           </div>
@@ -175,27 +175,24 @@ export function RegisterPage() {
           )}
         </div>
 
-        {/* Nút Tạo tài khoản */}
+        {/* Nút Đăng ký */}
         <Button
           type="submit"
           disabled={isSubmitting}
-          className="w-full mt-2 flex items-center justify-center gap-2"
+          className="w-full mt-3 uppercase tracking-wider text-sm font-semibold flex items-center justify-center gap-2"
         >
           {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
-          {isSubmitting ? 'Đang tạo tài khoản...' : 'Tạo tài khoản'}
+          {isSubmitting ? 'ĐANG TẠO...' : 'ĐĂNG KÝ NGAY'}
         </Button>
 
         {/* Chuyển sang Đăng nhập */}
         <div className="text-center pt-2">
-          <p className="text-xs text-ink-secondary dark:text-ink-secondary-dark">
-            Đã có tài khoản?{' '}
-            <Link
-              to="/login"
-              className="text-brand font-semibold hover:underline"
-            >
-              Đăng nhập
-            </Link>
-          </p>
+          <Link
+            to="/login"
+            className="text-sm text-brand font-semibold hover:underline block"
+          >
+            ĐÃ CÓ TÀI KHOẢN? ĐĂNG NHẬP
+          </Link>
         </div>
       </form>
     </AuthLayout>

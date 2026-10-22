@@ -33,7 +33,7 @@ export function LoginPage() {
     try {
       const res = await authApi.login(data)
 
-      // Trường hợp 1: Tài khoản có kích hoạt 2FA
+      // Trường hợp 1: Tài khoản kích hoạt 2FA
       if ('requires2FA' in res && res.requires2FA) {
         toast.info('Tài khoản yêu cầu mã xác thực 2 lớp (2FA)')
         navigate(`/verify-2fa?mfaToken=${encodeURIComponent(res.mfaToken)}`)
@@ -56,22 +56,22 @@ export function LoginPage() {
 
   return (
     <AuthLayout
-      title="Đăng nhập"
-      subtitle="Nhập tài khoản để tiếp tục vào ReChat"
+      title="Đăng nhập ReChat"
+      subtitle="Vui lòng nhập tài khoản hoặc email của bạn để tiếp tục trò chuyện."
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         {/* Username hoặc Email */}
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           <label
             htmlFor="usernameOrEmail"
-            className="block text-xs font-medium text-ink-secondary dark:text-ink-secondary-dark"
+            className="block text-xs font-semibold text-ink-secondary dark:text-ink-secondary-dark uppercase tracking-wider"
           >
             Tài khoản hoặc Email
           </label>
           <Input
             id="usernameOrEmail"
             type="text"
-            placeholder="username hoặc email@rechat.io"
+            placeholder="hoang_nguyen hoặc user@rechat.io"
             autoComplete="username"
             disabled={isSubmitting}
             error={Boolean(errors.usernameOrEmail)}
@@ -85,11 +85,11 @@ export function LoginPage() {
         </div>
 
         {/* Mật khẩu */}
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           <div className="flex items-center justify-between">
             <label
               htmlFor="password"
-              className="block text-xs font-medium text-ink-secondary dark:text-ink-secondary-dark"
+              className="block text-xs font-semibold text-ink-secondary dark:text-ink-secondary-dark uppercase tracking-wider"
             >
               Mật khẩu
             </label>
@@ -108,19 +108,19 @@ export function LoginPage() {
               autoComplete="current-password"
               disabled={isSubmitting}
               error={Boolean(errors.password)}
-              className="pr-10"
+              className="pr-11"
               {...register('password')}
             />
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
               tabIndex={-1}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-muted hover:text-ink-primary dark:hover:text-ink-primary-dark transition-colors"
+              className="absolute right-3.5 top-1/2 -translate-y-1/2 text-ink-muted hover:text-ink-primary dark:hover:text-ink-primary-dark transition-colors"
             >
               {showPassword ? (
-                <EyeOff className="w-4 h-4" />
+                <EyeOff className="w-5 h-5" />
               ) : (
-                <Eye className="w-4 h-4" />
+                <Eye className="w-5 h-5" />
               )}
             </button>
           </div>
@@ -131,27 +131,24 @@ export function LoginPage() {
           )}
         </div>
 
-        {/* Nút Đăng nhập */}
+        {/* Nút Đăng nhập Telegram Blue */}
         <Button
           type="submit"
           disabled={isSubmitting}
-          className="w-full mt-2 flex items-center justify-center gap-2"
+          className="w-full mt-3 uppercase tracking-wider text-sm font-semibold flex items-center justify-center gap-2"
         >
           {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
-          {isSubmitting ? 'Đang xác thực...' : 'Đăng nhập'}
+          {isSubmitting ? 'ĐANG XỬ LÝ...' : 'TIẾP TỤC'}
         </Button>
 
         {/* Chuyển sang Đăng ký */}
-        <div className="text-center pt-2">
-          <p className="text-xs text-ink-secondary dark:text-ink-secondary-dark">
-            Chưa có tài khoản?{' '}
-            <Link
-              to="/register"
-              className="text-brand font-semibold hover:underline"
-            >
-              Đăng ký ngay
-            </Link>
-          </p>
+        <div className="text-center pt-3">
+          <Link
+            to="/register"
+            className="text-sm text-brand font-semibold hover:underline block"
+          >
+            ĐĂNG KÝ TÀI KHOẢN MỚI
+          </Link>
         </div>
       </form>
     </AuthLayout>

@@ -8,66 +8,66 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Stitch Design Tokens: Lagoon Coral Theme
+        // Telegram Messenger Palette
         brand: {
-          DEFAULT: '#0B7A6B', // Lagoon Teal
-          soft: '#DDF1EC',
-          dark: '#005046',
-          accent: '#3FC2AA',
-        },
-        coral: {
-          DEFAULT: '#C93C27', // Unread badge & danger/alert
-          soft: '#FFDAD4',
-          dark: '#FF7A63',
+          DEFAULT: '#2481CC', // Telegram Classic Blue
+          hover: '#1E74B8',
+          soft: '#E7F3FA',
+          dark: '#1665A3',
+          accent: '#5288C1',
         },
         presence: {
-          online: '#2E9E5B',
-          offline: '#8A928E',
+          online: '#4FAE4E', // Telegram Online Green
+          offline: '#A2ACB0',
+        },
+        coral: {
+          DEFAULT: '#E53935', // Destructive / Alert
+          soft: '#FDE8E8',
+          dark: '#C62828',
         },
         canvas: {
-          light: '#F6F5F2',
-          dark: '#121413',
+          light: '#F4F4F5',
+          dark: '#0E1621', // Telegram Dark canvas
         },
         surface: {
           light: '#FFFFFF',
-          'light-2': '#EEECE7',
-          dark: '#1A1D1C',
-          'dark-2': '#242826',
+          'light-2': '#F4F4F5',
+          dark: '#17212B', // Telegram Dark surface
+          'dark-2': '#242F3D',
         },
         border: {
-          light: '#E1DED6',
-          dark: '#2F3432',
+          light: '#E4E4E7',
+          dark: '#232E3C',
         },
         ink: {
-          primary: '#181A19',
-          secondary: '#5B605D',
-          muted: '#8A928E',
-          'primary-dark': '#ECEEEC',
-          'secondary-dark': '#A5ABA7',
+          primary: '#1C1C1E',
+          secondary: '#707579', // Telegram Secondary Ink
+          muted: '#A2ACB0',
+          'primary-dark': '#F5F5F7',
+          'secondary-dark': '#8E959B',
         },
         bubble: {
-          out: '#0B7A6B',
-          'out-dark': '#1C6B5E',
-          in: '#EEECE7',
-          'in-dark': '#242826',
+          out: '#EFFDDE', // Telegram Light Outgoing bubble
+          'out-dark': '#2B5278', // Telegram Dark Outgoing bubble
+          in: '#FFFFFF',
+          'in-dark': '#182533',
         },
       },
       fontFamily: {
-        sans: ['"Be Vietnam Pro"', 'sans-serif'],
+        sans: ['"Be Vietnam Pro"', 'system-ui', '-apple-system', 'sans-serif'],
         mono: ['"JetBrains Mono"', 'monospace'],
       },
       borderRadius: {
-        sm: '0.25rem',
+        sm: '0.375rem',
         DEFAULT: '0.5rem',
-        md: '0.75rem',
-        lg: '1rem',
-        xl: '1.5rem',
-        bubble: '1.125rem', // 18px standard message bubble
+        md: '0.625rem',
+        lg: '0.75rem',
+        xl: '1rem',
+        bubble: '1rem',
       },
       boxShadow: {
-        subtle: '0 1px 3px 0 rgba(18, 20, 19, 0.04)',
-        modal: '0 4px 16px -2px rgba(18, 20, 19, 0.08), 0 0 0 1px var(--border-color, #E1DED6)',
-        'modal-dark': '0 4px 20px -2px rgba(0, 0, 0, 0.4), 0 0 0 1px #2F3432',
+        subtle: '0 1px 2px 0 rgba(0, 0, 0, 0.05)',
+        telegram: '0 2px 8px -1px rgba(0, 0, 0, 0.08), 0 1px 3px -1px rgba(0, 0, 0, 0.04)',
       },
     },
   },
