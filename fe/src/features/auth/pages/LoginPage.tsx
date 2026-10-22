@@ -71,7 +71,7 @@ export function LoginPage() {
           <Input
             id="usernameOrEmail"
             type="text"
-            placeholder="hoang_nguyen hoặc user@rechat.io"
+            placeholder="alex hoặc alex@gmail.com"
             autoComplete="username"
             disabled={isSubmitting}
             error={Boolean(errors.usernameOrEmail)}
@@ -104,7 +104,7 @@ export function LoginPage() {
             <Input
               id="password"
               type={showPassword ? 'text' : 'password'}
-              placeholder="••••••••"
+              placeholder="Nhập mật khẩu truy cập"
               autoComplete="current-password"
               disabled={isSubmitting}
               error={Boolean(errors.password)}

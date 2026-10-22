@@ -52,3 +52,25 @@ export const otpSchema = z.object({
 })
 
 export type OtpFormData = z.infer<typeof otpSchema>
+
+export const forgotPasswordSchema = z.object({
+  email: z
+    .string()
+    .min(1, 'Email không được để trống')
+    .email('Địa chỉ email không đúng định dạng'),
+})
+
+export type ForgotPasswordFormData = z.infer<typeof forgotPasswordSchema>
+
+export const resetPasswordSchema = z
+  .object({
+    token: z.string().min(1, 'Mã token xác thực không được để trống'),
+    newPassword: z.string().min(6, 'Mật khẩu mới phải từ 6 ký tự trở lên'),
+    confirmPassword: z.string().min(6, 'Xác nhận mật khẩu phải từ 6 ký tự trở lên'),
+  })
+  .refine((data) => data.newPassword === data.confirmPassword, {
+    message: 'Mật khẩu xác nhận không khớp với mật khẩu mới',
+    path: ['confirmPassword'],
+  })
+
+export type ResetPasswordFormData = z.infer<typeof resetPasswordSchema>

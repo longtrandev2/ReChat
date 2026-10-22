@@ -60,7 +60,7 @@ export function RegisterPage() {
           <Input
             id="username"
             type="text"
-            placeholder="hoang_nguyen"
+            placeholder="alex"
             autoComplete="username"
             disabled={isSubmitting}
             error={Boolean(errors.username)}
@@ -84,7 +84,7 @@ export function RegisterPage() {
           <Input
             id="email"
             type="email"
-            placeholder="hoang@rechat.io"
+            placeholder="alex@gmail.com"
             autoComplete="email"
             disabled={isSubmitting}
             error={Boolean(errors.email)}
