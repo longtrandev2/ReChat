@@ -7,6 +7,7 @@ import { JwtService } from '@nestjs/jwt';
 import { RedisService } from '../../common/redis/redis.service.js';
 import { MailService } from '../../common/mail/mail.service.js';
 import { BadRequestException, ConflictException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 
 describe('AuthService', () => {
@@ -69,6 +70,15 @@ describe('AuthService', () => {
                 {
                     provide: MailService,
                     useValue: mockMailService,
+                },
+                {
+                    provide: ConfigService,
+                    useValue: {
+                        get: vi.fn((key: string) => {
+                            if (key === 'CLIENT_URL') return 'http://localhost:5173';
+                            return null;
+                        }),
+                    },
                 },
             ],
         }).compile();

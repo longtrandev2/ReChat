@@ -98,7 +98,8 @@ export function OtpInput({
     e.preventDefault()
     if (disabled) return
 
-    const pastedData = e.clipboardData.getData('text/plain')
+    const pastedData =
+      e.clipboardData.getData('text/plain') || e.clipboardData.getData('text') || ''
     const numericOnly = pastedData.replace(/\D/g, '').slice(0, length)
 
     if (numericOnly.length > 0) {

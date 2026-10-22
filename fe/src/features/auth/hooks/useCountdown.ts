@@ -23,6 +23,7 @@ export function useCountdown(
   const [secondsLeft, setSecondsLeft] = useState(initialSeconds)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const onCompleteRef = useRef(onComplete)
+  const remainingRef = useRef(initialSeconds)
 
   // Keep latest onComplete callback in ref to prevent stale closures
   useEffect(() => {
@@ -36,50 +37,51 @@ export function useCountdown(
     }
   }, [])
 
+  const scheduleInterval = useCallback(() => {
+    clearTimer()
+    timerRef.current = setInterval(() => {
+      remainingRef.current -= 1
+      setSecondsLeft(remainingRef.current)
+
+      if (remainingRef.current <= 0) {
+        clearTimer()
+        onCompleteRef.current?.()
+      }
+    }, 1000)
+  }, [clearTimer])
+
   const start = useCallback(
     (seconds = initialSeconds) => {
       clearTimer()
+      remainingRef.current = seconds
       setSecondsLeft(seconds)
 
-      timerRef.current = setInterval(() => {
-        setSecondsLeft((prev) => {
-          if (prev <= 1) {
-            clearTimer()
-            onCompleteRef.current?.()
-            return 0
-          }
-          return prev - 1
-        })
-      }, 1000)
+      if (seconds <= 0) {
+        onCompleteRef.current?.()
+        return
+      }
+
+      scheduleInterval()
     },
-    [initialSeconds, clearTimer]
+    [initialSeconds, clearTimer, scheduleInterval]
   )
 
   const reset = useCallback(() => {
     clearTimer()
+    remainingRef.current = initialSeconds
     setSecondsLeft(initialSeconds)
   }, [initialSeconds, clearTimer])
 
   // Setup initial interval on mount if autoStart is true
   useEffect(() => {
-    if (!autoStart) return
-
-    clearTimer()
-    timerRef.current = setInterval(() => {
-      setSecondsLeft((prev) => {
-        if (prev <= 1) {
-          clearTimer()
-          onCompleteRef.current?.()
-          return 0
-        }
-        return prev - 1
-      })
-    }, 1000)
-
+    if (autoStart && initialSeconds > 0) {
+      remainingRef.current = initialSeconds
+      scheduleInterval()
+    }
     return () => {
       clearTimer()
     }
-  }, [autoStart, clearTimer])
+  }, [autoStart, initialSeconds, scheduleInterval, clearTimer])
 
   // Format as mm:ss (e.g. 00:54, 01:00)
   const minutes = Math.floor(secondsLeft / 60)

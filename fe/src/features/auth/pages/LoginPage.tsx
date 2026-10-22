@@ -71,7 +71,7 @@ export function LoginPage() {
           <Input
             id="usernameOrEmail"
             type="text"
-            placeholder="alex hoặc alex@gmail.com"
+            placeholder="alex hoặc alex@example.com"
             autoComplete="username"
             disabled={isSubmitting}
             error={Boolean(errors.usernameOrEmail)}
