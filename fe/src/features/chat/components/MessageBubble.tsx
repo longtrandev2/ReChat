@@ -8,11 +8,91 @@ import {
   Pencil,
   Trash2,
   Copy,
+  Download,
+  FileText,
+  FileSpreadsheet,
+  FileArchive,
+  FileCode,
+  File,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import * as Dialog from '@radix-ui/react-dialog'
 import { toast } from 'sonner'
+
+interface FileDetails {
+  icon: typeof FileText
+  extLabel: string
+  colorClass: string
+  bgClass: string
+}
+
+function getFileDetails(fileName: string = ''): FileDetails {
+  const ext = fileName.split('.').pop()?.toLowerCase() || ''
+  switch (ext) {
+    case 'pdf':
+      return {
+        icon: FileText,
+        extLabel: 'Tài liệu PDF',
+        colorClass: 'text-rose-600 dark:text-rose-400',
+        bgClass: 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-900/50',
+      }
+    case 'doc':
+    case 'docx':
+      return {
+        icon: FileText,
+        extLabel: 'Tài liệu Word',
+        colorClass: 'text-blue-600 dark:text-blue-400',
+        bgClass: 'bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-900/50',
+      }
+    case 'xls':
+    case 'xlsx':
+    case 'csv':
+      return {
+        icon: FileSpreadsheet,
+        extLabel: 'Bảng tính Excel',
+        colorClass: 'text-emerald-600 dark:text-emerald-400',
+        bgClass: 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900/50',
+      }
+    case 'zip':
+    case 'rar':
+    case '7z':
+    case 'tar':
+    case 'gz':
+      return {
+        icon: FileArchive,
+        extLabel: 'Tệp nén',
+        colorClass: 'text-amber-600 dark:text-amber-400',
+        bgClass: 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-900/50',
+      }
+    case 'txt':
+    case 'md':
+      return {
+        icon: FileText,
+        extLabel: 'Tệp văn bản TXT',
+        colorClass: 'text-slate-600 dark:text-slate-400',
+        bgClass: 'bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800',
+      }
+    case 'js':
+    case 'ts':
+    case 'json':
+    case 'html':
+    case 'css':
+      return {
+        icon: FileCode,
+        extLabel: 'Mã nguồn',
+        colorClass: 'text-violet-600 dark:text-violet-400',
+        bgClass: 'bg-violet-50 dark:bg-violet-950/40 border-violet-200 dark:border-violet-900/50',
+      }
+    default:
+      return {
+        icon: File,
+        extLabel: ext ? `Tệp .${ext.toUpperCase()}` : 'Tệp tin',
+        colorClass: 'text-teal-600 dark:text-teal-400',
+        bgClass: 'bg-teal-50 dark:bg-teal-950/40 border-teal-200 dark:border-teal-900/50',
+      }
+  }
+}
 
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
@@ -256,6 +336,31 @@ export function MessageBubble({
             </p>
           ) : (
             <div>
+              {/* Trích dẫn tin nhắn cha (Reply Context Telegram style) */}
+              {message.replyTo && (
+                <div
+                  className="mb-1.5 px-2.5 py-1 rounded-lg border-l-[3px] border-l-brand text-xs cursor-pointer select-none transition-colors bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10"
+                  data-testid={`reply-preview-${message.id}`}
+                  onClick={() => {
+                    const targetEl = document.querySelector(`[data-testid="message-bubble-${message.replyTo?.id}"]`)
+                    targetEl?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                  }}
+                >
+                  <p className="font-semibold text-brand text-[11px] truncate">
+                    {message.replyTo.sender?.displayName || message.replyTo.sender?.username || 'Người dùng'}
+                  </p>
+                  <p className="text-[11px] text-ink-muted truncate">
+                    {message.replyTo.isRecalled
+                      ? '[Tin nhắn đã bị thu hồi]'
+                      : message.replyTo.type === 'IMAGE'
+                      ? '📷 [Hình ảnh]'
+                      : message.replyTo.type === 'FILE'
+                      ? `📎 [Tệp tin: ${message.replyTo.content}]`
+                      : message.replyTo.content}
+                  </p>
+                </div>
+              )}
+
               {message.type === 'IMAGE' && message.fileUrl && (
                 <div className="rounded-xl overflow-hidden mb-1.5 max-h-72">
                   <img
@@ -268,9 +373,68 @@ export function MessageBubble({
                 </div>
               )}
 
+              {/* Tệp tin đính kèm (File Attachment Card Telegram style) */}
+              {message.type === 'FILE' && message.fileUrl && (
+                <div className="mb-1.5 min-w-[220px] max-w-sm">
+                  <div
+                    className={cn(
+                      'flex items-center gap-3 p-2.5 rounded-xl border transition-all duration-150',
+                      isOutgoing
+                        ? 'bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10'
+                        : 'bg-black/5 dark:bg-white/5 border-border-light dark:border-border-dark'
+                    )}
+                    data-testid={`file-attachment-${message.id}`}
+                  >
+                    {/* Icon phân loại file */}
+                    {(() => {
+                      const details = getFileDetails(message.content)
+                      const IconComponent = details.icon
+                      return (
+                        <div
+                          className={cn(
+                            'w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border shadow-xs',
+                            details.bgClass,
+                            details.colorClass
+                          )}
+                        >
+                          <IconComponent className="w-5 h-5" />
+                        </div>
+                      )
+                    })()}
+
+                    {/* Thông tin tên file & loại file */}
+                    <div className="flex-1 min-w-0 pr-1">
+                      <p
+                        className="text-xs font-semibold truncate text-ink-primary dark:text-ink-primary-dark"
+                        title={message.content}
+                      >
+                        {message.content || 'Tệp đính kèm'}
+                      </p>
+                      <p className="text-[11px] text-ink-muted select-none mt-0.5">
+                        {getFileDetails(message.content).extLabel}
+                      </p>
+                    </div>
+
+                    {/* Nút tải về máy (Download Action) */}
+                    <a
+                      href={message.fileUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      download={message.content || 'attachment'}
+                      title="Tải tệp xuống"
+                      aria-label="Tải tệp xuống"
+                      className="w-8 h-8 rounded-full bg-brand text-white flex items-center justify-center shrink-0 hover:bg-brand-hover hover:scale-105 active:scale-95 transition-all shadow-xs cursor-pointer"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Download className="w-4 h-4" />
+                    </a>
+                  </div>
+                </div>
+              )}
+
               {/* Layout Telegram Inline: chữ và thời gian cùng hàng nếu chữ ngắn */}
               <div className="flex flex-wrap items-end gap-x-2.5 gap-y-1">
-                {message.content && (
+                {message.type !== 'FILE' && message.content && (
                   <div className="flex-1 min-w-[40px] text-sm leading-relaxed whitespace-pre-wrap break-words">
                     {message.content}
                   </div>

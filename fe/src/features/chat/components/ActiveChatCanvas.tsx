@@ -196,7 +196,7 @@ export function ActiveChatCanvas() {
 
   // Gửi tin nhắn qua WebSocket
   const handleSendMessage = useCallback(
-    (content: string) => {
+    (content: string, replyToId?: string) => {
       if (!conversationId) return
       const socket = socketClient.getSocket()
       if (socket && socket.connected) {
@@ -204,6 +204,7 @@ export function ActiveChatCanvas() {
           conversationId,
           content,
           type: 'TEXT',
+          ...(replyToId ? { replyToId } : {}),
         })
       }
     },
@@ -298,6 +299,7 @@ export function ActiveChatCanvas() {
           typingUserNames={typingNames}
           onLoadMore={handleLoadMore}
           onReact={handleReact}
+          onReply={(msg) => useMessagesStore.getState().setReplyingMessage(msg)}
           onRecall={handleRecall}
           onEdit={(msg) => useMessagesStore.getState().setEditingMessage({ id: msg.id, content: msg.content })}
         />

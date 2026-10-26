@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Paperclip, Smile, X, Pencil, Loader2, Check } from 'lucide-react'
+import { Send, Paperclip, Smile, X, Pencil, Loader2, Check, Reply } from 'lucide-react'
 import { toast } from 'sonner'
 import { socketClient } from '@/services/socket.client'
 import { mediaApi } from '../services/media.api'
@@ -7,7 +7,7 @@ import { useMessagesStore } from '../stores/messages.store'
 
 interface MessageComposerProps {
   conversationId: string
-  onSendMessage: (content: string) => void | Promise<void>
+  onSendMessage: (content: string, replyToId?: string) => void | Promise<void>
   onEditMessage?: (messageId: string, content: string) => void | Promise<void>
   disabled?: boolean
 }
@@ -32,7 +32,12 @@ export function MessageComposer({
   const [isUploading, setIsUploading] = useState(false)
   const [uploadPercent, setUploadPercent] = useState(0)
 
-  const { editingMessage, setEditingMessage } = useMessagesStore()
+  const {
+    editingMessage,
+    setEditingMessage,
+    replyingMessage,
+    setReplyingMessage,
+  } = useMessagesStore()
 
   // Đồng bộ nội dung tin nhắn sửa trong quá trình render (React 19 idiomatic pattern)
   if (editingMessage && editingMessage.id !== prevEditingId) {
@@ -43,6 +48,13 @@ export function MessageComposer({
   }
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Tự động focus textarea khi bấm trả lời
+  useEffect(() => {
+    if (replyingMessage) {
+      textareaRef.current?.focus()
+    }
+  }, [replyingMessage])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout>>(
     -1 as unknown as ReturnType<typeof setTimeout>
@@ -102,6 +114,11 @@ export function MessageComposer({
       return
     }
 
+    const replyId = replyingMessage?.id
+    if (replyingMessage) {
+      setReplyingMessage(null)
+    }
+
     setContent('')
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
@@ -110,7 +127,11 @@ export function MessageComposer({
 
     try {
       setIsSending(true)
-      await onSendMessage(trimmed)
+      if (replyId) {
+        await onSendMessage(trimmed, replyId)
+      } else {
+        await onSendMessage(trimmed)
+      }
     } finally {
       setIsSending(false)
     }
@@ -202,6 +223,39 @@ export function MessageComposer({
       className="p-3 md:pb-4 max-w-3xl mx-auto w-full flex flex-col gap-1 shrink-0 z-10 select-none"
       data-testid="message-composer"
     >
+      {/* Banner chế độ trả lời tin nhắn */}
+      {replyingMessage && !editingMessage && (
+        <div
+          className="flex items-center justify-between px-4 py-2 rounded-xl bg-surface-light dark:bg-[#1E2C3A] border-l-4 border-l-brand border border-border-light dark:border-border-dark text-xs text-ink-primary dark:text-ink-primary-dark shadow-xs animate-in fade-in slide-in-from-bottom-1 duration-150"
+          data-testid="reply-banner"
+        >
+          <div className="flex items-center gap-2 truncate">
+            <Reply className="w-3.5 h-3.5 text-brand shrink-0" />
+            <div className="flex flex-col min-w-0">
+              <span className="font-semibold text-brand text-[11px]">
+                Đang trả lời {replyingMessage.sender?.displayName || replyingMessage.sender?.username}
+              </span>
+              <span className="truncate text-ink-secondary dark:text-ink-secondary-dark text-[11px]">
+                {replyingMessage.type === 'IMAGE'
+                  ? '📷 [Hình ảnh]'
+                  : replyingMessage.type === 'FILE'
+                  ? `📎 [Tệp tin: ${replyingMessage.content}]`
+                  : replyingMessage.content}
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setReplyingMessage(null)}
+            title="Hủy bỏ trả lời"
+            aria-label="Hủy bỏ trả lời"
+            className="p-1 rounded-full hover:bg-black/10 dark:hover:bg-white/10 text-ink-muted hover:text-coral transition-colors shrink-0 ml-2 cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Banner chế độ chỉnh sửa tin nhắn */}
       {editingMessage && (
         <div className="flex items-center justify-between px-4 py-1.5 rounded-xl bg-brand/10 dark:bg-brand/20 border border-brand/30 text-xs text-ink-primary dark:text-ink-primary-dark animate-in fade-in slide-in-from-bottom-1 duration-150">

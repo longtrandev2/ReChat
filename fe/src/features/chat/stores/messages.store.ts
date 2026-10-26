@@ -8,6 +8,7 @@ export interface MessagesState {
   lastReadMessageIdByConversation: Record<string, string> // conversationId -> lastReadMessageId
   typingUsers: Record<string, Record<string, string>> // conversationId -> { [userId]: displayName }
   editingMessage: { id: string; content: string } | null
+  replyingMessage: Message | null
   isLoadingMessages: boolean
   error: string | null
 
@@ -15,6 +16,7 @@ export interface MessagesState {
   fetchMessages: (conversationId: string, before?: string) => Promise<void>
   appendIncomingMessage: (conversationId: string, message: Message) => void
   setEditingMessage: (message: { id: string; content: string } | null) => void
+  setReplyingMessage: (message: Message | null) => void
   handleMessageRecalled: (conversationId: string, messageId: string) => void
   handleMessageEdited: (
     conversationId: string,
@@ -53,11 +55,16 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
   lastReadMessageIdByConversation: {},
   typingUsers: {},
   editingMessage: null,
+  replyingMessage: null,
   isLoadingMessages: false,
   error: null,
 
   setEditingMessage: (message) => {
     set({ editingMessage: message })
+  },
+
+  setReplyingMessage: (message) => {
+    set({ replyingMessage: message })
   },
 
   handleMessageRecalled: (conversationId: string, messageId: string) => {
@@ -381,6 +388,8 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
       hasMoreByConversation: {},
       lastReadMessageIdByConversation: {},
       typingUsers: {},
+      editingMessage: null,
+      replyingMessage: null,
       isLoadingMessages: false,
       error: null,
     })

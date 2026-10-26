@@ -354,4 +354,15 @@ describe('useMessagesStore Tests (ZOMBIES & AAA Methodology)', () => {
     useMessagesStore.getState().setEditingMessage(null)
     expect(useMessagesStore.getState().editingMessage).toBeNull()
   })
+
+  it('manages replyingMessage state', () => {
+    expect(useMessagesStore.getState().replyingMessage).toBeNull()
+
+    useMessagesStore.getState().setReplyingMessage(mockMsg1)
+    expect(useMessagesStore.getState().replyingMessage).toEqual(mockMsg1)
+
+    useMessagesStore.getState().setReplyingMessage(null)
+    expect(useMessagesStore.getState().replyingMessage).toBeNull()
+  })
 })
+

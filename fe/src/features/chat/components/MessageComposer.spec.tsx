@@ -182,4 +182,76 @@ describe('MessageComposer Component Tests', () => {
     expect(useMessagesStore.getState().editingMessage).toBeNull()
     expect(screen.queryByText('Đang chỉnh sửa:')).not.toBeInTheDocument()
   })
+
+  it('displays reply banner and sends message with replyToId', async () => {
+    const onSend = vi.fn()
+    const mockReplyingMsg = {
+      id: 'parent-msg-123',
+      content: 'Tin nhắn gốc cần trả lời',
+      type: 'TEXT' as const,
+      fileUrl: null,
+      replyToId: null,
+      isRecalled: false,
+      createdAt: '2026-10-26T10:00:00.000Z',
+      updatedAt: '2026-10-26T10:00:00.000Z',
+      sender: {
+        id: 'user-bob',
+        username: 'bob',
+        displayName: 'Bob Trần',
+        avatarUrl: null,
+      },
+    }
+
+    useMessagesStore.getState().setReplyingMessage(mockReplyingMsg)
+
+    render(<MessageComposer conversationId="conv-1" onSendMessage={onSend} />)
+
+    // Verify reply banner displays sender and quote
+    expect(screen.getByTestId('reply-banner')).toBeInTheDocument()
+    expect(screen.getByText('Đang trả lời Bob Trần')).toBeInTheDocument()
+    expect(screen.getByText('Tin nhắn gốc cần trả lời')).toBeInTheDocument()
+
+    // Type reply message and send
+    const textarea = screen.getByLabelText('Nội dung tin nhắn')
+    fireEvent.change(textarea, { target: { value: 'Đây là câu trả lời của tôi' } })
+
+    const sendButton = screen.getByRole('button', { name: 'Gửi tin nhắn' })
+    await act(async () => {
+      fireEvent.click(sendButton)
+    })
+
+    expect(onSend).toHaveBeenCalledWith('Đây là câu trả lời của tôi', 'parent-msg-123')
+    expect(useMessagesStore.getState().replyingMessage).toBeNull()
+    expect(screen.queryByTestId('reply-banner')).not.toBeInTheDocument()
+  })
+
+  it('cancels reply mode when clicking cancel button on reply banner', () => {
+    const mockReplyingMsg = {
+      id: 'parent-msg-123',
+      content: 'Tin nhắn gốc',
+      type: 'TEXT' as const,
+      fileUrl: null,
+      replyToId: null,
+      isRecalled: false,
+      createdAt: '2026-10-26T10:00:00.000Z',
+      updatedAt: '2026-10-26T10:00:00.000Z',
+      sender: {
+        id: 'user-bob',
+        username: 'bob',
+        displayName: 'Bob Trần',
+        avatarUrl: null,
+      },
+    }
+
+    useMessagesStore.getState().setReplyingMessage(mockReplyingMsg)
+
+    render(<MessageComposer conversationId="conv-1" onSendMessage={vi.fn()} />)
+
+    const cancelBtn = screen.getByRole('button', { name: 'Hủy bỏ trả lời' })
+    fireEvent.click(cancelBtn)
+
+    expect(useMessagesStore.getState().replyingMessage).toBeNull()
+    expect(screen.queryByTestId('reply-banner')).not.toBeInTheDocument()
+  })
 })
+

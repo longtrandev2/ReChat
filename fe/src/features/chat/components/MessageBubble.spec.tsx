@@ -125,4 +125,56 @@ describe('MessageBubble Component Tests', () => {
     expect(screen.getByText('(đã sửa)')).toBeInTheDocument()
     expect(screen.getByText('Nội dung sau khi sửa')).toBeInTheDocument()
   })
+
+  it('renders file attachment card with download link when message type is FILE', () => {
+    const fileMsg: Message = {
+      ...baseMessage,
+      id: 'msg-file-1',
+      type: 'FILE',
+      fileUrl: 'https://example.com/files/lib.txt',
+      content: 'lib.txt',
+    }
+
+    render(<MessageBubble message={fileMsg} isOutgoing={false} />)
+
+    expect(screen.getByTestId('file-attachment-msg-file-1')).toBeInTheDocument()
+    expect(screen.getByText('lib.txt')).toBeInTheDocument()
+    expect(screen.getByText('Tệp văn bản TXT')).toBeInTheDocument()
+
+    const downloadLink = screen.getByRole('link', { name: 'Tải tệp xuống' })
+    expect(downloadLink).toBeInTheDocument()
+    expect(downloadLink).toHaveAttribute('href', 'https://example.com/files/lib.txt')
+    expect(downloadLink).toHaveAttribute('download', 'lib.txt')
+  })
+
+  it('renders quoted reply context when message has replyTo', () => {
+    const replyMsg: Message = {
+      ...baseMessage,
+      id: 'msg-reply-1',
+      content: 'Tôi trả lời tin này',
+      replyToId: 'parent-1',
+      replyTo: {
+        id: 'parent-1',
+        content: 'Tin nhắn gốc',
+        type: 'TEXT',
+        isRecalled: false,
+        createdAt: '2026-10-26T10:00:00.000Z',
+        sender: {
+          id: 'user-bob',
+          username: 'bob',
+          displayName: 'Bob Trần',
+          avatarUrl: null,
+        },
+      },
+    }
+
+    render(<MessageBubble message={replyMsg} isOutgoing={true} />)
+
+    expect(screen.getByTestId('reply-preview-msg-reply-1')).toBeInTheDocument()
+    expect(screen.getByText('Bob Trần')).toBeInTheDocument()
+    expect(screen.getByText('Tin nhắn gốc')).toBeInTheDocument()
+    expect(screen.getByText('Tôi trả lời tin này')).toBeInTheDocument()
+  })
 })
+
+
