@@ -2,11 +2,19 @@ import { useEffect } from 'react'
 import { socketClient } from '@/services/socket.client'
 import { useSocketStore } from '@/stores/socket.store'
 import { useAuthStore } from '@/stores/auth.store'
+import { useConversationStore } from '@/features/conversations/stores/conversation.store'
+import type { Conversation, LastMessage } from '@/features/conversations/types/conversation.types'
 
 interface UserStatusEventPayload {
   userId: string
   status: 'ONLINE' | 'OFFLINE'
   lastSeen?: string
+}
+
+interface ConversationUpdatedPayload {
+  conversation?: Conversation
+  conversationId?: string
+  lastMessage?: LastMessage
 }
 
 /**
@@ -47,11 +55,29 @@ export function useSocketInit() {
       }
     }
 
+    const handleConversationCreated = (conversation: Conversation) => {
+      if (conversation) {
+        useConversationStore.getState().addOrUpdateConversation(conversation)
+      }
+    }
+
+    const handleConversationUpdated = (payload: ConversationUpdatedPayload) => {
+      if (!payload) return
+      if (payload.conversation) {
+        useConversationStore.getState().addOrUpdateConversation(payload.conversation)
+      } else if (payload.conversationId && payload.lastMessage) {
+        useConversationStore.getState().handleNewMessage(payload.conversationId, payload.lastMessage)
+      }
+    }
+
     // Đăng ký listeners
     socket.on('connect', handleConnect)
     socket.on('disconnect', handleDisconnect)
     socket.on('connect_error', handleConnectError)
     socket.on('user_status', handleUserStatus)
+    socket.on('userPresence', handleUserStatus)
+    socket.on('conversationCreated', handleConversationCreated)
+    socket.on('conversationUpdated', handleConversationUpdated)
 
     // Cập nhật trạng thái nếu socket đã kết nối trước đó
     if (socket.connected) {
@@ -64,6 +90,9 @@ export function useSocketInit() {
       socket.off('disconnect', handleDisconnect)
       socket.off('connect_error', handleConnectError)
       socket.off('user_status', handleUserStatus)
+      socket.off('userPresence', handleUserStatus)
+      socket.off('conversationCreated', handleConversationCreated)
+      socket.off('conversationUpdated', handleConversationUpdated)
     }
   }, [token, isAuthenticated, setStatus, updateUserStatus, reset])
 }
