@@ -17,6 +17,23 @@ export interface LastMessage {
   sender?: LastMessageSender
 }
 
+export interface ConversationMemberUser {
+  id: string
+  username: string
+  displayName: string
+  avatarUrl: string | null
+  isOnline?: boolean
+  lastSeen?: string
+}
+
+export interface ConversationMember {
+  id: string
+  role: string
+  joinedAt?: string
+  user: ConversationMemberUser
+  lastReadMessageId?: string | null
+}
+
 export interface Conversation {
   id: string
   type: ConversationType
@@ -27,6 +44,9 @@ export interface Conversation {
   lastMessageAt: string
   createdAt: string
   updatedAt: string
+  memberCount?: number
+  partnerId?: string
+  members?: ConversationMember[]
 }
 
 export interface CreateDirectPayload {
