@@ -3,7 +3,9 @@ import { socketClient } from '@/services/socket.client'
 import { useSocketStore } from '@/stores/socket.store'
 import { useAuthStore } from '@/stores/auth.store'
 import { useConversationStore } from '@/features/conversations/stores/conversation.store'
+import { useMessagesStore } from '@/features/chat/stores/messages.store'
 import type { Conversation, LastMessage } from '@/features/conversations/types/conversation.types'
+import type { Message } from '@/features/chat/types/message.types'
 
 interface UserStatusEventPayload {
   userId: string
@@ -15,6 +17,19 @@ interface ConversationUpdatedPayload {
   conversation?: Conversation
   conversationId?: string
   lastMessage?: LastMessage
+}
+
+interface NewMessagePayload extends Message {
+  conversationId: string
+}
+
+interface UserTypingPayload {
+  conversationId: string
+  userId: string
+  username: string
+  displayName: string
+  avatarUrl?: string | null
+  isTyping: boolean
 }
 
 /**
@@ -70,6 +85,42 @@ export function useSocketInit() {
       }
     }
 
+    const handleNewMessage = (payload: NewMessagePayload) => {
+      if (!payload || !payload.conversationId) return
+
+      // 1. Nối tin nhắn mới vào kho tin nhắn của phòng
+      useMessagesStore.getState().appendIncomingMessage(payload.conversationId, payload)
+
+      // 2. Cập nhật dòng preview tin nhắn cuối trong danh sách Inbox
+      const currentUserId = useAuthStore.getState().user?.id
+      const isSelf = payload.sender?.id === currentUserId
+      useConversationStore.getState().handleNewMessage(
+        payload.conversationId,
+        {
+          id: payload.id,
+          content: payload.content,
+          type: payload.type,
+          createdAt: payload.createdAt,
+          sender: payload.sender,
+        },
+        isSelf
+      )
+    }
+
+    const handleUserTyping = (payload: UserTypingPayload) => {
+      if (!payload || !payload.conversationId) return
+      const currentUserId = useAuthStore.getState().user?.id
+      // Không hiển thị trạng thái typing của chính mình
+      if (payload.userId === currentUserId) return
+
+      useMessagesStore.getState().setTypingStatus(
+        payload.conversationId,
+        payload.userId,
+        payload.displayName || payload.username,
+        payload.isTyping
+      )
+    }
+
     // Đăng ký listeners
     socket.on('connect', handleConnect)
     socket.on('disconnect', handleDisconnect)
@@ -78,6 +129,8 @@ export function useSocketInit() {
     socket.on('userPresence', handleUserStatus)
     socket.on('conversationCreated', handleConversationCreated)
     socket.on('conversationUpdated', handleConversationUpdated)
+    socket.on('newMessage', handleNewMessage)
+    socket.on('userTyping', handleUserTyping)
 
     // Cập nhật trạng thái nếu socket đã kết nối trước đó
     if (socket.connected) {
@@ -93,6 +146,8 @@ export function useSocketInit() {
       socket.off('userPresence', handleUserStatus)
       socket.off('conversationCreated', handleConversationCreated)
       socket.off('conversationUpdated', handleConversationUpdated)
+      socket.off('newMessage', handleNewMessage)
+      socket.off('userTyping', handleUserTyping)
     }
   }, [token, isAuthenticated, setStatus, updateUserStatus, reset])
 }
@@ -108,7 +163,6 @@ export function useSocket() {
   const isUserOnline = useSocketStore((state) => state.isUserOnline)
 
   return {
-    socket: socketClient.getSocket(),
     status,
     isConnected,
     onlineUsers,
