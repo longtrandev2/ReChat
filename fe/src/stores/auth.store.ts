@@ -19,7 +19,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   token: localStorage.getItem('rechat_access_token'),
   user: null,
   isAuthenticated: Boolean(localStorage.getItem('rechat_access_token')),
-  isLoading: true,
+  isLoading: Boolean(localStorage.getItem('rechat_access_token')),
 
   setAuth: (token: string, user: UserProfile) => {
     localStorage.setItem('rechat_access_token', token)

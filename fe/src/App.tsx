@@ -9,43 +9,8 @@ import { VerifyOtpPage } from '@/features/auth/pages/VerifyOtpPage'
 import { Verify2FAPage } from '@/features/auth/pages/Verify2FAPage'
 import { ForgotPasswordPage } from '@/features/auth/pages/ForgotPasswordPage'
 import { ResetPasswordPage } from '@/features/auth/pages/ResetPasswordPage'
-import { Button } from '@/components/ui/button'
-import { LogOut, MessageSquare } from 'lucide-react'
 import { AppLayout } from '@/components/layout/AppLayout'
-
-/**
- * Temporary Chat App Shell for Protected Route testing
- */
-function ChatPlaceholder() {
-  const { user, logout } = useAuthStore()
-
-  return (
-    <div className="flex h-screen w-screen flex-col items-center justify-center bg-canvas-light dark:bg-canvas-dark text-ink-primary dark:text-ink-primary-dark p-6">
-      <div className="max-w-md w-full bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark rounded-3xl p-8 shadow-telegram text-center flex flex-col items-center gap-4">
-        <div className="w-12 h-12 rounded-2xl bg-brand flex items-center justify-center text-white shadow-md shadow-brand/20">
-          <MessageSquare className="w-6 h-6" />
-        </div>
-        <div>
-          <h2 className="text-xl font-bold">Chào mừng trở lại, {user?.username}!</h2>
-          <p className="text-sm text-ink-secondary dark:text-ink-secondary-dark mt-1">
-            Email: {user?.email}
-          </p>
-        </div>
-        <div className="w-full py-3 px-4 bg-brand-soft/50 dark:bg-brand-dark/30 rounded-xl text-brand dark:text-brand-accent text-xs font-mono">
-          Phiên đăng nhập đã được xác thực qua JWT & Redis
-        </div>
-        <Button
-          variant="outline"
-          onClick={logout}
-          className="w-full flex items-center justify-center gap-2"
-        >
-          <LogOut className="w-4 h-4 text-coral" />
-          Đăng xuất tài khoản
-        </Button>
-      </div>
-    </div>
-  )
-}
+import { WelcomeEmptyCanvas } from '@/components/layout/WelcomeEmptyCanvas'
 
 export function App() {
   const { initializeAuth } = useAuthStore()
@@ -78,7 +43,7 @@ export function App() {
             </ProtectedRoute>
           }
         >
-          <Route path="/chat" element={<ChatPlaceholder />} />
+          <Route path="/chat" element={<WelcomeEmptyCanvas />} />
           <Route
             path="/friends"
             element={

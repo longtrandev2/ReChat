@@ -3,7 +3,7 @@ import { NavigationRail } from './NavigationRail'
 
 export function AppLayout() {
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-canvas dark:bg-canvas-dark text-ink-primary dark:text-ink-primary-dark select-none">
+    <div className="flex h-screen w-screen overflow-hidden bg-canvas-light dark:bg-canvas-dark text-ink-primary dark:text-ink-primary-dark select-none">
       {/* 1. Global Navigation Rail (64px) bên trái */}
       <NavigationRail />
 
