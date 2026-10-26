@@ -10,14 +10,12 @@ interface UserStatusEventPayload {
 }
 
 /**
- * Custom Hook: useSocket
- * Tự động gắn kết vòng đời kết nối WebSocket với trạng thái đăng nhập của người dùng.
- * - Khi có JWT Token: Tự động khởi tạo kết nối Handshake tới NestJS ChatGateway.
- * - Khi Đăng xuất: Ngắt kết nối và dọn sạch listeners.
+ * useSocketInit: Quản lý vòng đời kết nối WebSocket gắn với phiên đăng nhập.
+ * Được mount 1 lần duy nhất tại AppLayout để ngăn chặn duplicate event listeners.
  */
-export function useSocket() {
+export function useSocketInit() {
   const { token, isAuthenticated } = useAuthStore()
-  const { status, setStatus, updateUserStatus, reset } = useSocketStore()
+  const { setStatus, updateUserStatus, reset } = useSocketStore()
 
   useEffect(() => {
     // Nếu chưa đăng nhập hoặc không có token, đảm bảo ngắt kết nối
@@ -60,7 +58,7 @@ export function useSocket() {
       setStatus('connected')
     }
 
-    // Cleanup khi component unmount hoặc token thay đổi
+    // Cleanup khi layout unmount hoặc token thay đổi
     return () => {
       socket.off('connect', handleConnect)
       socket.off('disconnect', handleDisconnect)
@@ -68,10 +66,23 @@ export function useSocket() {
       socket.off('user_status', handleUserStatus)
     }
   }, [token, isAuthenticated, setStatus, updateUserStatus, reset])
+}
+
+/**
+ * useSocket: Hook tiêu dùng trạng thái Socket từ Store cho UI components.
+ * An toàn khi gọi ở nhiều nơi mà không tạo thêm socket connection hay duplicate listeners.
+ */
+export function useSocket() {
+  const status = useSocketStore((state) => state.status)
+  const isConnected = status === 'connected'
+  const onlineUsers = useSocketStore((state) => state.onlineUsers)
+  const isUserOnline = useSocketStore((state) => state.isUserOnline)
 
   return {
     socket: socketClient.getSocket(),
     status,
-    isConnected: status === 'connected',
+    isConnected,
+    onlineUsers,
+    isUserOnline,
   }
 }

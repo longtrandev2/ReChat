@@ -13,7 +13,7 @@ export function WelcomeEmptyCanvas() {
     >
       <div className="flex flex-col items-center max-w-sm text-center">
         {/* Telegram-style Circular Icon Container */}
-        <div className="w-18 h-18 rounded-full bg-brand/10 dark:bg-brand-dark/20 text-brand dark:text-brand-accent flex items-center justify-center mb-5 shadow-subtle">
+        <div className="w-20 h-20 rounded-full bg-brand/10 dark:bg-brand-dark/20 text-brand dark:text-brand-accent flex items-center justify-center mb-5 shadow-subtle">
           <Send
             className="w-8 h-8 translate-x-0.5 -translate-y-0.5 -rotate-12"
             aria-hidden="true"
@@ -29,7 +29,7 @@ export function WelcomeEmptyCanvas() {
         </p>
 
         {/* Realtime Gateway Badge */}
-        <div className="inline-flex items-center gap-2 px-3 py-1.5 mt-5 rounded-full bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark text-xs text-ink-secondary dark:text-ink-secondary-dark shadow-xs">
+        <div className="inline-flex items-center gap-2 px-3 py-1.5 mt-5 rounded-full bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark text-xs text-ink-secondary dark:text-ink-secondary-dark shadow-subtle">
           <span
             className="w-2 h-2 rounded-full bg-presence-online animate-pulse"
             aria-hidden="true"
