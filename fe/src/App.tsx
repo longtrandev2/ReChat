@@ -11,6 +11,7 @@ import { ForgotPasswordPage } from '@/features/auth/pages/ForgotPasswordPage'
 import { ResetPasswordPage } from '@/features/auth/pages/ResetPasswordPage'
 import { Button } from '@/components/ui/button'
 import { LogOut, MessageSquare } from 'lucide-react'
+import { AppLayout } from '@/components/layout/AppLayout'
 
 /**
  * Temporary Chat App Shell for Protected Route testing
@@ -69,15 +70,32 @@ export function App() {
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
 
-        {/* Protected Chat Route */}
+        {/* Protected Application Routes with Telegram AppLayout */}
         <Route
-          path="/chat"
           element={
             <ProtectedRoute>
-              <ChatPlaceholder />
+              <AppLayout />
             </ProtectedRoute>
           }
-        />
+        >
+          <Route path="/chat" element={<ChatPlaceholder />} />
+          <Route
+            path="/friends"
+            element={
+              <div className="flex h-full w-full items-center justify-center p-6 text-ink-secondary">
+                <p className="text-lg font-medium">Danh sách Bạn bè (Friends)</p>
+              </div>
+            }
+          />
+          <Route
+            path="/settings"
+            element={
+              <div className="flex h-full w-full items-center justify-center p-6 text-ink-secondary">
+                <p className="text-lg font-medium">Cài đặt Tài khoản (Settings)</p>
+              </div>
+            }
+          />
+        </Route>
 
         {/* Default Fallback Redirect */}
         <Route path="/" element={<Navigate to="/chat" replace />} />
