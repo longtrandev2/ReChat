@@ -112,21 +112,23 @@ export function MessageComposer({
 
   return (
     <div
-      className="px-4 py-3 border-t border-border-light dark:border-border-dark bg-surface-light dark:bg-surface-dark flex items-end gap-2 shrink-0 z-10 select-none"
+      className="p-3 md:pb-4 max-w-3xl mx-auto w-full flex items-end gap-2 shrink-0 z-10 select-none"
       data-testid="message-composer"
     >
-      {/* Nút đính kèm tệp */}
-      <button
-        type="button"
-        aria-label="Đính kèm tệp"
-        disabled={disabled}
-        className="p-2 text-ink-secondary dark:text-ink-secondary-dark hover:bg-surface-hover dark:hover:bg-surface-dark-secondary rounded-xl transition-colors disabled:opacity-40"
-      >
-        <Paperclip className="w-5 h-5" />
-      </button>
+      {/* Khung nhập văn bản dạng con nhộng (Pill Capsule) */}
+      <div className="flex-1 flex items-end rounded-3xl bg-surface-light dark:bg-[#17212B] px-3.5 py-1.5 border border-border-light/80 dark:border-border-dark shadow-xs focus-within:ring-2 focus-within:ring-brand/30 focus-within:border-brand transition-all">
+        {/* Nút đính kèm tệp */}
+        <button
+          type="button"
+          aria-label="Đính kèm tệp"
+          title="Đính kèm tệp hoặc ảnh"
+          disabled={disabled}
+          className="p-1.5 text-ink-secondary dark:text-ink-secondary-dark hover:text-brand dark:hover:text-brand-accent hover:bg-brand-soft/50 dark:hover:bg-white/5 rounded-full transition-all disabled:opacity-40 mb-0.5"
+        >
+          <Paperclip className="w-5 h-5" />
+        </button>
 
-      {/* Khung nhập văn bản */}
-      <div className="flex-1 flex items-end rounded-2xl bg-canvas-light dark:bg-canvas-dark px-3 py-1.5 border border-border-light/60 dark:border-border-dark focus-within:border-brand dark:focus-within:border-brand-accent transition-colors">
+        {/* Textarea nhập tin nhắn co giãn */}
         <textarea
           ref={textareaRef}
           value={content}
@@ -135,28 +137,32 @@ export function MessageComposer({
           disabled={disabled}
           placeholder="Soạn tin nhắn..."
           rows={1}
-          className="flex-1 bg-transparent text-sm resize-none outline-none text-ink-primary dark:text-ink-primary-dark placeholder:text-ink-muted max-h-[120px] leading-relaxed py-1 select-text"
+          className="flex-1 bg-transparent text-sm resize-none outline-none text-ink-primary dark:text-ink-primary-dark placeholder:text-ink-muted max-h-[140px] leading-relaxed py-1.5 px-2 select-text"
           aria-label="Nội dung tin nhắn"
         />
+
+        {/* Nút biểu tượng cảm xúc */}
         <button
           type="button"
           aria-label="Chọn biểu tượng cảm xúc"
+          title="Biểu tượng cảm xúc"
           disabled={disabled}
-          className="p-1 text-ink-secondary dark:text-ink-secondary-dark hover:text-brand dark:hover:text-brand-accent transition-colors disabled:opacity-40 mb-0.5"
+          className="p-1.5 text-ink-secondary dark:text-ink-secondary-dark hover:text-brand dark:hover:text-brand-accent hover:scale-110 transition-all disabled:opacity-40 mb-0.5"
         >
           <Smile className="w-5 h-5" />
         </button>
       </div>
 
-      {/* Nút gửi tin nhắn (Telegram Brand Blue) */}
+      {/* Nút gửi tin nhắn hình tròn (Telegram Brand Blue Circle) */}
       <button
         type="button"
         aria-label="Gửi tin nhắn"
+        title="Gửi tin nhắn (Enter)"
         onClick={handleSend}
         disabled={!canSend}
-        className="w-9 h-9 rounded-full bg-brand text-white flex items-center justify-center shrink-0 hover:bg-brand-hover active:scale-95 transition-all shadow-subtle disabled:opacity-40 disabled:hover:bg-brand disabled:active:scale-100"
+        className="w-11 h-11 rounded-full bg-brand text-white flex items-center justify-center shrink-0 hover:bg-brand-hover active:scale-95 transition-all shadow-md disabled:opacity-40 disabled:hover:bg-brand disabled:active:scale-100 disabled:shadow-none"
       >
-        <Send className="w-4 h-4 ml-0.5" />
+        <Send className="w-5 h-5 ml-0.5 transition-transform" />
       </button>
     </div>
   )

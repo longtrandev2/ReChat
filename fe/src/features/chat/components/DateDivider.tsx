@@ -13,7 +13,7 @@ export function DateDivider({ date }: DateDividerProps) {
 
   return (
     <div className="flex justify-center my-3 select-none pointer-events-none sticky top-2 z-10">
-      <span className="px-3 py-0.5 rounded-full text-xs font-medium bg-[#000000]/15 dark:bg-[#000000]/40 text-ink-primary dark:text-ink-primary-dark backdrop-blur-md shadow-xs">
+      <span className="px-3.5 py-0.5 rounded-full text-[12px] font-medium bg-black/25 dark:bg-black/45 text-white backdrop-blur-md shadow-xs border border-white/10 tracking-wide">
         {formatted}
       </span>
     </div>

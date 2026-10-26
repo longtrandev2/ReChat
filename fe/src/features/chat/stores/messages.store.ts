@@ -5,6 +5,7 @@ import type { Message } from '../types/message.types'
 export interface MessagesState {
   messagesByConversation: Record<string, Message[]>
   hasMoreByConversation: Record<string, boolean>
+  lastReadMessageIdByConversation: Record<string, string> // conversationId -> lastReadMessageId
   typingUsers: Record<string, Record<string, string>> // conversationId -> { [userId]: displayName }
   isLoadingMessages: boolean
   error: string | null
@@ -18,6 +19,7 @@ export interface MessagesState {
     displayName: string,
     isTyping: boolean
   ) => void
+  setLastReadMessageId: (conversationId: string, messageId: string) => void
   clearConversationMessages: (conversationId: string) => void
   reset: () => void
 }
@@ -31,6 +33,7 @@ const typingTimers: Record<string, ReturnType<typeof setTimeout>> = {}
 export const useMessagesStore = create<MessagesState>((set, get) => ({
   messagesByConversation: {},
   hasMoreByConversation: {},
+  lastReadMessageIdByConversation: {},
   typingUsers: {},
   isLoadingMessages: false,
   error: null,
@@ -150,6 +153,15 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
     }
   },
 
+  setLastReadMessageId: (conversationId: string, messageId: string) => {
+    set((state) => ({
+      lastReadMessageIdByConversation: {
+        ...state.lastReadMessageIdByConversation,
+        [conversationId]: messageId,
+      },
+    }))
+  },
+
   clearConversationMessages: (conversationId: string) => {
     // Clear any timers for this conversation
     Object.keys(typingTimers).forEach((key) => {
@@ -162,15 +174,18 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
     set((state) => {
       const nextMessages = { ...state.messagesByConversation }
       const nextHasMore = { ...state.hasMoreByConversation }
+      const nextLastRead = { ...state.lastReadMessageIdByConversation }
       const nextTyping = { ...state.typingUsers }
 
       delete nextMessages[conversationId]
       delete nextHasMore[conversationId]
+      delete nextLastRead[conversationId]
       delete nextTyping[conversationId]
 
       return {
         messagesByConversation: nextMessages,
         hasMoreByConversation: nextHasMore,
+        lastReadMessageIdByConversation: nextLastRead,
         typingUsers: nextTyping,
       }
     })
@@ -186,6 +201,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
     set({
       messagesByConversation: {},
       hasMoreByConversation: {},
+      lastReadMessageIdByConversation: {},
       typingUsers: {},
       isLoadingMessages: false,
       error: null,

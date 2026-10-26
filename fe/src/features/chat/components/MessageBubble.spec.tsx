@@ -36,11 +36,13 @@ describe('MessageBubble Component Tests', () => {
     expect(screen.getByLabelText('Đã gửi')).toBeInTheDocument()
   })
 
-  it('renders incoming text message with left alignment and no delivery checkmark', () => {
-    render(<MessageBubble message={baseMessage} isOutgoing={false} />)
+  it('renders incoming text message with left alignment and sender avatar', () => {
+    render(<MessageBubble message={baseMessage} isOutgoing={false} showAvatar={true} />)
 
     expect(screen.getByText('Xin chào bạn nhé!')).toBeInTheDocument()
     expect(screen.queryByLabelText('Đã đọc')).not.toBeInTheDocument()
+    // Check avatar fallback initials 'NV'
+    expect(screen.getByText('NV')).toBeInTheDocument()
     const container = screen.getByTestId('message-bubble-msg-1')
     expect(container).toHaveClass('justify-start')
   })

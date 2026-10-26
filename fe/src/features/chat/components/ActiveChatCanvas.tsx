@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useMemo } from 'react'
+import { useEffect, useCallback, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { ChatHeader } from './ChatHeader'
 import { MessageFeed } from './MessageFeed'
@@ -8,12 +8,14 @@ import { useMessagesStore } from '../stores/messages.store'
 import { useSocketStore } from '@/stores/socket.store'
 import { useAuthStore } from '@/stores/auth.store'
 import { socketClient } from '@/services/socket.client'
+import { conversationApi } from '@/features/conversations/services/conversation.api'
+import type { ConversationMemberUser } from '@/features/conversations/types/conversation.types'
 
 /**
- * ActiveChatCanvas: Vùng hiển thị cuộc hội thoại đang hoạt động (Active Chat Canvas)
- * - Tự động join/leave room WebSocket theo conversationId
- * - Đồng bộ tin nhắn ban đầu và phân trang cuộn lên (Load Older)
- * - Ráp nối ChatHeader, MessageFeed và MessageComposer
+ * ActiveChatCanvas: Vùng hiển thị cuộc hội thoại đang hoạt động chuẩn Telegram Web
+ * - Giao diện căn giữa cân đối (max-w-3xl mx-auto) với texture nền Telegram mờ nhẹ
+ * - Bóc tách chính xác đối phương (partner) để hiển thị chấm xanh Online/Offline thời gian thực
+ * - Tự động đồng bộ tin nhắn, gửi socket markAsRead và theo dõi trạng thái đã đọc
  */
 export function ActiveChatCanvas() {
   const { conversationId } = useParams<{ conversationId: string }>()
@@ -23,13 +25,17 @@ export function ActiveChatCanvas() {
   const {
     messagesByConversation,
     hasMoreByConversation,
+    lastReadMessageIdByConversation,
     typingUsers,
     isLoadingMessages,
     fetchMessages,
   } = useMessagesStore()
   const { userStatuses } = useSocketStore()
 
-  // Tìm cuộc hội thoại hiện tại
+  // Thông tin đối phương trong cuộc trò chuyện trực tiếp (Direct)
+  const [partner, setPartner] = useState<ConversationMemberUser | null>(null)
+
+  // Tìm cuộc hội thoại trong Inbox store
   const conversation = useMemo(() => {
     return conversations.find((c) => c.id === conversationId)
   }, [conversations, conversationId])
@@ -42,17 +48,51 @@ export function ActiveChatCanvas() {
     return conversationId ? Boolean(hasMoreByConversation[conversationId]) : false
   }, [hasMoreByConversation, conversationId])
 
+  const lastReadId = useMemo(() => {
+    return conversationId ? lastReadMessageIdByConversation[conversationId] : undefined
+  }, [lastReadMessageIdByConversation, conversationId])
+
   const typingNames = useMemo(() => {
     if (!conversationId || !typingUsers[conversationId]) return []
     return Object.values(typingUsers[conversationId])
   }, [typingUsers, conversationId])
 
-  // Trạng thái online của đối phương trong cuộc hội thoại trực tiếp
+  // Trạng thái online của đối phương qua socket presence hoặc initial detail
   const isOnline = useMemo(() => {
-    if (!conversation || conversation.type === 'GROUP') return false
-    // Kiểm tra qua lastMessage sender hoặc status store
-    return Object.values(userStatuses || {}).some((s) => s?.status === 'ONLINE')
-  }, [conversation, userStatuses])
+    if (!conversation || conversation.type === 'GROUP' || !partner?.id) return false
+    const liveStatus = userStatuses[partner.id]?.status
+    if (liveStatus !== undefined) {
+      return liveStatus === 'ONLINE'
+    }
+    return Boolean(partner.isOnline)
+  }, [conversation, partner, userStatuses])
+
+  // Tải chi tiết cuộc hội thoại để bóc tách thông tin partner & initial online
+  useEffect(() => {
+    if (!conversationId) return
+
+    let isMounted = true
+
+    conversationApi
+      .getConversationById(conversationId)
+      .then((detail) => {
+        if (!isMounted || !detail) return
+
+        if (detail.type === 'DIRECT' && detail.members) {
+          const otherMember = detail.members.find((m) => m.user.id !== user?.id)
+          if (otherMember) {
+            setPartner(otherMember.user)
+          }
+        }
+      })
+      .catch(() => {
+        // Fallback: nếu lỗi API detail thì vẫn giữ state bình thường
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [conversationId, user?.id])
 
   // Vòng đời Room WebSocket và tải tin nhắn ban đầu
   useEffect(() => {
@@ -63,6 +103,7 @@ export function ActiveChatCanvas() {
     const socket = socketClient.getSocket()
     if (socket && socket.connected) {
       socket.emit('joinConversation', { conversationId })
+      socket.emit('markAsRead', { conversationId })
     }
 
     // Tải 30 tin nhắn mới nhất
@@ -112,31 +153,40 @@ export function ActiveChatCanvas() {
 
   return (
     <div
-      className="flex-1 flex flex-col h-full bg-canvas-light dark:bg-canvas-dark overflow-hidden"
+      className="flex-1 flex flex-col h-full bg-gradient-to-b from-[#E8EFF6] via-canvas-light to-[#E1EAF2] dark:from-[#111B27] dark:via-[#0E1621] dark:to-[#0A1017] relative overflow-hidden transition-colors"
       data-testid="active-chat-canvas"
     >
-      {/* Header */}
+      {/* Texture họa tiết nền Telegram sang trọng */}
+      <div
+        className="absolute inset-0 pointer-events-none opacity-[0.04] dark:opacity-[0.055] bg-[radial-gradient(#2481CC_1.2px,transparent_1.2px)] [background-size:20px_20px]"
+        aria-hidden="true"
+      />
+
+      {/* Header cố định ở trên đỉnh */}
       <ChatHeader
         conversation={conversation}
         isOnline={isOnline}
         typingUserNames={typingNames}
       />
 
-      {/* Message Feed */}
-      <MessageFeed
-        messages={messages}
-        currentUserId={user?.id || ''}
-        isGroup={conversation.type === 'GROUP'}
-        hasMore={hasMore}
-        isLoadingOlder={isLoadingMessages}
-        onLoadMore={handleLoadMore}
-      />
+      {/* Cột luồng chat căn giữa (max-w-3xl) chuẩn Telegram Web */}
+      <div className="flex-1 flex flex-col overflow-hidden relative z-10 w-full max-w-3xl mx-auto">
+        <MessageFeed
+          messages={messages}
+          currentUserId={user?.id || ''}
+          isGroup={conversation.type === 'GROUP'}
+          hasMore={hasMore}
+          isLoadingOlder={isLoadingMessages}
+          lastReadMessageId={lastReadId}
+          typingUserNames={typingNames}
+          onLoadMore={handleLoadMore}
+        />
 
-      {/* Message Composer */}
-      <MessageComposer
-        conversationId={conversation.id}
-        onSendMessage={handleSendMessage}
-      />
+        <MessageComposer
+          conversationId={conversation.id}
+          onSendMessage={handleSendMessage}
+        />
+      </div>
     </div>
   )
 }

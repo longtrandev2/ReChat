@@ -32,6 +32,14 @@ interface UserTypingPayload {
   isTyping: boolean
 }
 
+interface MessageReadPayload {
+  conversationId: string
+  userId: string
+  username?: string
+  displayName?: string
+  lastReadMessageId?: string
+}
+
 /**
  * useSocketInit: Quản lý vòng đời kết nối WebSocket gắn với phiên đăng nhập.
  * Được mount 1 lần duy nhất tại AppLayout để ngăn chặn duplicate event listeners.
@@ -121,6 +129,13 @@ export function useSocketInit() {
       )
     }
 
+    const handleMessageRead = (payload: MessageReadPayload) => {
+      if (!payload || !payload.conversationId || !payload.lastReadMessageId) return
+      useMessagesStore
+        .getState()
+        .setLastReadMessageId(payload.conversationId, payload.lastReadMessageId)
+    }
+
     // Đăng ký listeners
     socket.on('connect', handleConnect)
     socket.on('disconnect', handleDisconnect)
@@ -131,6 +146,7 @@ export function useSocketInit() {
     socket.on('conversationUpdated', handleConversationUpdated)
     socket.on('newMessage', handleNewMessage)
     socket.on('userTyping', handleUserTyping)
+    socket.on('messageRead', handleMessageRead)
 
     // Cập nhật trạng thái nếu socket đã kết nối trước đó
     if (socket.connected) {
@@ -148,6 +164,7 @@ export function useSocketInit() {
       socket.off('conversationUpdated', handleConversationUpdated)
       socket.off('newMessage', handleNewMessage)
       socket.off('userTyping', handleUserTyping)
+      socket.off('messageRead', handleMessageRead)
     }
   }, [token, isAuthenticated, setStatus, updateUserStatus, reset])
 }

@@ -110,4 +110,29 @@ describe('MessageFeed Component Tests', () => {
     // mockMsg2 is from user-me (outgoing) -> should NOT display sender name above bubble
     expect(screen.queryByText('Tôi')).not.toBeInTheDocument()
   })
+
+  it('renders Telegram typing 3-dots bubble when typingUserNames is provided', () => {
+    render(
+      <MessageFeed
+        messages={[mockMsg1]}
+        currentUserId={currentUserId}
+        typingUserNames={['Bạn Thân']}
+      />
+    )
+
+    expect(screen.getByTestId('feed-typing-bubble')).toBeInTheDocument()
+  })
+
+  it('correctly sets isRead to true when message matches lastReadMessageId', () => {
+    render(
+      <MessageFeed
+        messages={[mockMsg2]}
+        currentUserId={currentUserId}
+        lastReadMessageId="msg-2"
+      />
+    )
+
+    // mockMsg2 is outgoing and matches lastReadMessageId -> should be marked as read
+    expect(screen.getByLabelText('Đã đọc')).toBeInTheDocument()
+  })
 })
