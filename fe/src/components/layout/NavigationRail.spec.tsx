@@ -25,6 +25,17 @@ vi.mock('@/features/auth/services/auth.api', () => ({
   },
 }))
 
+// Mock useSocket
+const mockUseSocket = vi.fn(() => ({
+  isConnected: true,
+  status: 'connected',
+  socket: null,
+}))
+
+vi.mock('@/hooks/useSocket', () => ({
+  useSocket: () => mockUseSocket(),
+}))
+
 function LocationDisplay() {
   const location = useLocation()
   return <div data-testid="location-display">{location.pathname}</div>
@@ -73,15 +84,23 @@ describe('NavigationRail Component Tests', () => {
     })
   })
 
-  it('renders user avatar with fallback initials and presence dot', () => {
-    renderNavigationRail()
+  it('renders user avatar with fallback initials and presence dot (online and offline)', () => {
+    mockUseSocket.mockReturnValue({ isConnected: true, status: 'connected', socket: null })
+    const { unmount } = renderNavigationRail()
 
     // Avatar link
     expect(screen.getByRole('link', { name: /cài đặt tài khoản/i })).toBeInTheDocument()
     // Fallback initials for 'Alex Tran' -> 'AL'
     expect(screen.getByText('AL')).toBeInTheDocument()
-    // Presence dot
+    // Presence dot (Online)
     expect(screen.getByTitle('Đang trực tuyến')).toBeInTheDocument()
+
+    unmount()
+
+    // Presence dot (Offline)
+    mockUseSocket.mockReturnValue({ isConnected: false, status: 'disconnected', socket: null })
+    renderNavigationRail()
+    expect(screen.getByTitle('Ngoại tuyến')).toBeInTheDocument()
   })
 
   it('renders all navigation items and highlights active tab correctly', () => {

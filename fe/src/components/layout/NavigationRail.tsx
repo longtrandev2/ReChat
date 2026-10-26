@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { Avatar, AvatarFallback, AvatarImage, PresenceDot } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { useAuthStore } from '@/stores/auth.store'
+import { useSocket } from '@/hooks/useSocket'
 import { authApi } from '@/features/auth/services/auth.api'
 import { cn } from '@/lib/utils'
 
@@ -27,6 +28,7 @@ export function NavigationRail() {
   const location = useLocation()
   const navigate = useNavigate()
   const { user, logout: logoutStore } = useAuthStore()
+  const { isConnected } = useSocket()
 
   // State quản lý theme sáng / tối đồng bộ với AuthLayout
   const [isDark, setIsDark] = useState(() => {
@@ -90,7 +92,7 @@ export function NavigationRail() {
             {user?.avatarUrl && <AvatarImage src={user.avatarUrl} alt={user.username} />}
             <AvatarFallback>{initials}</AvatarFallback>
           </Avatar>
-          <PresenceDot isOnline={true} />
+          <PresenceDot isOnline={isConnected} />
         </Link>
       </div>
 
