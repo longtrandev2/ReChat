@@ -1,6 +1,6 @@
 ---
 name: ReChat Telegram Messenger
-description: Authentic Telegram-inspired minimalist, fast, distraction-free design system for ReChat
+description: Authentic Telegram-inspired minimalist, fast, distraction-free design system for ReChat with modern micro-interactions
 colors:
   primary: "#2481CC"
   primary-hover: "#1E74B8"
@@ -52,29 +52,64 @@ rounded:
   lg: 12px
   xl: 16px
   full: 9999px
+motion:
+  timing-fast: 150ms
+  timing-normal: 200ms
+  easing: cubic-bezier(0.16, 1, 0.3, 1)
 ---
 
-# ReChat Design Specification (Telegram Style)
+# ReChat Design Specification (Telegram Style & Modern Messenger)
 
 ## Overview
-ReChat adheres to the world-class principles of **Telegram Web**: calm, lightning-fast, distraction-free, and hyper-legible. We strictly reject AI-slop ornaments, fake telemetry, and non-functional badges in favor of purposeful utility and crisp aesthetics.
+ReChat adheres to the world-class principles of **Telegram Web (Web K/Z)** and modern desktop messengers (Slack, Discord, Linear): calm, lightning-fast, distraction-free, hyper-legible, and enriched with delightful micro-interactions.
 
-## Colors
-- **Telegram Blue (`#2481CC`)**: Clean, authoritative, recognizable primary brand color used on primary CTAs, active highlights, and verification prompts.
+## Colors & Materiality
+- **Telegram Blue (`#2481CC`)**: Clean, authoritative, recognizable primary brand color used on active highlights, send buttons, and focus states.
 - **Telegram Soft Green (`#EFFDDE`)**: The iconic Telegram speech bubble for outgoing messages (in dark mode: `#2B5278`).
-- **Presence Online (`#4FAE4E`)**: Crisp green online status dot.
-- **Canvas (`#F4F4F5` / Dark: `#0E1621`)**: Clean background ensuring extreme legibility.
-- **Surfaces (`#FFFFFF` / Dark: `#17212B`)**: Crisp panels, message lists, and dialogs.
+- **Presence Online (`#4FAE4E`)**: Crisp green online status dot with subtle pulse.
+- **Canvas (`#F4F4F5` / Dark: `#0E1621`)**: Soft ambient gradient background (`from-[#E8EFF6] via-canvas-light to-[#E1EAF2]`) with light radial texture.
+- **Surfaces (`#FFFFFF` / Dark: `#17212B`)**: Crisp panels, floating capsules, and dialogs.
 - **Secondary Ink (`#707579`)**: Telegram's standard for timestamps, status subtitles, and placeholder hints.
 
 ## Typography
 - System-grade font `Be Vietnam Pro` with robust fallback to native macOS (`-apple-system`) and Android (`Roboto`).
 - `JetBrains Mono` reserved for 6-digit verification codes.
 
-## Layout & Auth Flow (Telegram Web Standard)
-- Centered circular Telegram-inspired brand badge with gentle floating elevation.
-- Prominent heading: "ReChat" or "Đăng nhập ReChat".
-- Helpful guidance subtext: "Vui lòng nhập tài khoản hoặc email để bắt đầu nhắn tin".
-- High-contrast, clean input fields with soft focus rings.
-- Large full-width primary button (`bg-[#2481CC] text-white py-3 rounded-xl uppercase font-semibold text-sm tracking-wider`).
-- Fast navigation between Login, Register, and OTP verification.
+## Micro-Interactions & State Architecture (Modern Messenger Standard)
+
+### 1. Conversation Sidebar Item States
+- **Rest State**:
+  - Borderless, clean typography, tabular timestamp on top right.
+  - Avatar with 1px border and status dot.
+- **Hover State (`hover:bg-black/[0.04] dark:hover:bg-white/[0.06]`)**:
+  - Smooth 150ms transition.
+  - Quick action trigger (3-dots context menu icon) smoothly fades in on the right (`opacity-0 group-hover:opacity-100 transition-opacity`).
+  - Avatar gets subtle micro-scale (`scale-[1.03]`).
+- **Active State (`bg-brand/10 dark:bg-brand-dark/20`)**:
+  - Vertical accent indicator pill on the left edge (`before:absolute before:left-0 before:top-2 before:bottom-2 before:w-1 before:bg-brand before:rounded-r-full`).
+  - Active conversation text is crisp with primary font weight.
+
+### 2. Message Bubble Interactivity
+- **Hover Reaction & Action Bar**:
+  - Hovering over a message bubble reveals a subtle micro action button (Quick Reply / Reaction) without altering text flow.
+  - Smooth shadow elevation (`hover:shadow-md transition-shadow`).
+- **Inline Metadata Wrapping**:
+  - Short messages keep text and timestamp + read checkmarks on the same row (`flex-wrap: wrap; items-end; gap-x-2.5`).
+  - Double checkmark turns vivid `#4FAE4E` / `#5288C1` when read.
+
+### 3. Navigation Rail (Global Left Bar)
+- **Active Pill Indicator**:
+  - Vertical pill indicator on the far left edge of the rail to communicate the active module cleanly (Discord/Slack standard).
+  - Hover tooltip with item name and subtle icon scale (`group-hover:scale-110`).
+- **Theme Toggle Micro-Animation**:
+  - Sun/Moon icon rotates and scales gracefully on hover and toggle.
+
+### 4. Floating Capsule Composer
+- **Input Container**:
+  - Floating pill (`rounded-3xl`) with gentle elevation and focus border glow (`focus-within:ring-2 focus-within:ring-brand/25`).
+  - Paperclip and emoji buttons provide tactile feedback (`hover:scale-110 active:scale-95`).
+- **Send Trigger**:
+  - Circular brand blue button with spring active push (`active:scale-95 transition-transform`).
+
+### 5. Floating Quick-Scroll Button
+- Floating circular button (`ChevronDown`) with smooth entrance animation (`animate-in fade-in zoom-in-75 duration-150`) appears when user scrolls up from feed bottom.

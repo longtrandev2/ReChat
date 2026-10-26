@@ -116,16 +116,16 @@ export function MessageComposer({
       data-testid="message-composer"
     >
       {/* Khung nhập văn bản dạng con nhộng (Pill Capsule) */}
-      <div className="flex-1 flex items-end rounded-3xl bg-surface-light dark:bg-[#17212B] px-3.5 py-1.5 border border-border-light/80 dark:border-border-dark shadow-xs focus-within:ring-2 focus-within:ring-brand/30 focus-within:border-brand transition-all">
+      <div className="flex-1 flex items-end rounded-3xl bg-surface-light dark:bg-[#17212B] px-3.5 py-1.5 border border-border-light/80 dark:border-border-dark shadow-xs focus-within:ring-2 focus-within:ring-brand/30 focus-within:border-brand focus-within:shadow-[0_0_0_3px_rgba(42,171,238,0.12)] transition-all">
         {/* Nút đính kèm tệp */}
         <button
           type="button"
           aria-label="Đính kèm tệp"
           title="Đính kèm tệp hoặc ảnh"
           disabled={disabled}
-          className="p-1.5 text-ink-secondary dark:text-ink-secondary-dark hover:text-brand dark:hover:text-brand-accent hover:bg-brand-soft/50 dark:hover:bg-white/5 rounded-full transition-all disabled:opacity-40 mb-0.5"
+          className="p-1.5 text-ink-secondary dark:text-ink-secondary-dark hover:text-brand dark:hover:text-brand-accent hover:bg-brand-soft/50 dark:hover:bg-white/5 rounded-full transition-all duration-150 hover:rotate-12 hover:scale-110 active:scale-90 disabled:opacity-40 mb-0.5 cursor-pointer"
         >
-          <Paperclip className="w-5 h-5" />
+          <Paperclip className="w-5 h-5 transition-transform" />
         </button>
 
         {/* Textarea nhập tin nhắn co giãn */}
@@ -147,9 +147,9 @@ export function MessageComposer({
           aria-label="Chọn biểu tượng cảm xúc"
           title="Biểu tượng cảm xúc"
           disabled={disabled}
-          className="p-1.5 text-ink-secondary dark:text-ink-secondary-dark hover:text-brand dark:hover:text-brand-accent hover:scale-110 transition-all disabled:opacity-40 mb-0.5"
+          className="p-1.5 text-ink-secondary dark:text-ink-secondary-dark hover:text-amber-500 dark:hover:text-amber-400 hover:scale-115 active:scale-90 transition-all duration-150 disabled:opacity-40 mb-0.5 cursor-pointer"
         >
-          <Smile className="w-5 h-5" />
+          <Smile className="w-5 h-5 transition-transform" />
         </button>
       </div>
 
@@ -160,9 +160,9 @@ export function MessageComposer({
         title="Gửi tin nhắn (Enter)"
         onClick={handleSend}
         disabled={!canSend}
-        className="w-11 h-11 rounded-full bg-brand text-white flex items-center justify-center shrink-0 hover:bg-brand-hover active:scale-95 transition-all shadow-md disabled:opacity-40 disabled:hover:bg-brand disabled:active:scale-100 disabled:shadow-none"
+        className="w-11 h-11 rounded-full bg-brand text-white flex items-center justify-center shrink-0 hover:bg-brand-hover hover:scale-105 active:scale-95 transition-all duration-150 shadow-md hover:shadow-brand/25 disabled:opacity-40 disabled:hover:bg-brand disabled:hover:scale-100 disabled:active:scale-100 disabled:shadow-none group cursor-pointer"
       >
-        <Send className="w-5 h-5 ml-0.5 transition-transform" />
+        <Send className="w-5 h-5 ml-0.5 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
       </button>
     </div>
   )

@@ -73,9 +73,12 @@ export function ChatHeader({
     }
 
     return (
-      <span className="text-xs text-ink-secondary dark:text-ink-secondary-dark font-normal">
+      <span className="text-xs text-ink-secondary dark:text-ink-secondary-dark font-normal flex items-center">
         {isOnline ? (
-          <span className="text-presence-online font-medium">Đang trực tuyến</span>
+          <span className="text-presence-online font-medium flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-presence-online animate-pulse inline-block" />
+            Đang trực tuyến
+          </span>
         ) : (
           'Ngoại tuyến'
         )}

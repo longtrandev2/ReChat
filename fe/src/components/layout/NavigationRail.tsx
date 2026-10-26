@@ -119,6 +119,16 @@ export function NavigationRail() {
                   : 'text-ink-secondary dark:text-ink-secondary-dark hover:text-ink-primary dark:hover:text-ink-primary-dark hover:bg-surface-hover dark:hover:bg-surface-dark-secondary'
               )}
             >
+              {/* Modern active / hover indicator pill */}
+              <span
+                className={cn(
+                  'absolute -left-2 top-1/2 -translate-y-1/2 w-1 rounded-r-full bg-brand transition-all duration-200 pointer-events-none',
+                  isActive
+                    ? 'h-6 opacity-100'
+                    : 'h-0 opacity-0 group-hover:h-3 group-hover:opacity-60'
+                )}
+                aria-hidden="true"
+              />
               <Icon className="w-5 h-5 transition-transform duration-150 group-hover:scale-110" />
             </Link>
           )

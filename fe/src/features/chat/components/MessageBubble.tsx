@@ -1,4 +1,4 @@
-import { Check, CheckCheck } from 'lucide-react'
+import { Check, CheckCheck, Smile, Reply, MoreHorizontal } from 'lucide-react'
 import { format } from 'date-fns'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import type { Message } from '../types/message.types'
@@ -11,6 +11,8 @@ interface MessageBubbleProps {
   showSenderName?: boolean
   showAvatar?: boolean
   isRead?: boolean
+  onReply?: (message: Message) => void
+  onReact?: (message: Message, emoji: string) => void
 }
 
 /**
@@ -19,6 +21,7 @@ interface MessageBubbleProps {
  * - Tin nhận đến: nền #FFFFFF (dark: #182533), đuôi nhọn ở góc dưới trái (rounded-bl-xs) kèm Avatar người gửi
  * - Flex wrap inline meta: tin nhắn ngắn có thời gian và dấu tích nằm cùng hàng với nội dung
  * - Dấu tích phân biệt: 1 tích xám (Đã gửi) vs 2 tích xanh (Đã đọc)
+ * - Micro-action toolbar nổi khi hover (Reaction, Reply, More)
  */
 export function MessageBubble({
   message,
@@ -27,6 +30,8 @@ export function MessageBubble({
   showSenderName = false,
   showAvatar = true,
   isRead = false,
+  onReply,
+  onReact,
 }: MessageBubbleProps) {
   const timeString = (() => {
     try {
@@ -49,7 +54,7 @@ export function MessageBubble({
   return (
     <div
       className={cn(
-        'flex w-full mb-1 items-end group select-text',
+        'flex w-full mb-1 items-end group select-text relative',
         isOutgoing ? 'justify-end' : 'justify-start'
       )}
       data-testid={`message-bubble-${message.id}`}
@@ -58,7 +63,7 @@ export function MessageBubble({
       {!isOutgoing && (
         <div className="w-8 shrink-0 mr-2 self-end mb-0.5 select-none">
           {showAvatar ? (
-            <Avatar className="w-8 h-8 rounded-full border border-border-light/50 dark:border-white/10 shadow-xs">
+            <Avatar className="w-8 h-8 rounded-full border border-border-light/50 dark:border-white/10 shadow-xs transition-transform duration-150 group-hover:scale-105">
               <AvatarImage
                 src={message.sender?.avatarUrl || undefined}
                 alt={message.sender?.displayName || message.sender?.username}
@@ -76,12 +81,48 @@ export function MessageBubble({
       {/* Thân bong bóng tin nhắn */}
       <div
         className={cn(
-          'max-w-[85%] sm:max-w-[70%] px-3.5 py-2 shadow-subtle relative border border-black/5 dark:border-white/5 transition-colors',
+          'max-w-[85%] sm:max-w-[70%] px-3.5 py-2 shadow-subtle relative border border-black/5 dark:border-white/5 transition-all duration-150 hover:shadow-md',
           isOutgoing
             ? 'bg-bubble-out dark:bg-bubble-out-dark rounded-2xl rounded-br-xs text-ink-primary dark:text-white'
             : 'bg-bubble-in dark:bg-bubble-in-dark rounded-2xl rounded-bl-xs text-ink-primary dark:text-[#F5F5F7]'
         )}
       >
+        {/* Floating Micro-Actions Toolbar on Hover */}
+        {!message.isRecalled && (
+          <div
+            className={cn(
+              'absolute -top-3.5 z-10 flex items-center gap-0.5 px-1 py-0.5 rounded-full bg-surface-light dark:bg-[#1E2C3A] border border-border-light/80 dark:border-border-dark shadow-md opacity-0 group-hover:opacity-100 transition-all duration-150 pointer-events-none group-hover:pointer-events-auto backdrop-blur-sm',
+              isOutgoing ? 'right-2' : 'left-2'
+            )}
+          >
+            <button
+              type="button"
+              title="Thả tim"
+              aria-label="Thả cảm xúc"
+              onClick={() => onReact?.(message, '❤️')}
+              className="p-1 rounded-full text-ink-secondary dark:text-ink-secondary-dark hover:text-coral hover:scale-115 active:scale-90 transition-all cursor-pointer"
+            >
+              <Smile className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              title="Trả lời"
+              aria-label="Trả lời tin nhắn"
+              onClick={() => onReply?.(message)}
+              className="p-1 rounded-full text-ink-secondary dark:text-ink-secondary-dark hover:text-brand hover:scale-115 active:scale-90 transition-all cursor-pointer"
+            >
+              <Reply className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              title="Tùy chọn khác"
+              aria-label="Tùy chọn khác"
+              className="p-1 rounded-full text-ink-secondary dark:text-ink-secondary-dark hover:text-ink-primary dark:hover:text-white hover:scale-115 active:scale-90 transition-all cursor-pointer"
+            >
+              <MoreHorizontal className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
         {/* Tên người gửi trong Group Chat */}
         {!isOutgoing && isGroup && showSenderName && message.sender && (
           <div className="text-xs font-semibold text-brand dark:text-brand-accent mb-1 select-none">
