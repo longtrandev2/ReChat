@@ -10,6 +10,7 @@ import { Verify2FAPage } from '@/features/auth/pages/Verify2FAPage'
 import { ForgotPasswordPage } from '@/features/auth/pages/ForgotPasswordPage'
 import { ResetPasswordPage } from '@/features/auth/pages/ResetPasswordPage'
 import { AppLayout } from '@/components/layout/AppLayout'
+import { ChatLayout } from '@/features/conversations/components/ChatLayout'
 import { WelcomeEmptyCanvas } from '@/components/layout/WelcomeEmptyCanvas'
 
 export function App() {
@@ -43,7 +44,17 @@ export function App() {
             </ProtectedRoute>
           }
         >
-          <Route path="/chat" element={<WelcomeEmptyCanvas />} />
+          <Route path="/chat" element={<ChatLayout />}>
+            <Route index element={<WelcomeEmptyCanvas />} />
+            <Route
+              path=":conversationId"
+              element={
+                <div className="flex h-full w-full items-center justify-center p-6 text-ink-secondary">
+                  <p className="text-lg font-medium">Khung trò chuyện (Chat Room - Phase 4)</p>
+                </div>
+              }
+            />
+          </Route>
           <Route
             path="/friends"
             element={
