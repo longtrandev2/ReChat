@@ -29,6 +29,9 @@ export function ActiveChatCanvas() {
     typingUsers,
     isLoadingMessages,
     fetchMessages,
+    handleMessageRecalled,
+    handleMessageEdited,
+    handleReactionUpdated,
   } = useMessagesStore()
   const { isUserOnline } = useSocket()
 
@@ -97,7 +100,7 @@ export function ActiveChatCanvas() {
     }
   }, [conversationId, user?.id])
 
-  // Vòng đời Room WebSocket và tải tin nhắn ban đầu
+  // Vòng đời Room WebSocket và lắng nghe tương tác tin nhắn
   useEffect(() => {
     if (!conversationId) return
 
@@ -113,12 +116,76 @@ export function ActiveChatCanvas() {
     fetchMessages(conversationId)
     markConversationAsRead(conversationId)
 
-    return () => {
-      if (socket && socket.connected) {
-        socket.emit('leaveConversation', { conversationId })
+    // Handlers lắng nghe sự kiện thu hồi, chỉnh sửa và thả cảm xúc
+    const onRecalled = (payload: { conversationId: string; messageId: string }) => {
+      if (payload.conversationId === conversationId) {
+        handleMessageRecalled(payload.conversationId, payload.messageId)
       }
     }
-  }, [conversationId, setActiveConversation, fetchMessages, markConversationAsRead])
+
+    const onEdited = (payload: {
+      conversationId: string
+      messageId: string
+      content: string
+      editedAt?: string
+    }) => {
+      if (payload.conversationId === conversationId) {
+        handleMessageEdited(
+          payload.conversationId,
+          payload.messageId,
+          payload.content,
+          payload.editedAt
+        )
+      }
+    }
+
+    const onReactionUpdated = (payload: {
+      conversationId: string
+      messageId: string
+      emoji: string
+      action: 'ADDED' | 'REMOVED' | 'CHANGED'
+      user: { id: string; displayName?: string; username?: string }
+    }) => {
+      if (payload.conversationId === conversationId) {
+        handleReactionUpdated(
+          payload.conversationId,
+          payload.messageId,
+          payload.emoji,
+          payload.action,
+          payload.user,
+          user?.id
+        )
+      }
+    }
+
+    if (socket && typeof socket.on === 'function') {
+      socket.on('messageRecalled', onRecalled)
+      socket.on('messageEdited', onEdited)
+      socket.on('messageReactionUpdated', onReactionUpdated)
+    }
+
+    return () => {
+      if (socket) {
+        if (typeof socket.off === 'function') {
+          socket.off('messageRecalled', onRecalled)
+          socket.off('messageEdited', onEdited)
+          socket.off('messageReactionUpdated', onReactionUpdated)
+        }
+        if (socket.connected && typeof socket.emit === 'function') {
+          socket.emit('leaveConversation', { conversationId })
+        }
+      }
+    }
+  }, [
+    conversationId,
+    setActiveConversation,
+    fetchMessages,
+    markConversationAsRead,
+    handleMessageRecalled,
+    handleMessageEdited,
+    handleReactionUpdated,
+    user?.id,
+  ])
 
   // Tải thêm tin nhắn cũ khi cuộn lên đỉnh
   const handleLoadMore = useCallback(() => {
@@ -137,6 +204,53 @@ export function ActiveChatCanvas() {
           conversationId,
           content,
           type: 'TEXT',
+        })
+      }
+    },
+    [conversationId]
+  )
+
+  // Thả / gỡ reaction qua WebSocket
+  const handleReact = useCallback(
+    (message: { id: string }, emoji: string) => {
+      if (!conversationId) return
+      const socket = socketClient.getSocket()
+      if (socket && socket.connected) {
+        socket.emit('reactMessage', {
+          conversationId,
+          messageId: message.id,
+          emoji,
+        })
+      }
+    },
+    [conversationId]
+  )
+
+  // Thu hồi tin nhắn qua WebSocket
+  const handleRecall = useCallback(
+    (message: { id: string }) => {
+      if (!conversationId) return
+      const socket = socketClient.getSocket()
+      if (socket && socket.connected) {
+        socket.emit('recallMessage', {
+          conversationId,
+          messageId: message.id,
+        })
+      }
+    },
+    [conversationId]
+  )
+
+  // Chỉnh sửa tin nhắn qua WebSocket
+  const handleEditMessage = useCallback(
+    (messageId: string, content: string) => {
+      if (!conversationId) return
+      const socket = socketClient.getSocket()
+      if (socket && socket.connected) {
+        socket.emit('editMessage', {
+          conversationId,
+          messageId,
+          content,
         })
       }
     },
@@ -183,11 +297,15 @@ export function ActiveChatCanvas() {
           lastReadMessageId={lastReadId}
           typingUserNames={typingNames}
           onLoadMore={handleLoadMore}
+          onReact={handleReact}
+          onRecall={handleRecall}
+          onEdit={(msg) => useMessagesStore.getState().setEditingMessage({ id: msg.id, content: msg.content })}
         />
 
         <MessageComposer
           conversationId={conversation.id}
           onSendMessage={handleSendMessage}
+          onEditMessage={handleEditMessage}
         />
       </div>
     </div>

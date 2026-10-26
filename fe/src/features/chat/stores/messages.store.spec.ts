@@ -267,4 +267,91 @@ describe('useMessagesStore Tests (ZOMBIES & AAA Methodology)', () => {
     expect(state.hasMoreByConversation['conv-1']).toBeUndefined()
     expect(state.typingUsers['conv-1']).toBeUndefined()
   })
+
+  it('handles message recall by updating content and isRecalled flag', () => {
+    useMessagesStore.getState().appendIncomingMessage('conv-1', mockMsg1)
+
+    useMessagesStore.getState().handleMessageRecalled('conv-1', 'msg-1')
+
+    const msgs = useMessagesStore.getState().messagesByConversation['conv-1']
+    expect(msgs[0].isRecalled).toBe(true)
+    expect(msgs[0].content).toBe('[Tin nhắn đã bị thu hồi]')
+  })
+
+  it('handles message editing by updating content and isEdited flag', () => {
+    useMessagesStore.getState().appendIncomingMessage('conv-1', mockMsg1)
+
+    useMessagesStore
+      .getState()
+      .handleMessageEdited('conv-1', 'msg-1', 'Nội dung mới đã sửa', '2026-10-26T09:00:00.000Z')
+
+    const msgs = useMessagesStore.getState().messagesByConversation['conv-1']
+    expect(msgs[0].content).toBe('Nội dung mới đã sửa')
+    expect(msgs[0].isEdited).toBe(true)
+    expect(msgs[0].editedAt).toBe('2026-10-26T09:00:00.000Z')
+  })
+
+  it('handles reaction updates with ADDED, REMOVED, and CHANGED', () => {
+    useMessagesStore.getState().appendIncomingMessage('conv-1', mockMsg1)
+
+    // 1. ADDED
+    useMessagesStore.getState().handleReactionUpdated(
+      'conv-1',
+      'msg-1',
+      '❤️',
+      'ADDED',
+      { id: 'user-2', displayName: 'User Hai' },
+      'user-2'
+    )
+
+    let msgs = useMessagesStore.getState().messagesByConversation['conv-1']
+    expect(msgs[0].reactions).toBeDefined()
+    expect(msgs[0].reactions![0]).toEqual({
+      emoji: '❤️',
+      count: 1,
+      users: [{ id: 'user-2', displayName: 'User Hai' }],
+      hasReacted: true,
+    })
+
+    // 2. CHANGED to 👍
+    useMessagesStore.getState().handleReactionUpdated(
+      'conv-1',
+      'msg-1',
+      '👍',
+      'CHANGED',
+      { id: 'user-2', displayName: 'User Hai' },
+      'user-2'
+    )
+
+    msgs = useMessagesStore.getState().messagesByConversation['conv-1']
+    expect(msgs[0].reactions).toHaveLength(1)
+    expect(msgs[0].reactions![0].emoji).toBe('👍')
+    expect(msgs[0].reactions![0].count).toBe(1)
+
+    // 3. REMOVED
+    useMessagesStore.getState().handleReactionUpdated(
+      'conv-1',
+      'msg-1',
+      '👍',
+      'REMOVED',
+      { id: 'user-2', displayName: 'User Hai' },
+      'user-2'
+    )
+
+    msgs = useMessagesStore.getState().messagesByConversation['conv-1']
+    expect(msgs[0].reactions).toHaveLength(0)
+  })
+
+  it('manages editingMessage state', () => {
+    expect(useMessagesStore.getState().editingMessage).toBeNull()
+
+    useMessagesStore.getState().setEditingMessage({ id: 'msg-1', content: 'Cần sửa tin này' })
+    expect(useMessagesStore.getState().editingMessage).toEqual({
+      id: 'msg-1',
+      content: 'Cần sửa tin này',
+    })
+
+    useMessagesStore.getState().setEditingMessage(null)
+    expect(useMessagesStore.getState().editingMessage).toBeNull()
+  })
 })

@@ -14,6 +14,10 @@ interface MessageFeedProps {
   lastReadMessageId?: string
   typingUserNames?: string[]
   onLoadMore?: () => void
+  onReact?: (message: Message, emoji: string) => void
+  onReply?: (message: Message) => void
+  onEdit?: (message: Message) => void
+  onRecall?: (message: Message) => void
 }
 
 /**
@@ -32,6 +36,10 @@ export function MessageFeed({
   lastReadMessageId,
   typingUserNames = [],
   onLoadMore,
+  onReact,
+  onReply,
+  onEdit,
+  onRecall,
 }: MessageFeedProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const prevScrollHeightRef = useRef<number>(0)
@@ -183,6 +191,10 @@ export function MessageFeed({
                 showSenderName={showSenderName}
                 showAvatar={showAvatar}
                 isRead={isRead}
+                onReact={onReact}
+                onReply={onReply}
+                onEdit={onEdit}
+                onRecall={onRecall}
               />
             </div>
           )

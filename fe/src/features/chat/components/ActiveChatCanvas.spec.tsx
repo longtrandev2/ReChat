@@ -20,6 +20,8 @@ describe('ActiveChatCanvas Component Tests', () => {
   const mockSocket = {
     connected: true,
     emit: vi.fn(),
+    on: vi.fn(),
+    off: vi.fn(),
   }
 
   const mockConv: Conversation = {
@@ -161,4 +163,25 @@ describe('ActiveChatCanvas Component Tests', () => {
       type: 'TEXT',
     })
   })
+
+  it('registers and unregisters socket listeners for rich messaging', () => {
+    const { unmount } = render(
+      <MemoryRouter initialEntries={['/chat/conv-test-1']}>
+        <Routes>
+          <Route path="/chat/:conversationId" element={<ActiveChatCanvas />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    expect(mockSocket.on).toHaveBeenCalledWith('messageRecalled', expect.any(Function))
+    expect(mockSocket.on).toHaveBeenCalledWith('messageEdited', expect.any(Function))
+    expect(mockSocket.on).toHaveBeenCalledWith('messageReactionUpdated', expect.any(Function))
+
+    unmount()
+
+    expect(mockSocket.off).toHaveBeenCalledWith('messageRecalled', expect.any(Function))
+    expect(mockSocket.off).toHaveBeenCalledWith('messageEdited', expect.any(Function))
+    expect(mockSocket.off).toHaveBeenCalledWith('messageReactionUpdated', expect.any(Function))
+  })
 })
+

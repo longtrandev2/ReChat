@@ -88,4 +88,41 @@ describe('MessageBubble Component Tests', () => {
     expect(img).toHaveAttribute('src', 'https://example.com/photo.jpg')
     expect(screen.getByText('Ảnh chụp chuyến đi')).toBeInTheDocument()
   })
+
+  it('renders reaction pills and triggers onReact when clicked', async () => {
+    const handleReact = vi.fn()
+    const reactedMsg: Message = {
+      ...baseMessage,
+      reactions: [
+        {
+          emoji: '❤️',
+          count: 3,
+          users: [{ id: 'user-2', displayName: 'User Hai' }],
+          hasReacted: true,
+        },
+      ],
+    }
+
+    render(<MessageBubble message={reactedMsg} isOutgoing={false} onReact={handleReact} />)
+
+    expect(screen.getByText('❤️')).toBeInTheDocument()
+    expect(screen.getByText('3')).toBeInTheDocument()
+
+    const pill = screen.getByTitle('User Hai')
+    pill.click()
+    expect(handleReact).toHaveBeenCalledWith(reactedMsg, '❤️')
+  })
+
+  it('renders (đã sửa) indicator when message isEdited is true', () => {
+    const editedMsg: Message = {
+      ...baseMessage,
+      isEdited: true,
+      content: 'Nội dung sau khi sửa',
+    }
+
+    render(<MessageBubble message={editedMsg} isOutgoing={true} />)
+
+    expect(screen.getByText('(đã sửa)')).toBeInTheDocument()
+    expect(screen.getByText('Nội dung sau khi sửa')).toBeInTheDocument()
+  })
 })

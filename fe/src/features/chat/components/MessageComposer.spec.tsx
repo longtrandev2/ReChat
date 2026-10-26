@@ -2,12 +2,20 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
 import { MessageComposer } from './MessageComposer'
 import { socketClient } from '@/services/socket.client'
+import { mediaApi } from '../services/media.api'
+import { useMessagesStore } from '../stores/messages.store'
 
 import type { Socket } from 'socket.io-client'
 
 vi.mock('@/services/socket.client', () => ({
   socketClient: {
     getSocket: vi.fn(),
+  },
+}))
+
+vi.mock('../services/media.api', () => ({
+  mediaApi: {
+    uploadMedia: vi.fn(),
   },
 }))
 
@@ -19,6 +27,7 @@ describe('MessageComposer Component Tests', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(socketClient.getSocket).mockReturnValue(mockSocket as unknown as Socket)
+    useMessagesStore.getState().setEditingMessage(null)
   })
 
   afterEach(() => {
@@ -107,5 +116,70 @@ describe('MessageComposer Component Tests', () => {
       conversationId: 'conv-1',
       isTyping: false,
     })
+  })
+
+  it('triggers mediaApi.uploadMedia when file input is changed', async () => {
+    vi.mocked(mediaApi.uploadMedia).mockResolvedValueOnce({
+      public_id: 'mock-id',
+      secure_url: 'https://cloudinary.com/test.png',
+    })
+
+    render(<MessageComposer conversationId="conv-1" onSendMessage={vi.fn()} />)
+
+    const fileInput = screen.getByTestId('file-upload-input')
+    const file = new File(['dummy content'], 'photo.jpg', { type: 'image/jpeg' })
+
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [file] } })
+    })
+
+    expect(mediaApi.uploadMedia).toHaveBeenCalledTimes(1)
+    expect(mediaApi.uploadMedia).toHaveBeenCalledWith(
+      file,
+      'conv-1',
+      expect.any(Function)
+    )
+  })
+
+  it('enters edit mode, displays edit banner, and triggers onEditMessage on save', async () => {
+    const onEdit = vi.fn()
+    useMessagesStore.getState().setEditingMessage({ id: 'msg-edit-1', content: 'Nội dung ban đầu' })
+
+    render(
+      <MessageComposer
+        conversationId="conv-1"
+        onSendMessage={vi.fn()}
+        onEditMessage={onEdit}
+      />
+    )
+
+    // Edit banner displayed
+    expect(screen.getByText('Đang chỉnh sửa:')).toBeInTheDocument()
+    expect(screen.getAllByText('Nội dung ban đầu')).toHaveLength(2)
+
+    const textarea = screen.getByLabelText('Nội dung tin nhắn')
+    expect(textarea).toHaveValue('Nội dung ban đầu')
+
+    fireEvent.change(textarea, { target: { value: 'Nội dung đã được sửa' } })
+
+    const saveButton = screen.getByRole('button', { name: 'Lưu chỉnh sửa' })
+    await act(async () => {
+      fireEvent.click(saveButton)
+    })
+
+    expect(onEdit).toHaveBeenCalledWith('msg-edit-1', 'Nội dung đã được sửa')
+    expect(useMessagesStore.getState().editingMessage).toBeNull()
+  })
+
+  it('cancels edit mode when clicking cancel button on banner', async () => {
+    useMessagesStore.getState().setEditingMessage({ id: 'msg-edit-1', content: 'Nội dung ban đầu' })
+
+    render(<MessageComposer conversationId="conv-1" onSendMessage={vi.fn()} />)
+
+    const cancelBtn = screen.getByRole('button', { name: 'Hủy bỏ chỉnh sửa' })
+    fireEvent.click(cancelBtn)
+
+    expect(useMessagesStore.getState().editingMessage).toBeNull()
+    expect(screen.queryByText('Đang chỉnh sửa:')).not.toBeInTheDocument()
   })
 })
