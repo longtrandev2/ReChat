@@ -1,7 +1,7 @@
 import { io, type Socket } from 'socket.io-client'
 
-// URL kết nối WebSocket (ưu tiên env VITE_WS_URL, fallback về origin của client nhờ Vite proxy /socket.io)
-const WS_BASE_URL = import.meta.env.VITE_WS_URL || window.location.origin
+// URL kết nối WebSocket (ưu tiên env VITE_WS_URL, fallback về http://localhost:3000)
+const WS_BASE_URL = import.meta.env.VITE_WS_URL || 'http://localhost:3000'
 
 let socketInstance: Socket | null = null
 let currentToken: string | null = null

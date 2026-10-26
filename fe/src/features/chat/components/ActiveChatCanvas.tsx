@@ -5,7 +5,7 @@ import { MessageFeed } from './MessageFeed'
 import { MessageComposer } from './MessageComposer'
 import { useConversationStore } from '@/features/conversations/stores/conversation.store'
 import { useMessagesStore } from '../stores/messages.store'
-import { useSocketStore } from '@/stores/socket.store'
+import { useSocket } from '@/hooks/useSocket'
 import { useAuthStore } from '@/stores/auth.store'
 import { socketClient } from '@/services/socket.client'
 import { conversationApi } from '@/features/conversations/services/conversation.api'
@@ -30,7 +30,7 @@ export function ActiveChatCanvas() {
     isLoadingMessages,
     fetchMessages,
   } = useMessagesStore()
-  const { userStatuses } = useSocketStore()
+  const { isUserOnline } = useSocket()
 
   // Thông tin đối phương trong cuộc trò chuyện trực tiếp (Direct)
   const [partner, setPartner] = useState<ConversationMemberUser | null>(null)
@@ -58,14 +58,17 @@ export function ActiveChatCanvas() {
   }, [typingUsers, conversationId])
 
   // Trạng thái online của đối phương qua socket presence hoặc initial detail
-  const isOnline = useMemo(() => {
+  const isPartnerOnline = useMemo(() => {
     if (!conversation || conversation.type === 'GROUP' || !partner?.id) return false
-    const liveStatus = userStatuses[partner.id]?.status
-    if (liveStatus !== undefined) {
-      return liveStatus === 'ONLINE'
+    try {
+      if (typeof isUserOnline === 'function' && isUserOnline(partner.id)) {
+        return true
+      }
+    } catch {
+      // Fallback an toàn nếu socket store chưa sẵn sàng
     }
     return Boolean(partner.isOnline)
-  }, [conversation, partner, userStatuses])
+  }, [conversation, partner, isUserOnline])
 
   // Tải chi tiết cuộc hội thoại để bóc tách thông tin partner & initial online
   useEffect(() => {
@@ -78,9 +81,9 @@ export function ActiveChatCanvas() {
       .then((detail) => {
         if (!isMounted || !detail) return
 
-        if (detail.type === 'DIRECT' && detail.members) {
-          const otherMember = detail.members.find((m) => m.user.id !== user?.id)
-          if (otherMember) {
+        if (detail.type === 'DIRECT' && Array.isArray(detail.members)) {
+          const otherMember = detail.members.find((m) => m?.user?.id !== user?.id)
+          if (otherMember?.user) {
             setPartner(otherMember.user)
           }
         }
@@ -165,7 +168,7 @@ export function ActiveChatCanvas() {
       {/* Header cố định ở trên đỉnh */}
       <ChatHeader
         conversation={conversation}
-        isOnline={isOnline}
+        isOnline={isPartnerOnline}
         typingUserNames={typingNames}
       />
 
