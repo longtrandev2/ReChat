@@ -18,6 +18,7 @@ interface MessageFeedProps {
   onReply?: (message: Message) => void
   onEdit?: (message: Message) => void
   onRecall?: (message: Message) => void
+  onScrollToReply?: (replyToId: string) => void
 }
 
 /**
@@ -40,6 +41,7 @@ export function MessageFeed({
   onReply,
   onEdit,
   onRecall,
+  onScrollToReply,
 }: MessageFeedProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const prevScrollHeightRef = useRef<number>(0)
@@ -195,6 +197,7 @@ export function MessageFeed({
                 onReply={onReply}
                 onEdit={onEdit}
                 onRecall={onRecall}
+                onScrollToReply={onScrollToReply}
               />
             </div>
           )

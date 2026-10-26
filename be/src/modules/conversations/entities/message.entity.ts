@@ -50,6 +50,9 @@ export class Message {
     @Column({ nullable: true, length: 500 })
     fileUrl?: string;
 
+    @Column({ nullable: true, type: 'int' })
+    fileSize?: number;
+
     @Column({ nullable: true, type: 'uuid' })
     replyToId?: string;
 

@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { MessageBubble } from './MessageBubble'
 import type { Message } from '../types/message.types'
 
@@ -132,6 +132,7 @@ describe('MessageBubble Component Tests', () => {
       id: 'msg-file-1',
       type: 'FILE',
       fileUrl: 'https://example.com/files/lib.txt',
+      fileSize: 1024 * 512, // 512 KB
       content: 'lib.txt',
     }
 
@@ -140,11 +141,10 @@ describe('MessageBubble Component Tests', () => {
     expect(screen.getByTestId('file-attachment-msg-file-1')).toBeInTheDocument()
     expect(screen.getByText('lib.txt')).toBeInTheDocument()
     expect(screen.getByText('Tệp văn bản TXT')).toBeInTheDocument()
+    expect(screen.getByText('512.0 KB')).toBeInTheDocument()
 
-    const downloadLink = screen.getByRole('link', { name: 'Tải tệp xuống' })
-    expect(downloadLink).toBeInTheDocument()
-    expect(downloadLink).toHaveAttribute('href', 'https://example.com/files/lib.txt')
-    expect(downloadLink).toHaveAttribute('download', 'lib.txt')
+    const downloadBtn = screen.getByRole('button', { name: 'Tải tệp xuống' })
+    expect(downloadBtn).toBeInTheDocument()
   })
 
   it('renders quoted reply context when message has replyTo', () => {
@@ -174,6 +174,42 @@ describe('MessageBubble Component Tests', () => {
     expect(screen.getByText('Bob Trần')).toBeInTheDocument()
     expect(screen.getByText('Tin nhắn gốc')).toBeInTheDocument()
     expect(screen.getByText('Tôi trả lời tin này')).toBeInTheDocument()
+  })
+
+  it('triggers onScrollToReply when clicking reply preview', async () => {
+    const handleScrollToReply = vi.fn()
+    const replyMsg: Message = {
+      ...baseMessage,
+      id: 'msg-reply-2',
+      content: 'Tin nhắn phản hồi cho người nhận B',
+      replyToId: 'parent-99',
+      replyTo: {
+        id: 'parent-99',
+        content: 'Nội dung tin nhắn x',
+        type: 'TEXT',
+        isRecalled: false,
+        createdAt: '2026-10-26T10:00:00.000Z',
+        sender: {
+          id: 'user-alice',
+          username: 'alice',
+          displayName: 'Alice Nguyễn',
+          avatarUrl: null,
+        },
+      },
+    }
+
+    render(
+      <MessageBubble
+        message={replyMsg}
+        isOutgoing={false}
+        onScrollToReply={handleScrollToReply}
+      />
+    )
+
+    const replyPreview = screen.getByTestId('reply-preview-msg-reply-2')
+    fireEvent.click(replyPreview)
+
+    expect(handleScrollToReply).toHaveBeenCalledWith('parent-99')
   })
 })
 

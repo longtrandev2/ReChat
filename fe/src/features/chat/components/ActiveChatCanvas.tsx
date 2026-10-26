@@ -9,6 +9,7 @@ import { useSocket } from '@/hooks/useSocket'
 import { useAuthStore } from '@/stores/auth.store'
 import { socketClient } from '@/services/socket.client'
 import { conversationApi } from '@/features/conversations/services/conversation.api'
+import { toast } from 'sonner'
 import type { ConversationMemberUser } from '@/features/conversations/types/conversation.types'
 
 /**
@@ -20,7 +21,7 @@ import type { ConversationMemberUser } from '@/features/conversations/types/conv
 export function ActiveChatCanvas() {
   const { conversationId } = useParams<{ conversationId: string }>()
   const { user } = useAuthStore()
-  const { conversations, markConversationAsRead, setActiveConversation } =
+  const { conversations, setActiveConversation } =
     useConversationStore()
   const {
     messagesByConversation,
@@ -114,7 +115,6 @@ export function ActiveChatCanvas() {
 
     // Tải 30 tin nhắn mới nhất
     fetchMessages(conversationId)
-    markConversationAsRead(conversationId)
 
     // Handlers lắng nghe sự kiện thu hồi, chỉnh sửa và thả cảm xúc
     const onRecalled = (payload: { conversationId: string; messageId: string }) => {
@@ -180,7 +180,6 @@ export function ActiveChatCanvas() {
     conversationId,
     setActiveConversation,
     fetchMessages,
-    markConversationAsRead,
     handleMessageRecalled,
     handleMessageEdited,
     handleReactionUpdated,
@@ -258,6 +257,74 @@ export function ActiveChatCanvas() {
     [conversationId]
   )
 
+  // Cuộn tới tin nhắn được reply với hiệu ứng Flash Highlight và tự động tải thêm nếu chưa có trong DOM
+  const handleScrollToReply = useCallback(
+    async (replyToId: string) => {
+      const applyFlashHighlight = (el: Element) => {
+        // Chỉ highlight chính xác khung bong bóng tin nhắn (không bôi màu cả dòng container w-full)
+        const bubbleBox = el.querySelector('[data-message-box="true"]') || el
+        bubbleBox.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        bubbleBox.classList.add(
+          'ring-2',
+          'ring-brand',
+          'ring-offset-2',
+          'ring-offset-surface-light',
+          'dark:ring-offset-surface-dark',
+          'transition-all',
+          'duration-500',
+          'bg-brand/15',
+          'dark:bg-brand/25'
+        )
+        setTimeout(() => {
+          bubbleBox.classList.remove(
+            'ring-2',
+            'ring-brand',
+            'ring-offset-2',
+            'ring-offset-surface-light',
+            'dark:ring-offset-surface-dark',
+            'bg-brand/15',
+            'dark:bg-brand/25'
+          )
+        }, 1600)
+      }
+
+      // 1. Nếu tin nhắn đã có sẵn trong DOM
+      let targetEl = document.querySelector(`[data-testid="message-bubble-${replyToId}"]`)
+      if (targetEl) {
+        applyFlashHighlight(targetEl)
+        return
+      }
+
+      // 2. Nếu chưa có trong DOM, tự động tải thêm trang lịch sử cũ hơn để tìm
+      if (!conversationId) return
+      toast.info('Đang tìm tin nhắn gốc trong lịch sử trò chuyện...')
+
+      let attempts = 0
+      while (attempts < 3) {
+        const currentMessages = useMessagesStore.getState().messagesByConversation[conversationId] || []
+        const oldest = currentMessages[0]
+        if (!oldest) break
+
+        await fetchMessages(conversationId, oldest.id)
+        attempts++
+
+        // Đợi DOM render sau khi state cập nhật
+        await new Promise((r) => setTimeout(r, 150))
+        targetEl = document.querySelector(`[data-testid="message-bubble-${replyToId}"]`)
+        if (targetEl) {
+          applyFlashHighlight(targetEl)
+          return
+        }
+
+        const hasMoreMessages = useMessagesStore.getState().hasMoreByConversation[conversationId]
+        if (!hasMoreMessages) break
+      }
+
+      toast.info('Tin nhắn gốc nằm quá xa trong lịch sử trò chuyện')
+    },
+    [conversationId, fetchMessages]
+  )
+
   if (!conversation) {
     return (
       <div
@@ -302,6 +369,7 @@ export function ActiveChatCanvas() {
           onReply={(msg) => useMessagesStore.getState().setReplyingMessage(msg)}
           onRecall={handleRecall}
           onEdit={(msg) => useMessagesStore.getState().setEditingMessage({ id: msg.id, content: msg.content })}
+          onScrollToReply={handleScrollToReply}
         />
 
         <MessageComposer

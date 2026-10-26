@@ -115,6 +115,12 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
   },
 
   markConversationAsRead: async (conversationId: string) => {
+    const target = get().conversations.find((c) => c.id === conversationId)
+    // Nếu cuộc trò chuyện đã có unreadCount === 0 thì không gọi lại API HTTP để tránh spam
+    if (target && target.unreadCount === 0) {
+      return
+    }
+
     // 1. Optimistic UI update: Reset unread count ngay lập tức
     set((state) => ({
       conversations: state.conversations.map((c) =>

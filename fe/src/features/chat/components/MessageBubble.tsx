@@ -9,6 +9,7 @@ import {
   Trash2,
   Copy,
   Download,
+  Link2,
   FileText,
   FileSpreadsheet,
   FileArchive,
@@ -97,7 +98,7 @@ function getFileDetails(fileName: string = ''): FileDetails {
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import type { Message } from '../types/message.types'
-import { cn } from '@/lib/utils'
+import { cn, formatFileSize } from '@/lib/utils'
 
 interface MessageBubbleProps {
   message: Message
@@ -110,6 +111,7 @@ interface MessageBubbleProps {
   onReact?: (message: Message, emoji: string) => void
   onEdit?: (message: Message) => void
   onRecall?: (message: Message) => void
+  onScrollToReply?: (replyToId: string) => void
 }
 
 const QUICK_EMOJIS = ['❤️', '👍', '😂', '🔥', '😮', '😢']
@@ -135,6 +137,7 @@ export function MessageBubble({
   onReact,
   onEdit,
   onRecall,
+  onScrollToReply,
 }: MessageBubbleProps) {
   const [isRecallDialogOpen, setIsRecallDialogOpen] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
@@ -181,6 +184,38 @@ export function MessageBubble({
     }
   }
 
+  const handleDownloadFile = async (
+    e: React.MouseEvent,
+    fileUrl: string,
+    fileName: string
+  ) => {
+    e.stopPropagation()
+    try {
+      let downloadUrl = fileUrl
+      if (downloadUrl.includes('/upload/') && !downloadUrl.includes('/fl_attachment')) {
+        downloadUrl = downloadUrl.replace('/upload/', '/upload/fl_attachment/')
+      }
+      const res = await fetch(downloadUrl)
+      if (!res.ok) throw new Error('Fetch failed')
+      const blob = await res.blob()
+      const blobUrl = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = blobUrl
+      a.download = fileName
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(blobUrl)
+      toast.success('Đang tải tệp xuống...')
+    } catch {
+      let fallbackUrl = fileUrl
+      if (fallbackUrl.includes('/upload/') && !fallbackUrl.includes('/fl_attachment')) {
+        fallbackUrl = fallbackUrl.replace('/upload/', '/upload/fl_attachment/')
+      }
+      window.open(fallbackUrl, '_blank')
+    }
+  }
+
   return (
     <div
       className={cn(
@@ -222,13 +257,13 @@ export function MessageBubble({
               ? 'bg-bubble-out dark:bg-bubble-out-dark rounded-2xl rounded-br-xs text-ink-primary dark:text-white'
               : 'bg-bubble-in dark:bg-bubble-in-dark rounded-2xl rounded-bl-xs text-ink-primary dark:text-[#F5F5F7]'
           )}
+          data-message-box="true"
         >
           {/* Floating Micro-Actions Toolbar on Hover */}
           {!message.isRecalled && (
             <div
               className={cn(
-                'absolute -top-3.5 z-20 flex items-center gap-0.5 px-1 py-0.5 rounded-full bg-surface-light dark:bg-[#1E2C3A] border border-border-light/80 dark:border-border-dark shadow-md opacity-0 group-hover:opacity-100 transition-all duration-150 pointer-events-none group-hover:pointer-events-auto backdrop-blur-sm',
-                isOutgoing ? 'right-2' : 'left-2'
+                'absolute -top-3.5 z-20 flex items-center gap-0.5 px-1 py-0.5 rounded-full bg-surface-light dark:bg-[#1E2C3A] border border-border-light/80 dark:border-border-dark shadow-md opacity-0 group-hover:opacity-100 transition-all duration-150 pointer-events-none group-hover:pointer-events-auto backdrop-blur-sm right-2'
               )}
             >
               {/* Quick Emojis or Emoji Toggle Button */}
@@ -297,6 +332,20 @@ export function MessageBubble({
                       <span>Sao chép</span>
                     </DropdownMenu.Item>
 
+                    {message.type === 'FILE' && message.fileUrl && (
+                      <DropdownMenu.Item
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          navigator.clipboard.writeText(message.fileUrl || '')
+                          toast.success('Đã sao chép liên kết tệp')
+                        }}
+                        className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer hover:bg-surface-hover dark:hover:bg-surface-dark-secondary outline-none transition-colors"
+                      >
+                        <Link2 className="w-3.5 h-3.5 text-brand" />
+                        <span>Sao chép liên kết tệp</span>
+                      </DropdownMenu.Item>
+                    )}
+
                     {canEdit && (
                       <DropdownMenu.Item
                         onClick={() => onEdit?.(message)}
@@ -339,11 +388,42 @@ export function MessageBubble({
               {/* Trích dẫn tin nhắn cha (Reply Context Telegram style) */}
               {message.replyTo && (
                 <div
-                  className="mb-1.5 px-2.5 py-1 rounded-lg border-l-[3px] border-l-brand text-xs cursor-pointer select-none transition-colors bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10"
+                  className="mb-1.5 px-2.5 py-1 rounded-lg border-l-[3px] border-l-brand text-xs cursor-pointer select-none transition-colors bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 relative z-10"
                   data-testid={`reply-preview-${message.id}`}
-                  onClick={() => {
-                    const targetEl = document.querySelector(`[data-testid="message-bubble-${message.replyTo?.id}"]`)
-                    targetEl?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (!message.replyTo?.id) return
+                    if (onScrollToReply) {
+                      onScrollToReply(message.replyTo.id)
+                    } else {
+                      const targetEl = document.querySelector(`[data-testid="message-bubble-${message.replyTo.id}"]`)
+                      const bubbleBox = targetEl?.querySelector('[data-message-box="true"]') || targetEl
+                      if (bubbleBox) {
+                        bubbleBox.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                        bubbleBox.classList.add(
+                          'ring-2',
+                          'ring-brand',
+                          'ring-offset-2',
+                          'ring-offset-surface-light',
+                          'dark:ring-offset-surface-dark',
+                          'transition-all',
+                          'duration-500',
+                          'bg-brand/15',
+                          'dark:bg-brand/25'
+                        )
+                        setTimeout(() => {
+                          bubbleBox.classList.remove(
+                            'ring-2',
+                            'ring-brand',
+                            'ring-offset-2',
+                            'ring-offset-surface-light',
+                            'dark:ring-offset-surface-dark',
+                            'bg-brand/15',
+                            'dark:bg-brand/25'
+                          )
+                        }, 1600)
+                      }
+                    }
                   }}
                 >
                   <p className="font-semibold text-brand text-[11px] truncate">
@@ -378,12 +458,14 @@ export function MessageBubble({
                 <div className="mb-1.5 min-w-[220px] max-w-sm">
                   <div
                     className={cn(
-                      'flex items-center gap-3 p-2.5 rounded-xl border transition-all duration-150',
+                      'flex items-center gap-3 p-2.5 rounded-xl border transition-all duration-150 cursor-pointer group/file select-none',
                       isOutgoing
-                        ? 'bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10'
-                        : 'bg-black/5 dark:bg-white/5 border-border-light dark:border-border-dark'
+                        ? 'bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 hover:bg-black/10 dark:hover:bg-white/10'
+                        : 'bg-black/5 dark:bg-white/5 border-border-light dark:border-border-dark hover:bg-black/10 dark:hover:bg-white/10'
                     )}
                     data-testid={`file-attachment-${message.id}`}
+                    onClick={(e) => handleDownloadFile(e, message.fileUrl!, message.content || 'attachment')}
+                    title="Bấm để tải xuống tệp"
                   >
                     {/* Icon phân loại file */}
                     {(() => {
@@ -392,7 +474,7 @@ export function MessageBubble({
                       return (
                         <div
                           className={cn(
-                            'w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border shadow-xs',
+                            'w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border shadow-xs transition-transform group-hover/file:scale-105',
                             details.bgClass,
                             details.colorClass
                           )}
@@ -402,32 +484,40 @@ export function MessageBubble({
                       )
                     })()}
 
-                    {/* Thông tin tên file & loại file */}
+                    {/* Thông tin tên file, loại file & dung lượng */}
                     <div className="flex-1 min-w-0 pr-1">
                       <p
-                        className="text-xs font-semibold truncate text-ink-primary dark:text-ink-primary-dark"
+                        className="text-xs font-semibold truncate text-ink-primary dark:text-ink-primary-dark group-hover/file:text-brand transition-colors"
                         title={message.content}
                       >
                         {message.content || 'Tệp đính kèm'}
                       </p>
-                      <p className="text-[11px] text-ink-muted select-none mt-0.5">
-                        {getFileDetails(message.content).extLabel}
+                      <p className="text-[11px] text-ink-muted select-none mt-0.5 flex items-center gap-1.5">
+                        <span>{getFileDetails(message.content).extLabel}</span>
+                        {message.fileSize ? (
+                          <>
+                            <span className="opacity-60">•</span>
+                            <span className="font-medium text-ink-secondary dark:text-ink-secondary-dark">
+                              {formatFileSize(message.fileSize)}
+                            </span>
+                          </>
+                        ) : null}
                       </p>
                     </div>
 
                     {/* Nút tải về máy (Download Action) */}
-                    <a
-                      href={message.fileUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      download={message.content || 'attachment'}
+                    <button
+                      type="button"
                       title="Tải tệp xuống"
                       aria-label="Tải tệp xuống"
-                      className="w-8 h-8 rounded-full bg-brand text-white flex items-center justify-center shrink-0 hover:bg-brand-hover hover:scale-105 active:scale-95 transition-all shadow-xs cursor-pointer"
-                      onClick={(e) => e.stopPropagation()}
+                      className="w-8 h-8 rounded-full bg-brand text-white flex items-center justify-center shrink-0 hover:bg-brand-hover hover:scale-110 active:scale-95 transition-all shadow-xs cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleDownloadFile(e, message.fileUrl!, message.content || 'attachment')
+                      }}
                     >
                       <Download className="w-4 h-4" />
-                    </a>
+                    </button>
                   </div>
                 </div>
               )}

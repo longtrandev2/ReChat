@@ -299,6 +299,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             content: message.content,
             type: message.type,
             fileUrl: message.fileUrl,
+            fileSize: message.fileSize ?? null,
             replyToId: message.replyToId,
             replyTo: (message as any).replyTo || null,
             reactions: (message as any).reactions || [],

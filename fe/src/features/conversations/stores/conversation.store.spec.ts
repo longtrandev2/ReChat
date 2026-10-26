@@ -160,6 +160,20 @@ describe('useConversationStore Tests (ZOMBIES & AAA Methodology)', () => {
     expect(conversationApi.markAsRead).toHaveBeenCalledWith('conv-1')
   })
 
+  it('I: markConversationAsRead skips HTTP API call if conversation unreadCount is already 0', async () => {
+    // Arrange: conv2 already has unreadCount = 0
+    useConversationStore.setState({
+      conversations: [mockConv2],
+      activeConversationId: null,
+    })
+
+    // Act
+    await useConversationStore.getState().markConversationAsRead('conv-2')
+
+    // Assert: should NOT make HTTP call
+    expect(conversationApi.markAsRead).not.toHaveBeenCalled()
+  })
+
   // E - Exceptions: Handles fetch failure gracefully
   it('E: fetchInbox records error state when API fails', async () => {
     // Arrange

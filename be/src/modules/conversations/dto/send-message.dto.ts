@@ -1,4 +1,4 @@
-import { IsEnum, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 import { MessageType } from '../entities/message.entity.js';
 
 export class SendMessageDto {
@@ -19,6 +19,10 @@ export class SendMessageDto {
     @IsString()
     @MaxLength(500, { message: 'Đường dẫn file không vượt quá 500 ký tự' })
     fileUrl?: string;
+
+    @IsOptional()
+    @IsInt({ message: 'Dung lượng file phải là số nguyên' })
+    fileSize?: number;
 
     @IsOptional()
     @IsUUID(4, { message: 'replyToId phải là UUID hợp lệ' })

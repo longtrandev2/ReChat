@@ -284,7 +284,7 @@ export function MessageComposer({
           ref={fileInputRef}
           type="file"
           onChange={handleFileChange}
-          accept="image/*,.pdf,.doc,.docx,.zip,.txt"
+          accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.zip,.rar,.txt"
           className="hidden"
           data-testid="file-upload-input"
         />

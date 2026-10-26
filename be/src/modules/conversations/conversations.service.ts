@@ -1232,7 +1232,7 @@ export class ConversationsService {
         senderId: string,
         dto: SendMessageDto,
     ): Promise<Message> {
-        const { conversationId, content, type = MessageType.TEXT, fileUrl, replyToId } = dto;
+        const { conversationId, content, type = MessageType.TEXT, fileUrl, fileSize, replyToId } = dto;
 
         // 1. Kiểm tra thành viên hội thoại (BR-08)
         await this.validateMembership(conversationId, senderId);
@@ -1259,6 +1259,7 @@ export class ConversationsService {
                     content: true,
                     type: true,
                     fileUrl: true,
+                    fileSize: true,
                     isRecalled: true,
                     sender: {
                         id: true,
@@ -1276,6 +1277,7 @@ export class ConversationsService {
                 content: originalMessage.isRecalled ? '[Tin nhắn đã bị thu hồi]' : originalMessage.content,
                 type: originalMessage.type,
                 fileUrl: originalMessage.isRecalled ? null : originalMessage.fileUrl,
+                fileSize: originalMessage.isRecalled ? null : originalMessage.fileSize,
                 sender: {
                     id: originalMessage.sender?.id,
                     username: originalMessage.sender?.username,
@@ -1292,6 +1294,7 @@ export class ConversationsService {
             content: content.trim(),
             type,
             fileUrl,
+            fileSize,
             replyToId,
         });
         const savedMessage = await this.messageRepository.save(message);
@@ -1322,6 +1325,7 @@ export class ConversationsService {
                 content: true,
                 type: true,
                 fileUrl: true,
+                fileSize: true,
                 replyToId: true,
                 isRecalled: true,
                 isEdited: true,

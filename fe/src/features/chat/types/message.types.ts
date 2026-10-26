@@ -19,6 +19,7 @@ export interface ParentMessageSummary {
   content: string
   type: MessageType
   fileUrl?: string | null
+  fileSize?: number | null
   isRecalled: boolean
   createdAt: string
   sender: MessageSender
@@ -29,6 +30,7 @@ export interface Message {
   content: string
   type: MessageType
   fileUrl?: string | null
+  fileSize?: number | null
   replyToId?: string | null
   replyTo?: ParentMessageSummary | null
   isRecalled: boolean
@@ -76,5 +78,6 @@ export interface SendMessagePayload {
   content: string
   type?: MessageType
   fileUrl?: string
+  fileSize?: number
   replyToId?: string
 }
