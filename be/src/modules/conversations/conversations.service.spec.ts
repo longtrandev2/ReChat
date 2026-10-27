@@ -433,6 +433,43 @@ describe('ConversationsService', () => {
             // reverse() should return [msg2, msg1] (ASC)
             expect(result).toEqual([msg2, msg1]);
         });
+
+        it('should correctly enrich messages with reactions loaded from database', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: conversationId });
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'm-1' });
+
+            const msg1 = { id: 'msg-1', createdAt: new Date('2026-10-14T10:00:00Z') };
+            mockMessageRepo.createQueryBuilder.mockReturnValue(createMockQueryBuilder([msg1]));
+
+            mockReactionRepo.find.mockResolvedValueOnce([
+                {
+                    id: 'r-1',
+                    emoji: '❤️',
+                    message: { id: 'msg-1' },
+                    user: { id: 'user-1', displayName: 'Người dùng 1' },
+                },
+                {
+                    id: 'r-2',
+                    emoji: '❤️',
+                    message: { id: 'msg-1' },
+                    user: { id: 'user-2', displayName: 'Người dùng 2' },
+                },
+            ]);
+
+            const result = await service.getMessages(currentUserId, conversationId, { limit: 10 });
+            expect(result).toHaveLength(1);
+            expect((result[0] as any).reactions).toEqual([
+                {
+                    emoji: '❤️',
+                    count: 2,
+                    users: [
+                        { id: 'user-1', displayName: 'Người dùng 1' },
+                        { id: 'user-2', displayName: 'Người dùng 2' },
+                    ],
+                    hasReacted: true,
+                },
+            ]);
+        });
     });
 
     // ==========================================

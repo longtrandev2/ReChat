@@ -517,14 +517,16 @@ export class ConversationsService {
         >();
 
         if (messageIds.length > 0) {
-            const rawReactions = await this.reactionRepository.find({
-                where: { message: { id: In(messageIds) } },
-                relations: { user: true },
-                order: { createdAt: 'ASC' },
-            });
+            const rawReactions =
+                (await this.reactionRepository.find({
+                    where: { message: { id: In(messageIds) } },
+                    relations: { user: true, message: true },
+                    order: { createdAt: 'ASC' },
+                })) || [];
 
             for (const r of rawReactions) {
-                const msgId = (r.message as any)?.id || (r as any).messageId;
+                const msgId = r.message?.id || (r as any).messageId;
+                if (!msgId) continue;
                 if (!reactionsMap.has(msgId)) {
                     reactionsMap.set(msgId, []);
                 }
