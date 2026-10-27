@@ -384,8 +384,10 @@ describe('ConversationsService', () => {
             expect(inbox).toHaveLength(2);
             expect(inbox[0].name).toBe('Partner A');
             expect(inbox[0].unreadCount).toBe(2);
+            expect(inbox[0].partnerId).toBe('user-partner');
             expect(inbox[0].lastMessage.content).toBe('Hello there');
             expect(inbox[1].name).toBe('Dev Team');
+            expect(inbox[1].partnerId).toBeUndefined();
             expect(inbox[1].unreadCount).toBe(0);
         });
     });

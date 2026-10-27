@@ -406,11 +406,13 @@ export class ConversationsService {
             const myMember = c.members.find((m) => m.user.id === currentUserId);
             let displayName = c.name;
             let avatarUrl = c.avatarUrl;
+            let partnerId: string | undefined = undefined;
 
             if (c.type === ConversationType.DIRECT) {
                 const partner = c.members.find((m) => m.user.id !== currentUserId)?.user;
                 displayName = partner?.displayName || partner?.username || 'Người dùng';
                 avatarUrl = partner?.avatarUrl;
+                partnerId = partner?.id;
             }
 
             const lastMsg = c.lastMessageId ? lastMessageMap.get(c.lastMessageId) : null;
@@ -420,6 +422,7 @@ export class ConversationsService {
                 type: c.type,
                 name: displayName,
                 avatarUrl,
+                partnerId,
                 unreadCount: myMember ? myMember.unreadCount : 0,
                 lastMessage: lastMsg
                     ? {

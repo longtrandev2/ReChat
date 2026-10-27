@@ -3,6 +3,7 @@ import { Search, X, MessageSquarePlus } from 'lucide-react'
 import { useConversationStore, type FilterTab } from '../stores/conversation.store'
 import { ConversationItem } from './ConversationItem'
 import { useSocket } from '@/hooks/useSocket'
+import { useAuthStore } from '@/stores/auth.store'
 import { cn } from '@/lib/utils'
 
 interface ConversationSidebarProps {
@@ -41,6 +42,7 @@ export function ConversationSidebar({
   } = useConversationStore()
 
   const { isUserOnline } = useSocket()
+  const { user } = useAuthStore()
 
   // Nạp danh sách hộp thư lần đầu nếu chưa có dữ liệu
   useEffect(() => {
@@ -174,10 +176,17 @@ export function ConversationSidebar({
         ) : (
           // Render Conversation Items
           filteredList.map((conv) => {
+            const partnerId =
+              conv.partnerId ||
+              conv.members?.find((m) => m.user?.id !== user?.id)?.user?.id ||
+              (conv.lastMessage?.sender && conv.lastMessage.sender.id !== user?.id
+                ? conv.lastMessage.sender.id
+                : undefined)
+
             const isOnline = Boolean(
               conv.type === 'DIRECT' &&
-                conv.lastMessage?.sender &&
-                isUserOnline(conv.lastMessage.sender.id)
+                partnerId &&
+                isUserOnline(partnerId)
             )
 
             return (

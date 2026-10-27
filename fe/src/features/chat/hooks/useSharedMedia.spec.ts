@@ -3,6 +3,7 @@ import { renderHook, act, waitFor } from '@testing-library/react'
 import { useSharedMedia } from './useSharedMedia'
 import { messagesApi } from '../services/messages.api'
 import { socketClient } from '@/services/socket.client'
+import type { Socket } from 'socket.io-client'
 import type { Message } from '../types/message.types'
 
 vi.mock('../services/messages.api', () => ({
@@ -25,7 +26,7 @@ describe('useSharedMedia Hook Tests (ZOMBIES & AAA)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(socketClient.getSocket).mockReturnValue(mockSocket as any)
+    vi.mocked(socketClient.getSocket).mockReturnValue(mockSocket as unknown as Socket)
   })
 
   const createMockMessage = (id: string, type: 'IMAGE' | 'FILE', createdAt: string): Message => ({
