@@ -22,6 +22,8 @@ describe('ChatDetailDrawer Component Tests', () => {
     name: 'Nguyễn Văn A',
     avatarUrl: 'https://example.com/avatar.jpg',
     unreadCount: 0,
+    lastMessage: null,
+    lastMessageAt: '2026-10-26T00:00:00.000Z',
     createdAt: '2026-10-20T00:00:00.000Z',
     updatedAt: '2026-10-26T00:00:00.000Z',
   }
@@ -41,11 +43,11 @@ describe('ChatDetailDrawer Component Tests', () => {
     avatarUrl: null,
     unreadCount: 0,
     memberCount: 2,
+    lastMessage: null,
+    lastMessageAt: '2026-10-26T00:00:00.000Z',
     members: [
       {
         id: 'member-1',
-        conversationId: 'conv-group-1',
-        userId: 'user-1',
         role: 'OWNER',
         joinedAt: '2026-10-20T00:00:00.000Z',
         user: {
@@ -57,8 +59,6 @@ describe('ChatDetailDrawer Component Tests', () => {
       },
       {
         id: 'member-2',
-        conversationId: 'conv-group-1',
-        userId: 'user-2',
         role: 'MEMBER',
         joinedAt: '2026-10-20T00:00:00.000Z',
         user: {

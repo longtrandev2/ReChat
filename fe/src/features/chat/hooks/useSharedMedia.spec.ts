@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useSharedMedia } from './useSharedMedia'
 import { messagesApi } from '../services/messages.api'
+import { socketClient } from '@/services/socket.client'
 import type { Message } from '../types/message.types'
 
 vi.mock('../services/messages.api', () => ({
@@ -10,9 +11,21 @@ vi.mock('../services/messages.api', () => ({
   },
 }))
 
+vi.mock('@/services/socket.client', () => ({
+  socketClient: {
+    getSocket: vi.fn(),
+  },
+}))
+
 describe('useSharedMedia Hook Tests (ZOMBIES & AAA)', () => {
+  const mockSocket = {
+    on: vi.fn(),
+    off: vi.fn(),
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(socketClient.getSocket).mockReturnValue(mockSocket as any)
   })
 
   const createMockMessage = (id: string, type: 'IMAGE' | 'FILE', createdAt: string): Message => ({
@@ -156,5 +169,57 @@ describe('useSharedMedia Hook Tests (ZOMBIES & AAA)', () => {
 
     expect(result.current.error).toBe('Network disconnected')
     expect(result.current.items).toEqual([])
+  })
+
+  it('Realtime Socket: removes item on messageRecalled socket event', async () => {
+    let recallHandler: (payload: { conversationId: string; messageId: string }) => void = () => {}
+    mockSocket.on.mockImplementation((event: string, handler: (payload: { conversationId: string; messageId: string }) => void) => {
+      if (event === 'messageRecalled') {
+        recallHandler = handler
+      }
+    })
+
+    const msg1 = createMockMessage('msg-1', 'IMAGE', '2026-10-26T10:00:00Z')
+    vi.mocked(messagesApi.getMessages).mockResolvedValueOnce([msg1])
+
+    const { result } = renderHook(() =>
+      useSharedMedia({ conversationId: 'conv-1', type: 'IMAGE', enabled: true })
+    )
+
+    await waitFor(() => {
+      expect(result.current.items.length).toBe(1)
+    })
+
+    act(() => {
+      recallHandler({ conversationId: 'conv-1', messageId: 'msg-1' })
+    })
+
+    expect(result.current.items.length).toBe(0)
+  })
+
+  it('Realtime Socket: prepends item on newMessage socket event', async () => {
+    let newMsgHandler: (payload: Message & { conversationId?: string }) => void = () => {}
+    mockSocket.on.mockImplementation((event: string, handler: (payload: Message & { conversationId?: string }) => void) => {
+      if (event === 'newMessage') {
+        newMsgHandler = handler
+      }
+    })
+
+    vi.mocked(messagesApi.getMessages).mockResolvedValueOnce([])
+
+    const { result } = renderHook(() =>
+      useSharedMedia({ conversationId: 'conv-1', type: 'IMAGE', enabled: true })
+    )
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false)
+    })
+
+    const newMsg = createMockMessage('msg-socket-new', 'IMAGE', '2026-10-27T12:00:00Z')
+    act(() => {
+      newMsgHandler({ ...newMsg, conversationId: 'conv-1' })
+    })
+
+    expect(result.current.items).toEqual([{ ...newMsg, conversationId: 'conv-1' }])
   })
 })

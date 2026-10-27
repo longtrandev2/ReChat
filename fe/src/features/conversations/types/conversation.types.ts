@@ -1,6 +1,6 @@
 export type ConversationType = 'DIRECT' | 'GROUP'
 
-export type MessageType = 'TEXT' | 'IMAGE' | 'RAW'
+export type MessageType = 'TEXT' | 'IMAGE' | 'FILE' | 'RAW'
 
 export interface LastMessageSender {
   id: string

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { messagesApi } from '../services/messages.api'
+import { socketClient } from '@/services/socket.client'
 import type { Message, MessageType } from '../types/message.types'
 
 export interface UseSharedMediaOptions {
@@ -73,6 +74,7 @@ export function useSharedMedia({
     }
 
     const load = async () => {
+      setIsLoading(true)
       try {
         const data = await messagesApi.getMessages(conversationId, {
           type,
@@ -152,6 +154,40 @@ export function useSharedMedia({
   const removeItem = useCallback((messageId: string) => {
     setItems((prev) => prev.filter((m) => m.id !== messageId))
   }, [])
+
+  // Lắng nghe realtime các sự kiện socket (thu hồi tin nhắn và nhận tin nhắn mới)
+  useEffect(() => {
+    if (!enabled || !conversationId) return
+
+    const socket = socketClient.getSocket()
+    if (!socket || typeof socket.on !== 'function') return
+
+    const handleRecalled = (payload: { conversationId: string; messageId: string }) => {
+      if (payload?.conversationId === conversationId && payload?.messageId) {
+        removeItem(payload.messageId)
+      }
+    }
+
+    const handleNewMessage = (payload: Message & { conversationId?: string }) => {
+      if (
+        payload?.conversationId === conversationId &&
+        payload?.type === type &&
+        !payload?.isRecalled
+      ) {
+        prependItem(payload)
+      }
+    }
+
+    socket.on('messageRecalled', handleRecalled)
+    socket.on('newMessage', handleNewMessage)
+
+    return () => {
+      if (typeof socket.off === 'function') {
+        socket.off('messageRecalled', handleRecalled)
+        socket.off('newMessage', handleNewMessage)
+      }
+    }
+  }, [enabled, conversationId, type, removeItem, prependItem])
 
   return {
     items,

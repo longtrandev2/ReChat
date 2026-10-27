@@ -125,8 +125,8 @@ describe('MessageComposer Component Tests', () => {
     })
 
     // Mock createObjectURL
-    global.URL.createObjectURL = vi.fn(() => 'blob:mock-preview-url')
-    global.URL.revokeObjectURL = vi.fn()
+    window.URL.createObjectURL = vi.fn(() => 'blob:mock-preview-url')
+    window.URL.revokeObjectURL = vi.fn()
 
     render(<MessageComposer conversationId="conv-1" onSendMessage={vi.fn()} />)
 
@@ -159,8 +159,8 @@ describe('MessageComposer Component Tests', () => {
   })
 
   it('allows pasting images via clipboard (Ctrl+V) and adding to preview strip', async () => {
-    global.URL.createObjectURL = vi.fn(() => 'blob:mock-pasted-url')
-    global.URL.revokeObjectURL = vi.fn()
+    window.URL.createObjectURL = vi.fn(() => 'blob:mock-pasted-url')
+    window.URL.revokeObjectURL = vi.fn()
 
     render(<MessageComposer conversationId="conv-1" onSendMessage={vi.fn()} />)
 
@@ -186,8 +186,8 @@ describe('MessageComposer Component Tests', () => {
   })
 
   it('prevents duplicate attachments when pasting the same file multiple times', async () => {
-    global.URL.createObjectURL = vi.fn(() => 'blob:mock-pasted-url')
-    global.URL.revokeObjectURL = vi.fn()
+    window.URL.createObjectURL = vi.fn(() => 'blob:mock-pasted-url')
+    window.URL.revokeObjectURL = vi.fn()
 
     render(<MessageComposer conversationId="conv-1" onSendMessage={vi.fn()} />)
 
@@ -223,8 +223,8 @@ describe('MessageComposer Component Tests', () => {
   })
 
   it('allows removing an attachment from preview strip', async () => {
-    global.URL.createObjectURL = vi.fn(() => 'blob:mock-url')
-    global.URL.revokeObjectURL = vi.fn()
+    window.URL.createObjectURL = vi.fn(() => 'blob:mock-url')
+    window.URL.revokeObjectURL = vi.fn()
 
     render(<MessageComposer conversationId="conv-1" onSendMessage={vi.fn()} />)
 

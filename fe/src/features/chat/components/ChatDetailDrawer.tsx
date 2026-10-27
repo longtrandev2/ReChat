@@ -211,7 +211,7 @@ export function ChatDetailDrawer({
             </Avatar>
             {!isGroup && (
               <span className="absolute bottom-1 right-1">
-                <PresenceDot status={isOnline ? 'online' : 'offline'} />
+                <PresenceDot isOnline={isOnline} />
               </span>
             )}
           </div>
@@ -291,7 +291,9 @@ export function ChatDetailDrawer({
                     </p>
                   </div>
                   {member.role === 'OWNER' && (
-                    <ShieldCheck className="w-4 h-4 text-brand shrink-0" title="Trưởng nhóm" />
+                    <span title="Trưởng nhóm" className="shrink-0 flex items-center">
+                      <ShieldCheck className="w-4 h-4 text-brand" />
+                    </span>
                   )}
                 </div>
               ))}
@@ -314,7 +316,10 @@ export function ChatDetailDrawer({
               )}
             >
               <ImageIcon className="w-3.5 h-3.5" />
-              <span>Ảnh ({validImages.length}{hasMoreMedia ? '+' : ''})</span>
+              <span>
+                Ảnh ({validImages.length}
+                {hasMoreMedia && validImages.length >= 30 ? '+' : ''})
+              </span>
             </button>
             <button
               type="button"
@@ -327,7 +332,10 @@ export function ChatDetailDrawer({
               )}
             >
               <FileText className="w-3.5 h-3.5" />
-              <span>Tệp ({validFiles.length}{hasMoreFiles ? '+' : ''})</span>
+              <span>
+                Tệp ({validFiles.length}
+                {hasMoreFiles && validFiles.length >= 30 ? '+' : ''})
+              </span>
             </button>
           </div>
 

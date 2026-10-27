@@ -126,7 +126,7 @@ export function ChatHeader({
                 {isGroup ? <Users className="w-5 h-5" /> : initials}
               </AvatarFallback>
             </Avatar>
-            {!isGroup && <PresenceDot status={isOnline ? 'online' : 'offline'} />}
+            {!isGroup && <PresenceDot isOnline={isOnline} />}
           </div>
 
           <div className="flex flex-col min-w-0 justify-center text-left">

@@ -30,6 +30,8 @@ describe('ActiveChatCanvas Component Tests', () => {
     name: 'Nguyễn Văn A',
     avatarUrl: null,
     unreadCount: 1,
+    lastMessage: null,
+    lastMessageAt: '2026-10-26T00:00:00.000Z',
     createdAt: '2026-10-20T00:00:00.000Z',
     updatedAt: '2026-10-26T00:00:00.000Z',
   }
@@ -61,7 +63,7 @@ describe('ActiveChatCanvas Component Tests', () => {
         username: 'myuser',
         displayName: 'Tôi',
         email: 'me@example.com',
-        avatarUrl: null,
+        avatarUrl: undefined,
         isEmailVerified: true,
         twoFactorEnabled: false,
         createdAt: '2026-10-01T00:00:00.000Z',

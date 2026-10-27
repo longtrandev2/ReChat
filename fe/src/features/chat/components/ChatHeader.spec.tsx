@@ -10,6 +10,8 @@ describe('ChatHeader Component Tests', () => {
     name: 'Nguyễn Văn A',
     avatarUrl: null,
     unreadCount: 0,
+    lastMessage: null,
+    lastMessageAt: '2026-10-26T00:00:00.000Z',
     createdAt: '2026-10-20T00:00:00.000Z',
     updatedAt: '2026-10-26T00:00:00.000Z',
   }
@@ -20,6 +22,8 @@ describe('ChatHeader Component Tests', () => {
     name: 'Nhóm Dự Án ReChat',
     avatarUrl: null,
     unreadCount: 0,
+    lastMessage: null,
+    lastMessageAt: '2026-10-26T00:00:00.000Z',
     memberCount: 5,
     createdAt: '2026-10-20T00:00:00.000Z',
     updatedAt: '2026-10-26T00:00:00.000Z',
