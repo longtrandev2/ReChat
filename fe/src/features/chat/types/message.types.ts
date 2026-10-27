@@ -72,6 +72,7 @@ export interface MessageEditedEvent {
 export interface GetMessagesQuery {
   before?: string
   limit?: number
+  type?: MessageType
 }
 
 export interface SendMessagePayload {

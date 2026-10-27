@@ -46,9 +46,9 @@ describe('messagesApi Unit Tests (AAA Methodology)', () => {
     expect(result).toEqual([mockMessage])
   })
 
-  it('getMessages passes before cursor and limit pagination query', async () => {
+  it('getMessages passes before cursor, limit, and type filter in query', async () => {
     // Arrange
-    const query = { before: 'msg-cursor-999', limit: 20 }
+    const query = { before: 'msg-cursor-999', limit: 20, type: 'IMAGE' as const }
     vi.mocked(apiClient.get).mockResolvedValueOnce({ data: [mockMessage] })
 
     // Act

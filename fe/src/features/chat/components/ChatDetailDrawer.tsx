@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 import {
   X,
   Bell,
@@ -9,10 +9,12 @@ import {
   Users,
   ShieldCheck,
   Download,
+  Loader2,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Avatar, AvatarFallback, AvatarImage, PresenceDot } from '@/components/ui/avatar'
 import { formatFileSize, cn } from '@/lib/utils'
+import { useSharedMedia } from '../hooks/useSharedMedia'
 import type { Conversation, ConversationMemberUser } from '@/features/conversations/types/conversation.types'
 import type { Message } from '../types/message.types'
 
@@ -22,7 +24,7 @@ interface ChatDetailDrawerProps {
   conversation: Conversation
   partner?: ConversationMemberUser | null
   isOnline?: boolean
-  messages: Message[]
+  messages?: Message[]
   onImageClick?: (imageUrl: string, altText?: string) => void
   onSearchClick?: () => void
 }
@@ -33,7 +35,7 @@ type TabType = 'media' | 'files'
  * ChatDetailDrawer: Bảng thông tin chi tiết cuộc trò chuyện chuẩn Telegram Web / Messenger
  * - Mở rộng bên phải màn hình (Right Panel) lấp đầy khoảng trống desktop một cách chuyên nghiệp
  * - Hiển thị Avatar lớn, Tên, Username, Trạng thái online, Danh sách thành viên (Group)
- * - Thư viện nội dung đã chia sẻ: Tab Ảnh (Grid thumbnail) & Tab Tệp tin (Download)
+ * - Tự động tra cứu thư viện Media và Files độc lập với infinite scroll (không bị giới hạn bởi 30 tin nhắn chat)
  * - Tương thích mượt mà cả chế độ Light và Dark mode
  */
 export function ChatDetailDrawer({
@@ -42,7 +44,7 @@ export function ChatDetailDrawer({
   conversation,
   partner,
   isOnline = false,
-  messages,
+  messages = [],
   onImageClick,
   onSearchClick,
 }: ChatDetailDrawerProps) {
@@ -57,30 +59,44 @@ export function ChatDetailDrawer({
 
   const isGroup = conversation.type === 'GROUP'
 
-  // Bóc tách danh sách ảnh đã chia sẻ trong cuộc trò chuyện
-  const sharedImages = useMemo(() => {
-    return messages
-      .filter((m) => m.type === 'IMAGE' && m.fileUrl && !m.isRecalled)
-      .map((m) => ({
-        id: m.id,
-        url: m.fileUrl!,
-        caption: m.content || 'Hình ảnh',
-        createdAt: m.createdAt,
-      }))
-  }, [messages])
+  // Tra cứu ảnh độc lập theo phân trang cursor
+  const {
+    items: imageItems,
+    isLoading: isMediaLoading,
+    isLoadingMore: isMediaLoadingMore,
+    hasMore: hasMoreMedia,
+    loadMore: loadMoreMedia,
+    prependItem: prependImage,
+  } = useSharedMedia({
+    conversationId: conversation.id,
+    type: 'IMAGE',
+    enabled: isOpen && activeTab === 'media',
+  })
 
-  // Bóc tách danh sách tệp tin đã chia sẻ
-  const sharedFiles = useMemo(() => {
-    return messages
-      .filter((m) => m.type === 'FILE' && m.fileUrl && !m.isRecalled)
-      .map((m) => ({
-        id: m.id,
-        url: m.fileUrl!,
-        name: m.content || 'Tệp đính kèm',
-        size: m.fileSize,
-        createdAt: m.createdAt,
-      }))
-  }, [messages])
+  // Tra cứu tệp tin độc lập theo phân trang cursor
+  const {
+    items: fileItems,
+    isLoading: isFilesLoading,
+    isLoadingMore: isFilesLoadingMore,
+    hasMore: hasMoreFiles,
+    loadMore: loadMoreFiles,
+    prependItem: prependFile,
+  } = useSharedMedia({
+    conversationId: conversation.id,
+    type: 'FILE',
+    enabled: isOpen && activeTab === 'files',
+  })
+
+  // Đồng bộ real-time nếu có tin nhắn mới phát sinh trong lúc mở drawer
+  useEffect(() => {
+    if (messages.length === 0) return
+    const latest = messages[messages.length - 1]
+    if (latest.type === 'IMAGE' && !latest.isRecalled) {
+      prependImage(latest)
+    } else if (latest.type === 'FILE' && !latest.isRecalled) {
+      prependFile(latest)
+    }
+  }, [messages, prependImage, prependFile])
 
   const initials = (isGroup ? conversation.name : partner?.displayName || conversation.name || 'U')
     .split(' ')
@@ -125,6 +141,18 @@ export function ChatDetailDrawer({
     }
   }
 
+  // Tự động tải trang tiếp theo khi cuộn xuống gần đáy container
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
+    if (scrollHeight - scrollTop - clientHeight < 60) {
+      if (activeTab === 'media' && hasMoreMedia && !isMediaLoading && !isMediaLoadingMore) {
+        loadMoreMedia()
+      } else if (activeTab === 'files' && hasMoreFiles && !isFilesLoading && !isFilesLoadingMore) {
+        loadMoreFiles()
+      }
+    }
+  }
+
   if (!isOpen) return null
 
   return (
@@ -148,7 +176,11 @@ export function ChatDetailDrawer({
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto overflow-x-hidden flex flex-col p-4 gap-5">
+      <div
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto overflow-x-hidden flex flex-col p-4 gap-5"
+        data-testid="drawer-scroll-container"
+      >
         {/* Profile Card Section */}
         <div className="flex flex-col items-center text-center pt-2">
           <div className="relative mb-3">
@@ -266,7 +298,7 @@ export function ChatDetailDrawer({
               )}
             >
               <ImageIcon className="w-3.5 h-3.5" />
-              <span>Ảnh ({sharedImages.length})</span>
+              <span>Ảnh ({imageItems.length}{hasMoreMedia ? '+' : ''})</span>
             </button>
             <button
               type="button"
@@ -279,33 +311,45 @@ export function ChatDetailDrawer({
               )}
             >
               <FileText className="w-3.5 h-3.5" />
-              <span>Tệp ({sharedFiles.length})</span>
+              <span>Tệp ({fileItems.length}{hasMoreFiles ? '+' : ''})</span>
             </button>
           </div>
 
           {/* Tab 1: Grid Hình ảnh */}
           {activeTab === 'media' && (
             <div className="flex-1">
-              {sharedImages.length === 0 ? (
+              {isMediaLoading && imageItems.length === 0 ? (
+                <div className="grid grid-cols-3 gap-1.5 animate-pulse" data-testid="media-skeleton">
+                  {Array.from({ length: 6 }).map((_, i) => (
+                    <div key={i} className="aspect-square rounded-lg bg-black/10 dark:bg-white/10" />
+                  ))}
+                </div>
+              ) : imageItems.length === 0 ? (
                 <div className="py-8 text-center text-xs text-ink-muted">
                   Chưa có hình ảnh nào được chia sẻ
                 </div>
               ) : (
                 <div className="grid grid-cols-3 gap-1.5" data-testid="shared-media-grid">
-                  {sharedImages.map((img) => (
+                  {imageItems.map((img) => (
                     <div
                       key={img.id}
-                      onClick={() => onImageClick?.(img.url, img.caption)}
+                      onClick={() => onImageClick?.(img.fileUrl!, img.content || 'Hình ảnh')}
                       className="aspect-square rounded-lg overflow-hidden bg-black/5 dark:bg-black/20 cursor-pointer group/thumb relative border border-black/5 dark:border-white/5"
                     >
                       <img
-                        src={img.url}
-                        alt={img.caption}
+                        src={img.fileUrl!}
+                        alt={img.content || 'Hình ảnh'}
                         className="w-full h-full object-cover group-hover/thumb:scale-105 transition-transform duration-150"
                         loading="lazy"
                       />
                     </div>
                   ))}
+                </div>
+              )}
+
+              {isMediaLoadingMore && (
+                <div className="py-2.5 flex justify-center text-xs text-ink-muted">
+                  <Loader2 className="w-4 h-4 animate-spin text-brand" />
                 </div>
               )}
             </div>
@@ -314,27 +358,33 @@ export function ChatDetailDrawer({
           {/* Tab 2: Danh sách Tệp tin */}
           {activeTab === 'files' && (
             <div className="flex-1">
-              {sharedFiles.length === 0 ? (
+              {isFilesLoading && fileItems.length === 0 ? (
+                <div className="flex flex-col gap-1.5 animate-pulse" data-testid="files-skeleton">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="h-12 rounded-xl bg-black/10 dark:bg-white/10" />
+                  ))}
+                </div>
+              ) : fileItems.length === 0 ? (
                 <div className="py-8 text-center text-xs text-ink-muted">
                   Chưa có tệp tin nào được chia sẻ
                 </div>
               ) : (
                 <div className="flex flex-col gap-1.5" data-testid="shared-files-list">
-                  {sharedFiles.map((file) => (
+                  {fileItems.map((file) => (
                     <div
                       key={file.id}
                       className="flex items-center gap-2.5 p-2 rounded-xl bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 transition-colors group/file cursor-pointer"
-                      onClick={(e) => handleDownloadFile(e, file.url, file.name)}
+                      onClick={(e) => handleDownloadFile(e, file.fileUrl!, file.content || 'attachment')}
                     >
                       <div className="w-8 h-8 rounded-lg bg-brand/10 dark:bg-brand/20 text-brand flex items-center justify-center shrink-0">
                         <FileText className="w-4 h-4" />
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-medium text-ink-primary dark:text-[#F5F5F7] truncate">
-                          {file.name}
+                          {file.content || 'Tệp đính kèm'}
                         </p>
                         <p className="text-[10px] text-ink-muted">
-                          {file.size ? formatFileSize(file.size) : 'Tài liệu'}
+                          {file.fileSize ? formatFileSize(file.fileSize) : 'Tài liệu'}
                         </p>
                       </div>
                       <button
@@ -342,12 +392,18 @@ export function ChatDetailDrawer({
                         title="Tải tệp xuống"
                         aria-label="Tải tệp xuống"
                         className="p-1 rounded-full text-ink-secondary dark:text-ink-secondary-dark hover:text-brand transition-colors shrink-0"
-                        onClick={(e) => handleDownloadFile(e, file.url, file.name)}
+                        onClick={(e) => handleDownloadFile(e, file.fileUrl!, file.content || 'attachment')}
                       >
                         <Download className="w-4 h-4" />
                       </button>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {isFilesLoadingMore && (
+                <div className="py-2.5 flex justify-center text-xs text-ink-muted">
+                  <Loader2 className="w-4 h-4 animate-spin text-brand" />
                 </div>
               )}
             </div>
