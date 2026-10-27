@@ -6,6 +6,7 @@ import type { Message } from '../types/message.types'
 vi.mock('@/services/api.client', () => ({
   apiClient: {
     get: vi.fn(),
+    post: vi.fn(),
   },
 }))
 
@@ -58,5 +59,26 @@ describe('messagesApi Unit Tests (AAA Methodology)', () => {
       params: query,
     })
     expect(result).toEqual([mockMessage])
+  })
+
+  it('reactMessage posts emoji to the reaction endpoint', async () => {
+    // Arrange
+    const mockResponse = {
+      action: 'ADDED' as const,
+      emoji: '👍',
+      messageId: 'msg-1',
+      reactions: [],
+    }
+    vi.mocked(apiClient.post).mockResolvedValueOnce({ data: mockResponse })
+
+    // Act
+    const result = await messagesApi.reactMessage('conv-123', 'msg-1', '👍')
+
+    // Assert
+    expect(apiClient.post).toHaveBeenCalledWith(
+      '/conversations/conv-123/messages/msg-1/react',
+      { emoji: '👍' }
+    )
+    expect(result).toEqual(mockResponse)
   })
 })
