@@ -67,10 +67,11 @@ export function ChatDetailDrawer({
     hasMore: hasMoreMedia,
     loadMore: loadMoreMedia,
     prependItem: prependImage,
+    removeItem: removeImage,
   } = useSharedMedia({
     conversationId: conversation.id,
     type: 'IMAGE',
-    enabled: isOpen && activeTab === 'media',
+    enabled: isOpen,
   })
 
   // Tra cứu tệp tin độc lập theo phân trang cursor
@@ -81,22 +82,37 @@ export function ChatDetailDrawer({
     hasMore: hasMoreFiles,
     loadMore: loadMoreFiles,
     prependItem: prependFile,
+    removeItem: removeFile,
   } = useSharedMedia({
     conversationId: conversation.id,
     type: 'FILE',
-    enabled: isOpen && activeTab === 'files',
+    enabled: isOpen,
   })
 
-  // Đồng bộ real-time nếu có tin nhắn mới phát sinh trong lúc mở drawer
+  // Loại trừ hoàn toàn bất kỳ tin nhắn nào đã bị thu hồi hoặc thiếu URL
+  const validImages = imageItems.filter((img) => !img.isRecalled && Boolean(img.fileUrl))
+  const validFiles = fileItems.filter((file) => !file.isRecalled && Boolean(file.fileUrl))
+
+  // Đồng bộ real-time nếu có tin nhắn mới phát sinh hoặc bị thu hồi trong lúc mở drawer
   useEffect(() => {
     if (messages.length === 0) return
+
+    // 1. Kiểm tra tin nhắn mới nhất
     const latest = messages[messages.length - 1]
     if (latest.type === 'IMAGE' && !latest.isRecalled) {
       prependImage(latest)
     } else if (latest.type === 'FILE' && !latest.isRecalled) {
       prependFile(latest)
     }
-  }, [messages, prependImage, prependFile])
+
+    // 2. Gỡ bỏ tức thì các tin nhắn đã bị thu hồi khỏi gallery
+    for (const msg of messages) {
+      if (msg.isRecalled) {
+        removeImage(msg.id)
+        removeFile(msg.id)
+      }
+    }
+  }, [messages, prependImage, prependFile, removeImage, removeFile])
 
   const initials = (isGroup ? conversation.name : partner?.displayName || conversation.name || 'U')
     .split(' ')
@@ -298,7 +314,7 @@ export function ChatDetailDrawer({
               )}
             >
               <ImageIcon className="w-3.5 h-3.5" />
-              <span>Ảnh ({imageItems.length}{hasMoreMedia ? '+' : ''})</span>
+              <span>Ảnh ({validImages.length}{hasMoreMedia ? '+' : ''})</span>
             </button>
             <button
               type="button"
@@ -311,26 +327,26 @@ export function ChatDetailDrawer({
               )}
             >
               <FileText className="w-3.5 h-3.5" />
-              <span>Tệp ({fileItems.length}{hasMoreFiles ? '+' : ''})</span>
+              <span>Tệp ({validFiles.length}{hasMoreFiles ? '+' : ''})</span>
             </button>
           </div>
 
           {/* Tab 1: Grid Hình ảnh */}
           {activeTab === 'media' && (
             <div className="flex-1">
-              {isMediaLoading && imageItems.length === 0 ? (
+              {isMediaLoading && validImages.length === 0 ? (
                 <div className="grid grid-cols-3 gap-1.5 animate-pulse" data-testid="media-skeleton">
                   {Array.from({ length: 6 }).map((_, i) => (
                     <div key={i} className="aspect-square rounded-lg bg-black/10 dark:bg-white/10" />
                   ))}
                 </div>
-              ) : imageItems.length === 0 ? (
+              ) : validImages.length === 0 ? (
                 <div className="py-8 text-center text-xs text-ink-muted">
                   Chưa có hình ảnh nào được chia sẻ
                 </div>
               ) : (
                 <div className="grid grid-cols-3 gap-1.5" data-testid="shared-media-grid">
-                  {imageItems.map((img) => (
+                  {validImages.map((img) => (
                     <div
                       key={img.id}
                       onClick={() => onImageClick?.(img.fileUrl!, img.content || 'Hình ảnh')}
@@ -358,19 +374,19 @@ export function ChatDetailDrawer({
           {/* Tab 2: Danh sách Tệp tin */}
           {activeTab === 'files' && (
             <div className="flex-1">
-              {isFilesLoading && fileItems.length === 0 ? (
+              {isFilesLoading && validFiles.length === 0 ? (
                 <div className="flex flex-col gap-1.5 animate-pulse" data-testid="files-skeleton">
                   {Array.from({ length: 4 }).map((_, i) => (
                     <div key={i} className="h-12 rounded-xl bg-black/10 dark:bg-white/10" />
                   ))}
                 </div>
-              ) : fileItems.length === 0 ? (
+              ) : validFiles.length === 0 ? (
                 <div className="py-8 text-center text-xs text-ink-muted">
                   Chưa có tệp tin nào được chia sẻ
                 </div>
               ) : (
                 <div className="flex flex-col gap-1.5" data-testid="shared-files-list">
-                  {fileItems.map((file) => (
+                  {validFiles.map((file) => (
                     <div
                       key={file.id}
                       className="flex items-center gap-2.5 p-2 rounded-xl bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 transition-colors group/file cursor-pointer"

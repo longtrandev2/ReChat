@@ -18,6 +18,7 @@ export interface UseSharedMediaResult {
   loadMore: () => Promise<void>
   refetch: () => Promise<void>
   prependItem: (item: Message) => void
+  removeItem: (messageId: string) => void
 }
 
 /**
@@ -68,8 +69,6 @@ export function useSharedMedia({
     let isCancelled = false
 
     if (!enabled || !conversationId) {
-      setIsLoading(false)
-      setItems([])
       return
     }
 
@@ -149,6 +148,11 @@ export function useSharedMedia({
     [type]
   )
 
+  // Gỡ bỏ tin nhắn tức thời khi có thông báo thu hồi
+  const removeItem = useCallback((messageId: string) => {
+    setItems((prev) => prev.filter((m) => m.id !== messageId))
+  }, [])
+
   return {
     items,
     isLoading,
@@ -158,5 +162,6 @@ export function useSharedMedia({
     loadMore,
     refetch: fetchInitial,
     prependItem,
+    removeItem,
   }
 }

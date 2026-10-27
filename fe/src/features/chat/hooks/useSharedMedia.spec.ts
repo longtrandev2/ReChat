@@ -123,6 +123,26 @@ describe('useSharedMedia Hook Tests (ZOMBIES & AAA)', () => {
     expect(result.current.items).toEqual([newIncoming])
   })
 
+  it('Interface: removeItem immediately removes recalled message by ID', async () => {
+    const msg1 = createMockMessage('msg-1', 'IMAGE', '2026-10-26T10:00:00Z')
+    const msg2 = createMockMessage('msg-2', 'IMAGE', '2026-10-26T11:00:00Z')
+    vi.mocked(messagesApi.getMessages).mockResolvedValueOnce([msg1, msg2])
+
+    const { result } = renderHook(() =>
+      useSharedMedia({ conversationId: 'conv-1', type: 'IMAGE', enabled: true })
+    )
+
+    await waitFor(() => {
+      expect(result.current.items.length).toBe(2)
+    })
+
+    act(() => {
+      result.current.removeItem('msg-1')
+    })
+
+    expect(result.current.items.map((m) => m.id)).toEqual(['msg-2'])
+  })
+
   it('Error handling: records error message when API rejects', async () => {
     vi.mocked(messagesApi.getMessages).mockRejectedValueOnce(new Error('Network disconnected'))
 
