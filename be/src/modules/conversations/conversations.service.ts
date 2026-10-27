@@ -482,6 +482,8 @@ export class ConversationsService {
         // Lọc theo loại tin nhắn (TEXT, IMAGE, FILE) nếu có
         if (query.type) {
             qb.andWhere('m.type = :messageType', { messageType: query.type });
+            // Loại bỏ hoàn toàn các tin nhắn đã bị thu hồi khỏi gallery Media/Files
+            qb.andWhere('m.isRecalled = :isRecalled', { isRecalled: false });
         }
 
         // Nếu có con trỏ before: Lấy tin nhắn trước mốc đó

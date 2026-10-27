@@ -449,6 +449,9 @@ describe('ConversationsService', () => {
             expect(mockQb.andWhere).toHaveBeenCalledWith('m.type = :messageType', {
                 messageType: MessageType.IMAGE,
             });
+            expect(mockQb.andWhere).toHaveBeenCalledWith('m.isRecalled = :isRecalled', {
+                isRecalled: false,
+            });
         });
 
         it('should correctly enrich messages with reactions loaded from database', async () => {
