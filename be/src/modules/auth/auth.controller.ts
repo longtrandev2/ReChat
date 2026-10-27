@@ -12,7 +12,7 @@ import {
     UseGuards,
 } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
-import { Throttle } from "@nestjs/throttler";
+import { Throttle, SkipThrottle } from "@nestjs/throttler";
 import type { Request } from "express";
 import {
     RegisterDto,
@@ -215,6 +215,7 @@ export class AuthController {
      * Xem danh sách các phiên thiết bị đang đăng nhập
      */
     @Get('sessions')
+    @SkipThrottle({ auth: true })
     @UseGuards(AuthGuard('jwt'))
     @ApiBearerAuth('JWT-auth')
     @ApiOperation({ summary: 'Lấy danh sách các thiết bị đang đăng nhập tài khoản' })
@@ -285,6 +286,7 @@ export class AuthController {
      * Lấy thông tin tài khoản đang đăng nhập (FR-03)
      */
     @Get('me')
+    @SkipThrottle({ auth: true })
     @UseGuards(AuthGuard('jwt'))
     @ApiBearerAuth('JWT-auth')
     @ApiOperation({ summary: 'Lấy thông tin tài khoản đang đăng nhập (FR-03)' })

@@ -260,6 +260,18 @@ describe('AuthController', () => {
             const result = controller.getProfile(user);
             expect(result).toEqual(user);
         });
+
+        it('should have SkipThrottle configured for auth throttler (prevents F5 429 lockout)', () => {
+            const isSkipped = Reflect.getMetadata('THROTTLER:SKIPauth', controller.getProfile);
+            expect(isSkipped).toBe(true);
+        });
+    });
+
+    describe('getSessions', () => {
+        it('should have SkipThrottle configured for auth throttler', () => {
+            const isSkipped = Reflect.getMetadata('THROTTLER:SKIPauth', controller.getSessions);
+            expect(isSkipped).toBe(true);
+        });
     });
 
     describe('logout', () => {
