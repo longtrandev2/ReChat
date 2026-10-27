@@ -406,11 +406,13 @@ export class ConversationsService {
             const myMember = c.members.find((m) => m.user.id === currentUserId);
             let displayName = c.name;
             let avatarUrl = c.avatarUrl;
+            let partnerId: string | undefined = undefined;
 
             if (c.type === ConversationType.DIRECT) {
                 const partner = c.members.find((m) => m.user.id !== currentUserId)?.user;
                 displayName = partner?.displayName || partner?.username || 'Người dùng';
                 avatarUrl = partner?.avatarUrl;
+                partnerId = partner?.id;
             }
 
             const lastMsg = c.lastMessageId ? lastMessageMap.get(c.lastMessageId) : null;
@@ -420,6 +422,7 @@ export class ConversationsService {
                 type: c.type,
                 name: displayName,
                 avatarUrl,
+                partnerId,
                 unreadCount: myMember ? myMember.unreadCount : 0,
                 lastMessage: lastMsg
                     ? {
@@ -479,6 +482,13 @@ export class ConversationsService {
             .leftJoinAndSelect('m.sender', 'sender')
             .where('m.conversationId = :conversationId', { conversationId });
 
+        // Lọc theo loại tin nhắn (TEXT, IMAGE, FILE) nếu có
+        if (query.type) {
+            qb.andWhere('m.type = :messageType', { messageType: query.type });
+            // Loại bỏ hoàn toàn các tin nhắn đã bị thu hồi khỏi gallery Media/Files
+            qb.andWhere('m.isRecalled = :isRecalled', { isRecalled: false });
+        }
+
         // Nếu có con trỏ before: Lấy tin nhắn trước mốc đó
         if (query.before) {
             const beforeMessage = await this.messageRepository.findOne({
@@ -517,14 +527,16 @@ export class ConversationsService {
         >();
 
         if (messageIds.length > 0) {
-            const rawReactions = await this.reactionRepository.find({
-                where: { message: { id: In(messageIds) } },
-                relations: { user: true },
-                order: { createdAt: 'ASC' },
-            });
+            const rawReactions =
+                (await this.reactionRepository.find({
+                    where: { message: { id: In(messageIds) } },
+                    relations: { user: true, message: true },
+                    order: { createdAt: 'ASC' },
+                })) || [];
 
             for (const r of rawReactions) {
-                const msgId = (r.message as any)?.id || (r as any).messageId;
+                const msgId = r.message?.id || (r as any).messageId;
+                if (!msgId) continue;
                 if (!reactionsMap.has(msgId)) {
                     reactionsMap.set(msgId, []);
                 }
@@ -1232,7 +1244,7 @@ export class ConversationsService {
         senderId: string,
         dto: SendMessageDto,
     ): Promise<Message> {
-        const { conversationId, content, type = MessageType.TEXT, fileUrl, replyToId } = dto;
+        const { conversationId, content, type = MessageType.TEXT, fileUrl, fileSize, replyToId } = dto;
 
         // 1. Kiểm tra thành viên hội thoại (BR-08)
         await this.validateMembership(conversationId, senderId);
@@ -1259,6 +1271,7 @@ export class ConversationsService {
                     content: true,
                     type: true,
                     fileUrl: true,
+                    fileSize: true,
                     isRecalled: true,
                     sender: {
                         id: true,
@@ -1276,6 +1289,7 @@ export class ConversationsService {
                 content: originalMessage.isRecalled ? '[Tin nhắn đã bị thu hồi]' : originalMessage.content,
                 type: originalMessage.type,
                 fileUrl: originalMessage.isRecalled ? null : originalMessage.fileUrl,
+                fileSize: originalMessage.isRecalled ? null : originalMessage.fileSize,
                 sender: {
                     id: originalMessage.sender?.id,
                     username: originalMessage.sender?.username,
@@ -1292,6 +1306,7 @@ export class ConversationsService {
             content: content.trim(),
             type,
             fileUrl,
+            fileSize,
             replyToId,
         });
         const savedMessage = await this.messageRepository.save(message);
@@ -1322,6 +1337,7 @@ export class ConversationsService {
                 content: true,
                 type: true,
                 fileUrl: true,
+                fileSize: true,
                 replyToId: true,
                 isRecalled: true,
                 isEdited: true,

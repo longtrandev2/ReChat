@@ -53,8 +53,13 @@ export function ConversationItem({
       return <span className="font-medium text-brand dark:text-brand-accent">[Hình ảnh]</span>
     }
 
-    if (lastMsg.type === 'RAW') {
-      return <span className="font-medium text-brand dark:text-brand-accent">[Tệp đính kèm]</span>
+    if (lastMsg.type === 'FILE' || lastMsg.type === 'RAW') {
+      return (
+        <span className={cn('truncate', hasUnread && 'text-ink-primary dark:text-ink-primary-dark font-medium')}>
+          <span className="font-medium text-brand dark:text-brand-accent mr-1">[Tệp đính kèm]</span>
+          {lastMsg.content}
+        </span>
+      )
     }
 
     if (lastMsg.content.includes('[Tin nhắn đã bị thu hồi]')) {

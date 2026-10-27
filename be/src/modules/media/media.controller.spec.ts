@@ -104,6 +104,7 @@ describe('MediaController', () => {
                     content: 'avatar.png',
                     type: MessageType.IMAGE,
                     fileUrl: mockUploadedResult.url,
+                    fileSize: mockUploadedResult.size,
                 },
             );
             expect(result).toEqual({

@@ -131,6 +131,92 @@ describe('useAuthStore (ZOMBIES & AAA Methodology)', () => {
     expect(localStorage.getItem('rechat_access_token')).toBeNull()
   })
 
+  // E - Exceptions: Rate limit (429) MUST preserve token and not kick to login
+  it('E: initializeAuth PRESERVES session and does NOT trigger logout on 429 Too Many Requests (F5 resilience)', async () => {
+    // Arrange
+    const validToken = 'valid-token-surviving-throttle'
+    localStorage.setItem('rechat_access_token', validToken)
+    useAuthStore.setState({ token: validToken, isAuthenticated: true })
+
+    vi.mocked(apiClient.get).mockRejectedValueOnce({
+      response: { status: 429, data: { message: 'ThrottlerException: Too Many Requests' } },
+    })
+
+    // Act
+    await useAuthStore.getState().initializeAuth()
+
+    // Assert: Token and auth state must be retained!
+    const state = useAuthStore.getState()
+    expect(state.token).toBe(validToken)
+    expect(state.isAuthenticated).toBe(true)
+    expect(state.isLoading).toBe(false)
+    expect(localStorage.getItem('rechat_access_token')).toBe(validToken)
+  })
+
+  // E - Exceptions: Server error (500) MUST preserve token
+  it('E: initializeAuth PRESERVES session and does NOT trigger logout on 500 Server Error', async () => {
+    // Arrange
+    const validToken = 'valid-token-surviving-server-error'
+    localStorage.setItem('rechat_access_token', validToken)
+    useAuthStore.setState({ token: validToken, isAuthenticated: true })
+
+    vi.mocked(apiClient.get).mockRejectedValueOnce({
+      response: { status: 500, data: { message: 'Internal Server Error' } },
+    })
+
+    // Act
+    await useAuthStore.getState().initializeAuth()
+
+    // Assert: Token must NOT be deleted
+    const state = useAuthStore.getState()
+    expect(state.token).toBe(validToken)
+    expect(state.isAuthenticated).toBe(true)
+    expect(state.isLoading).toBe(false)
+    expect(localStorage.getItem('rechat_access_token')).toBe(validToken)
+  })
+
+  // E - Exceptions: Network connection loss (Offline) MUST preserve token
+  it('E: initializeAuth PRESERVES session and does NOT trigger logout on Network Error', async () => {
+    // Arrange
+    const validToken = 'valid-token-surviving-offline'
+    localStorage.setItem('rechat_access_token', validToken)
+    useAuthStore.setState({ token: validToken, isAuthenticated: true })
+
+    vi.mocked(apiClient.get).mockRejectedValueOnce(new Error('Network Error'))
+
+    // Act
+    await useAuthStore.getState().initializeAuth()
+
+    // Assert: Token must NOT be deleted
+    const state = useAuthStore.getState()
+    expect(state.token).toBe(validToken)
+    expect(state.isAuthenticated).toBe(true)
+    expect(state.isLoading).toBe(false)
+    expect(localStorage.getItem('rechat_access_token')).toBe(validToken)
+  })
+
+  // M - Many: Multiple calls maintain consistency
+  it('M: initializeAuth called multiple times concurrently remains consistent', async () => {
+    // Arrange
+    const validToken = 'valid-token-multiple'
+    localStorage.setItem('rechat_access_token', validToken)
+    useAuthStore.setState({ token: validToken, isAuthenticated: true })
+
+    vi.mocked(apiClient.get).mockResolvedValue({ data: mockUser })
+
+    // Act
+    await Promise.all([
+      useAuthStore.getState().initializeAuth(),
+      useAuthStore.getState().initializeAuth(),
+    ])
+
+    // Assert
+    const state = useAuthStore.getState()
+    expect(state.isAuthenticated).toBe(true)
+    expect(state.user).toEqual(mockUser)
+    expect(state.isLoading).toBe(false)
+  })
+
   // S - Simple / Happy Path: initializeAuth hydrations user profile successfully
   it('S: initializeAuth hydrates user profile when token is valid', async () => {
     // Arrange

@@ -18,4 +18,25 @@ export const messagesApi = {
     )
     return res.data
   },
+
+  /**
+   * POST /api/v1/conversations/:id/messages/:messageId/react
+   * Thao tác thả hoặc gỡ reaction qua REST API
+   */
+  reactMessage: async (
+    conversationId: string,
+    messageId: string,
+    emoji: string
+  ): Promise<{
+    action: 'ADDED' | 'REMOVED' | 'CHANGED'
+    emoji: string | null
+    messageId: string
+    reactions: Message['reactions']
+  }> => {
+    const res = await apiClient.post(
+      `/conversations/${conversationId}/messages/${messageId}/react`,
+      { emoji }
+    )
+    return res.data
+  },
 }

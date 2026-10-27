@@ -23,13 +23,18 @@ export const socketClient = {
    * Khởi tạo hoặc tái sử dụng kết nối Socket với JWT token
    */
   connect(token: string): Socket {
-    // Nếu socket đang kết nối với cùng token, tái sử dụng instance hiện tại
-    if (socketInstance && currentToken === token && socketInstance.connected) {
+    // Nếu socket đang kết nối hoặc đã kết nối với cùng token, tái sử dụng instance hiện tại
+    if (
+      socketInstance &&
+      currentToken === token &&
+      (socketInstance.connected || socketInstance.active)
+    ) {
       return socketInstance
     }
 
-    // Nếu token thay đổi hoặc socket cũ đang tồn tại, dọn dẹp trước khi tạo mới
+    // Nếu token thay đổi hoặc socket cũ không còn hoạt động, dọn dẹp trước khi tạo mới
     if (socketInstance) {
+      socketInstance.removeAllListeners()
       socketInstance.disconnect()
       socketInstance = null
     }

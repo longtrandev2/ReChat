@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import axios from 'axios'
 import { apiClient } from '@/services/api.client'
 import type { UserProfile } from '@/types/auth.types'
 
@@ -64,9 +65,23 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         isAuthenticated: true,
         isLoading: false,
       })
-    } catch {
-      // 401 or network error
-      get().logout()
+    } catch (error: unknown) {
+      const is401 =
+        axios.isAxiosError(error)
+          ? error.response?.status === 401
+          : typeof error === 'object' &&
+            error !== null &&
+            'response' in error &&
+            (error as { response?: { status?: number } }).response?.status === 401
+
+      if (is401) {
+        // Chỉ đăng xuất khi token thực sự hết hạn hoặc bị thu hồi (401)
+        get().logout()
+      } else {
+        // Lỗi 429 Too Many Requests hoặc sự cố mạng/server tạm thời:
+        // Bảo lưu token và session hợp lệ, không đá văng người dùng ra trang login
+        set({ isLoading: false })
+      }
     }
   },
 }))

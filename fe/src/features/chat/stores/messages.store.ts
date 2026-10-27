@@ -7,12 +7,31 @@ export interface MessagesState {
   hasMoreByConversation: Record<string, boolean>
   lastReadMessageIdByConversation: Record<string, string> // conversationId -> lastReadMessageId
   typingUsers: Record<string, Record<string, string>> // conversationId -> { [userId]: displayName }
+  editingMessage: { id: string; content: string } | null
+  replyingMessage: Message | null
   isLoadingMessages: boolean
   error: string | null
 
   // Actions
   fetchMessages: (conversationId: string, before?: string) => Promise<void>
   appendIncomingMessage: (conversationId: string, message: Message) => void
+  setEditingMessage: (message: { id: string; content: string } | null) => void
+  setReplyingMessage: (message: Message | null) => void
+  handleMessageRecalled: (conversationId: string, messageId: string) => void
+  handleMessageEdited: (
+    conversationId: string,
+    messageId: string,
+    content: string,
+    editedAt?: string
+  ) => void
+  handleReactionUpdated: (
+    conversationId: string,
+    messageId: string,
+    emoji: string,
+    action: 'ADDED' | 'REMOVED' | 'CHANGED',
+    user: { id: string; displayName?: string; username?: string },
+    currentUserId?: string
+  ) => void
   setTypingStatus: (
     conversationId: string,
     userId: string,
@@ -35,8 +54,174 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
   hasMoreByConversation: {},
   lastReadMessageIdByConversation: {},
   typingUsers: {},
+  editingMessage: null,
+  replyingMessage: null,
   isLoadingMessages: false,
   error: null,
+
+  setEditingMessage: (message) => {
+    set({ editingMessage: message })
+  },
+
+  setReplyingMessage: (message) => {
+    set({ replyingMessage: message })
+  },
+
+  handleMessageRecalled: (conversationId: string, messageId: string) => {
+    set((state) => {
+      const currentList = state.messagesByConversation[conversationId] || []
+      const index = currentList.findIndex((m) => m.id === messageId)
+      if (index === -1) return state
+
+      const updated = [...currentList]
+      updated[index] = {
+        ...updated[index],
+        isRecalled: true,
+        content: '[Tin nhắn đã bị thu hồi]',
+      }
+
+      return {
+        messagesByConversation: {
+          ...state.messagesByConversation,
+          [conversationId]: updated,
+        },
+      }
+    })
+  },
+
+  handleMessageEdited: (
+    conversationId: string,
+    messageId: string,
+    content: string,
+    editedAt?: string
+  ) => {
+    set((state) => {
+      const currentList = state.messagesByConversation[conversationId] || []
+      const index = currentList.findIndex((m) => m.id === messageId)
+      if (index === -1) return state
+
+      const updated = [...currentList]
+      updated[index] = {
+        ...updated[index],
+        content,
+        isEdited: true,
+        editedAt: editedAt || new Date().toISOString(),
+      }
+
+      return {
+        messagesByConversation: {
+          ...state.messagesByConversation,
+          [conversationId]: updated,
+        },
+      }
+    })
+  },
+
+  handleReactionUpdated: (
+    conversationId: string,
+    messageId: string,
+    emoji: string,
+    action: 'ADDED' | 'REMOVED' | 'CHANGED',
+    user: { id: string; displayName?: string; username?: string },
+    currentUserId?: string
+  ) => {
+    set((state) => {
+      const currentList = state.messagesByConversation[conversationId] || []
+      const index = currentList.findIndex((m) => m.id === messageId)
+      if (index === -1) return state
+
+      const msg = currentList[index]
+      let reactions = [...(msg.reactions || [])]
+      const userDisplay = user.displayName || user.username || 'User'
+      const isMe = user.id === currentUserId
+
+      if (action === 'ADDED') {
+        const groupIndex = reactions.findIndex((r) => r.emoji === emoji)
+        if (groupIndex !== -1) {
+          const group = reactions[groupIndex]
+          const userExists = group.users.some((u) => u.id === user.id)
+          const newUsers = userExists
+            ? group.users
+            : [...group.users, { id: user.id, displayName: userDisplay }]
+          reactions[groupIndex] = {
+            ...group,
+            count: userExists ? group.count : group.count + 1,
+            users: newUsers,
+            hasReacted: isMe ? true : group.hasReacted,
+          }
+        } else {
+          reactions.push({
+            emoji,
+            count: 1,
+            users: [{ id: user.id, displayName: userDisplay }],
+            hasReacted: isMe,
+          })
+        }
+      } else if (action === 'REMOVED') {
+        reactions = reactions
+          .map((group) => {
+            if (group.emoji !== emoji) return group
+            const newUsers = group.users.filter((u) => u.id !== user.id)
+            return {
+              ...group,
+              count: Math.max(0, group.count - 1),
+              users: newUsers,
+              hasReacted: isMe ? false : group.hasReacted,
+            }
+          })
+          .filter((group) => group.count > 0)
+      } else if (action === 'CHANGED') {
+        // Remove from any other group
+        reactions = reactions
+          .map((group) => {
+            const hasUser = group.users.some((u) => u.id === user.id)
+            if (!hasUser || group.emoji === emoji) return group
+            return {
+              ...group,
+              count: Math.max(0, group.count - 1),
+              users: group.users.filter((u) => u.id !== user.id),
+              hasReacted: isMe ? false : group.hasReacted,
+            }
+          })
+          .filter((group) => group.count > 0)
+
+        // Add to new emoji group
+        const groupIndex = reactions.findIndex((r) => r.emoji === emoji)
+        if (groupIndex !== -1) {
+          const group = reactions[groupIndex]
+          const userExists = group.users.some((u) => u.id === user.id)
+          reactions[groupIndex] = {
+            ...group,
+            count: userExists ? group.count : group.count + 1,
+            users: userExists
+              ? group.users
+              : [...group.users, { id: user.id, displayName: userDisplay }],
+            hasReacted: isMe ? true : group.hasReacted,
+          }
+        } else {
+          reactions.push({
+            emoji,
+            count: 1,
+            users: [{ id: user.id, displayName: userDisplay }],
+            hasReacted: isMe,
+          })
+        }
+      }
+
+      const updated = [...currentList]
+      updated[index] = {
+        ...msg,
+        reactions,
+      }
+
+      return {
+        messagesByConversation: {
+          ...state.messagesByConversation,
+          [conversationId]: updated,
+        },
+      }
+    })
+  },
 
   fetchMessages: async (conversationId: string, before?: string) => {
     try {
@@ -203,6 +388,8 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
       hasMoreByConversation: {},
       lastReadMessageIdByConversation: {},
       typingUsers: {},
+      editingMessage: null,
+      replyingMessage: null,
       isLoadingMessages: false,
       error: null,
     })

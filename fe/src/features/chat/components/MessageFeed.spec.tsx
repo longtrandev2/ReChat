@@ -30,8 +30,8 @@ describe('MessageFeed Component Tests', () => {
     fileUrl: null,
     replyToId: null,
     isRecalled: false,
-    createdAt: '2026-10-26T09:00:00.000Z',
-    updatedAt: '2026-10-26T09:00:00.000Z',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
     sender: {
       id: 'user-me',
       username: 'me',

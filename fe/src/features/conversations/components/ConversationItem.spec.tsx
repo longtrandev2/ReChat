@@ -65,7 +65,24 @@ describe('ConversationItem Component Tests', () => {
 
     expect(screen.getByText('Nhóm Lập Trình ReChat')).toBeInTheDocument()
     expect(screen.getByText('[Tệp đính kèm]')).toBeInTheDocument()
+    expect(screen.getByText('Đã gửi file spec')).toBeInTheDocument()
     expect(screen.queryByTestId('unread-badge')).not.toBeInTheDocument()
+  })
+
+  it('renders special preview for FILE type attachment with file name', () => {
+    const fileConv: Conversation = {
+      ...mockDirectConv,
+      lastMessage: {
+        id: 'msg-file',
+        content: 'BaoCaoTienDo.xlsx',
+        type: 'FILE',
+        createdAt: '2026-10-26T12:00:00.000Z',
+      },
+    }
+
+    render(<ConversationItem conversation={fileConv} />)
+    expect(screen.getByText('[Tệp đính kèm]')).toBeInTheDocument()
+    expect(screen.getByText('BaoCaoTienDo.xlsx')).toBeInTheDocument()
   })
 
   it('renders special snippet for recalled message', () => {

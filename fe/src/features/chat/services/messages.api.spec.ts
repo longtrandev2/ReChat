@@ -6,6 +6,7 @@ import type { Message } from '../types/message.types'
 vi.mock('@/services/api.client', () => ({
   apiClient: {
     get: vi.fn(),
+    post: vi.fn(),
   },
 }))
 
@@ -45,9 +46,9 @@ describe('messagesApi Unit Tests (AAA Methodology)', () => {
     expect(result).toEqual([mockMessage])
   })
 
-  it('getMessages passes before cursor and limit pagination query', async () => {
+  it('getMessages passes before cursor, limit, and type filter in query', async () => {
     // Arrange
-    const query = { before: 'msg-cursor-999', limit: 20 }
+    const query = { before: 'msg-cursor-999', limit: 20, type: 'IMAGE' as const }
     vi.mocked(apiClient.get).mockResolvedValueOnce({ data: [mockMessage] })
 
     // Act
@@ -58,5 +59,26 @@ describe('messagesApi Unit Tests (AAA Methodology)', () => {
       params: query,
     })
     expect(result).toEqual([mockMessage])
+  })
+
+  it('reactMessage posts emoji to the reaction endpoint', async () => {
+    // Arrange
+    const mockResponse = {
+      action: 'ADDED' as const,
+      emoji: '👍',
+      messageId: 'msg-1',
+      reactions: [],
+    }
+    vi.mocked(apiClient.post).mockResolvedValueOnce({ data: mockResponse })
+
+    // Act
+    const result = await messagesApi.reactMessage('conv-123', 'msg-1', '👍')
+
+    // Assert
+    expect(apiClient.post).toHaveBeenCalledWith(
+      '/conversations/conv-123/messages/msg-1/react',
+      { emoji: '👍' }
+    )
+    expect(result).toEqual(mockResponse)
   })
 })

@@ -3,12 +3,15 @@ import { useParams } from 'react-router-dom'
 import { ChatHeader } from './ChatHeader'
 import { MessageFeed } from './MessageFeed'
 import { MessageComposer } from './MessageComposer'
+import { ImageLightboxModal } from './ImageLightboxModal'
+import { ChatDetailDrawer } from './ChatDetailDrawer'
 import { useConversationStore } from '@/features/conversations/stores/conversation.store'
 import { useMessagesStore } from '../stores/messages.store'
 import { useSocket } from '@/hooks/useSocket'
 import { useAuthStore } from '@/stores/auth.store'
 import { socketClient } from '@/services/socket.client'
 import { conversationApi } from '@/features/conversations/services/conversation.api'
+import { toast } from 'sonner'
 import type { ConversationMemberUser } from '@/features/conversations/types/conversation.types'
 
 /**
@@ -20,7 +23,7 @@ import type { ConversationMemberUser } from '@/features/conversations/types/conv
 export function ActiveChatCanvas() {
   const { conversationId } = useParams<{ conversationId: string }>()
   const { user } = useAuthStore()
-  const { conversations, markConversationAsRead, setActiveConversation } =
+  const { conversations, setActiveConversation } =
     useConversationStore()
   const {
     messagesByConversation,
@@ -29,11 +32,20 @@ export function ActiveChatCanvas() {
     typingUsers,
     isLoadingMessages,
     fetchMessages,
+    handleMessageRecalled,
+    handleMessageEdited,
+    handleReactionUpdated,
   } = useMessagesStore()
   const { isUserOnline } = useSocket()
 
   // Thông tin đối phương trong cuộc trò chuyện trực tiếp (Direct)
   const [partner, setPartner] = useState<ConversationMemberUser | null>(null)
+
+  // Lightbox xem ảnh toàn màn hình modal
+  const [lightboxImage, setLightboxImage] = useState<{ url: string; alt?: string } | null>(null)
+
+  // Bảng thông tin chi tiết cuộc trò chuyện (Right Panel Telegram / Messenger)
+  const [isDetailOpen, setIsDetailOpen] = useState(false)
 
   // Tìm cuộc hội thoại trong Inbox store
   const conversation = useMemo(() => {
@@ -97,7 +109,7 @@ export function ActiveChatCanvas() {
     }
   }, [conversationId, user?.id])
 
-  // Vòng đời Room WebSocket và tải tin nhắn ban đầu
+  // Vòng đời Room WebSocket và lắng nghe tương tác tin nhắn
   useEffect(() => {
     if (!conversationId) return
 
@@ -111,14 +123,76 @@ export function ActiveChatCanvas() {
 
     // Tải 30 tin nhắn mới nhất
     fetchMessages(conversationId)
-    markConversationAsRead(conversationId)
 
-    return () => {
-      if (socket && socket.connected) {
-        socket.emit('leaveConversation', { conversationId })
+    // Handlers lắng nghe sự kiện thu hồi, chỉnh sửa và thả cảm xúc
+    const onRecalled = (payload: { conversationId: string; messageId: string }) => {
+      if (payload.conversationId === conversationId) {
+        handleMessageRecalled(payload.conversationId, payload.messageId)
       }
     }
-  }, [conversationId, setActiveConversation, fetchMessages, markConversationAsRead])
+
+    const onEdited = (payload: {
+      conversationId: string
+      messageId: string
+      content: string
+      editedAt?: string
+    }) => {
+      if (payload.conversationId === conversationId) {
+        handleMessageEdited(
+          payload.conversationId,
+          payload.messageId,
+          payload.content,
+          payload.editedAt
+        )
+      }
+    }
+
+    const onReactionUpdated = (payload: {
+      conversationId: string
+      messageId: string
+      emoji: string
+      action: 'ADDED' | 'REMOVED' | 'CHANGED'
+      user: { id: string; displayName?: string; username?: string }
+    }) => {
+      if (payload.conversationId === conversationId) {
+        handleReactionUpdated(
+          payload.conversationId,
+          payload.messageId,
+          payload.emoji,
+          payload.action,
+          payload.user,
+          user?.id
+        )
+      }
+    }
+
+    if (socket && typeof socket.on === 'function') {
+      socket.on('messageRecalled', onRecalled)
+      socket.on('messageEdited', onEdited)
+      socket.on('messageReactionUpdated', onReactionUpdated)
+    }
+
+    return () => {
+      if (socket) {
+        if (typeof socket.off === 'function') {
+          socket.off('messageRecalled', onRecalled)
+          socket.off('messageEdited', onEdited)
+          socket.off('messageReactionUpdated', onReactionUpdated)
+        }
+        if (socket.connected && typeof socket.emit === 'function') {
+          socket.emit('leaveConversation', { conversationId })
+        }
+      }
+    }
+  }, [
+    conversationId,
+    setActiveConversation,
+    fetchMessages,
+    handleMessageRecalled,
+    handleMessageEdited,
+    handleReactionUpdated,
+    user?.id,
+  ])
 
   // Tải thêm tin nhắn cũ khi cuộn lên đỉnh
   const handleLoadMore = useCallback(() => {
@@ -129,7 +203,7 @@ export function ActiveChatCanvas() {
 
   // Gửi tin nhắn qua WebSocket
   const handleSendMessage = useCallback(
-    (content: string) => {
+    (content: string, replyToId?: string) => {
       if (!conversationId) return
       const socket = socketClient.getSocket()
       if (socket && socket.connected) {
@@ -137,10 +211,126 @@ export function ActiveChatCanvas() {
           conversationId,
           content,
           type: 'TEXT',
+          ...(replyToId ? { replyToId } : {}),
         })
       }
     },
     [conversationId]
+  )
+
+  // Thả / gỡ reaction qua WebSocket
+  const handleReact = useCallback(
+    (message: { id: string }, emoji: string) => {
+      if (!conversationId) return
+      const socket = socketClient.getSocket()
+      if (socket && socket.connected) {
+        socket.emit('reactMessage', {
+          conversationId,
+          messageId: message.id,
+          emoji,
+        })
+      }
+    },
+    [conversationId]
+  )
+
+  // Thu hồi tin nhắn qua WebSocket
+  const handleRecall = useCallback(
+    (message: { id: string }) => {
+      if (!conversationId) return
+      const socket = socketClient.getSocket()
+      if (socket && socket.connected) {
+        socket.emit('recallMessage', {
+          conversationId,
+          messageId: message.id,
+        })
+      }
+    },
+    [conversationId]
+  )
+
+  // Chỉnh sửa tin nhắn qua WebSocket
+  const handleEditMessage = useCallback(
+    (messageId: string, content: string) => {
+      if (!conversationId) return
+      const socket = socketClient.getSocket()
+      if (socket && socket.connected) {
+        socket.emit('editMessage', {
+          conversationId,
+          messageId,
+          content,
+        })
+      }
+    },
+    [conversationId]
+  )
+
+  // Cuộn tới tin nhắn được reply với hiệu ứng Flash Highlight và tự động tải thêm nếu chưa có trong DOM
+  const handleScrollToReply = useCallback(
+    async (replyToId: string) => {
+      const applyFlashHighlight = (el: Element) => {
+        // Chỉ highlight chính xác khung bong bóng tin nhắn (không bôi màu cả dòng container w-full)
+        const bubbleBox = el.querySelector('[data-message-box="true"]') || el
+        bubbleBox.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        bubbleBox.classList.add(
+          'ring-2',
+          'ring-brand',
+          'ring-offset-2',
+          'ring-offset-surface-light',
+          'dark:ring-offset-surface-dark',
+          'transition-all',
+          'duration-500',
+          'bg-brand/15',
+          'dark:bg-brand/25'
+        )
+        setTimeout(() => {
+          bubbleBox.classList.remove(
+            'ring-2',
+            'ring-brand',
+            'ring-offset-2',
+            'ring-offset-surface-light',
+            'dark:ring-offset-surface-dark',
+            'bg-brand/15',
+            'dark:bg-brand/25'
+          )
+        }, 1600)
+      }
+
+      // 1. Nếu tin nhắn đã có sẵn trong DOM
+      let targetEl = document.querySelector(`[data-testid="message-bubble-${replyToId}"]`)
+      if (targetEl) {
+        applyFlashHighlight(targetEl)
+        return
+      }
+
+      // 2. Nếu chưa có trong DOM, tự động tải thêm trang lịch sử cũ hơn để tìm
+      if (!conversationId) return
+      toast.info('Đang tìm tin nhắn gốc trong lịch sử trò chuyện...')
+
+      let attempts = 0
+      while (attempts < 3) {
+        const currentMessages = useMessagesStore.getState().messagesByConversation[conversationId] || []
+        const oldest = currentMessages[0]
+        if (!oldest) break
+
+        await fetchMessages(conversationId, oldest.id)
+        attempts++
+
+        // Đợi DOM render sau khi state cập nhật
+        await new Promise((r) => setTimeout(r, 150))
+        targetEl = document.querySelector(`[data-testid="message-bubble-${replyToId}"]`)
+        if (targetEl) {
+          applyFlashHighlight(targetEl)
+          return
+        }
+
+        const hasMoreMessages = useMessagesStore.getState().hasMoreByConversation[conversationId]
+        if (!hasMoreMessages) break
+      }
+
+      toast.info('Tin nhắn gốc nằm quá xa trong lịch sử trò chuyện')
+    },
+    [conversationId, fetchMessages]
   )
 
   if (!conversation) {
@@ -170,26 +360,58 @@ export function ActiveChatCanvas() {
         conversation={conversation}
         isOnline={isPartnerOnline}
         typingUserNames={typingNames}
+        isInfoOpen={isDetailOpen}
+        onInfoClick={() => setIsDetailOpen((prev) => !prev)}
       />
 
-      {/* Cột luồng chat căn giữa (max-w-3xl) chuẩn Telegram Web */}
-      <div className="flex-1 flex flex-col overflow-hidden relative z-10 w-full max-w-3xl mx-auto">
-        <MessageFeed
-          messages={messages}
-          currentUserId={user?.id || ''}
-          isGroup={conversation.type === 'GROUP'}
-          hasMore={hasMore}
-          isLoadingOlder={isLoadingMessages}
-          lastReadMessageId={lastReadId}
-          typingUserNames={typingNames}
-          onLoadMore={handleLoadMore}
-        />
+      {/* Vùng nội dung chính: Cột luồng chat và Bảng thông tin chi tiết bên phải */}
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Cột luồng chat mở rộng căn giữa thoải mái trên desktop */}
+        <div className="flex-1 flex flex-col overflow-hidden relative z-10 w-full max-w-4xl xl:max-w-5xl mx-auto px-2 sm:px-4 md:px-6">
+          <MessageFeed
+            messages={messages}
+            currentUserId={user?.id || ''}
+            isGroup={conversation.type === 'GROUP'}
+            hasMore={hasMore}
+            isLoadingOlder={isLoadingMessages}
+            lastReadMessageId={lastReadId}
+            typingUserNames={typingNames}
+            onLoadMore={handleLoadMore}
+            onReact={handleReact}
+            onReply={(msg) => useMessagesStore.getState().setReplyingMessage(msg)}
+            onRecall={handleRecall}
+            onEdit={(msg) => useMessagesStore.getState().setEditingMessage({ id: msg.id, content: msg.content })}
+            onScrollToReply={handleScrollToReply}
+            onImageClick={(url, alt) => setLightboxImage({ url, alt })}
+          />
 
-        <MessageComposer
-          conversationId={conversation.id}
-          onSendMessage={handleSendMessage}
+          <MessageComposer
+            conversationId={conversation.id}
+            onSendMessage={handleSendMessage}
+            onEditMessage={handleEditMessage}
+          />
+        </div>
+
+        {/* Bảng chi tiết bên phải (Telegram / Messenger Drawer) */}
+        <ChatDetailDrawer
+          key={conversation.id}
+          isOpen={isDetailOpen}
+          onClose={() => setIsDetailOpen(false)}
+          conversation={conversation}
+          partner={partner}
+          isOnline={isPartnerOnline}
+          messages={messages}
+          onImageClick={(url, alt) => setLightboxImage({ url, alt })}
         />
       </div>
+
+      {/* Lightbox modal xem ảnh phóng to toàn màn hình */}
+      <ImageLightboxModal
+        isOpen={Boolean(lightboxImage)}
+        imageUrl={lightboxImage?.url || null}
+        altText={lightboxImage?.alt}
+        onClose={() => setLightboxImage(null)}
+      />
     </div>
   )
 }

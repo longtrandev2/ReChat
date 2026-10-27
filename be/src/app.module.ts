@@ -50,7 +50,16 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
       useFactory: (storage: ThrottlerStorageRedisService) => ({
         throttlers: [
           { name: 'default', ttl: 60000, limit: 100 },
-          { name: 'auth', ttl: 60000, limit: 5 },
+          {
+            name: 'auth',
+            ttl: 60000,
+            limit: 5,
+            skipIf: (context) => {
+              // Throttler 'auth' chỉ áp dụng cho AuthController
+              const handlerClass = context.getClass();
+              return handlerClass?.name !== 'AuthController';
+            },
+          },
         ],
         storage,
       }),

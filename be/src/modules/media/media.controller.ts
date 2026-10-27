@@ -103,6 +103,7 @@ export class MediaController {
                 content: uploaded.originalName,
                 type: uploaded.type,
                 fileUrl: uploaded.url,
+                fileSize: uploaded.size,
             });
 
             this.eventEmitter.emit(
@@ -113,6 +114,7 @@ export class MediaController {
                     content: message.content,
                     type: message.type,
                     fileUrl: message.fileUrl,
+                    fileSize: message.fileSize ?? uploaded.size,
                     replyToId: message.replyToId,
                     replyTo: null,
                     reactions: [],

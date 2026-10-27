@@ -10,6 +10,8 @@ describe('ChatHeader Component Tests', () => {
     name: 'Nguyễn Văn A',
     avatarUrl: null,
     unreadCount: 0,
+    lastMessage: null,
+    lastMessageAt: '2026-10-26T00:00:00.000Z',
     createdAt: '2026-10-20T00:00:00.000Z',
     updatedAt: '2026-10-26T00:00:00.000Z',
   }
@@ -20,6 +22,8 @@ describe('ChatHeader Component Tests', () => {
     name: 'Nhóm Dự Án ReChat',
     avatarUrl: null,
     unreadCount: 0,
+    lastMessage: null,
+    lastMessageAt: '2026-10-26T00:00:00.000Z',
     memberCount: 5,
     createdAt: '2026-10-20T00:00:00.000Z',
     updatedAt: '2026-10-26T00:00:00.000Z',
@@ -92,5 +96,32 @@ describe('ChatHeader Component Tests', () => {
       screen.getByRole('button', { name: 'Thông tin hội thoại' })
     )
     expect(onInfoClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('triggers onInfoClick when clicking the avatar/title container', () => {
+    const onInfoClick = vi.fn()
+
+    render(
+      <ChatHeader
+        conversation={directConv}
+        onInfoClick={onInfoClick}
+      />
+    )
+
+    const titleContainer = screen.getByRole('button', { name: 'Xem thông tin cuộc trò chuyện' })
+    fireEvent.click(titleContainer)
+    expect(onInfoClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('applies active styling when isInfoOpen is true', () => {
+    render(
+      <ChatHeader
+        conversation={directConv}
+        isInfoOpen={true}
+      />
+    )
+
+    const infoBtn = screen.getByRole('button', { name: 'Thông tin hội thoại' })
+    expect(infoBtn).toHaveClass('bg-brand/10')
   })
 })

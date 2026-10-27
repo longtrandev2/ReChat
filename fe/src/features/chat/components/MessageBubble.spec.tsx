@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { MessageBubble } from './MessageBubble'
 import type { Message } from '../types/message.types'
 
@@ -88,4 +88,197 @@ describe('MessageBubble Component Tests', () => {
     expect(img).toHaveAttribute('src', 'https://example.com/photo.jpg')
     expect(screen.getByText('Ảnh chụp chuyến đi')).toBeInTheDocument()
   })
+
+  it('renders reaction pills and triggers onReact when clicked', async () => {
+    const handleReact = vi.fn()
+    const reactedMsg: Message = {
+      ...baseMessage,
+      reactions: [
+        {
+          emoji: '❤️',
+          count: 3,
+          users: [{ id: 'user-2', displayName: 'User Hai' }],
+          hasReacted: true,
+        },
+      ],
+    }
+
+    render(<MessageBubble message={reactedMsg} isOutgoing={false} onReact={handleReact} />)
+
+    expect(screen.getByText('❤️')).toBeInTheDocument()
+    expect(screen.getByText('3')).toBeInTheDocument()
+
+    const pill = screen.getByTitle('User Hai')
+    pill.click()
+    expect(handleReact).toHaveBeenCalledWith(reactedMsg, '❤️')
+  })
+
+  it('renders (đã sửa) indicator when message isEdited is true', () => {
+    const editedMsg: Message = {
+      ...baseMessage,
+      isEdited: true,
+      content: 'Nội dung sau khi sửa',
+    }
+
+    render(<MessageBubble message={editedMsg} isOutgoing={true} />)
+
+    expect(screen.getByText('(đã sửa)')).toBeInTheDocument()
+    expect(screen.getByText('Nội dung sau khi sửa')).toBeInTheDocument()
+  })
+
+  it('renders file attachment card with download link when message type is FILE', () => {
+    const fileMsg: Message = {
+      ...baseMessage,
+      id: 'msg-file-1',
+      type: 'FILE',
+      fileUrl: 'https://example.com/files/lib.txt',
+      fileSize: 1024 * 512, // 512 KB
+      content: 'lib.txt',
+    }
+
+    render(<MessageBubble message={fileMsg} isOutgoing={false} />)
+
+    expect(screen.getByTestId('file-attachment-msg-file-1')).toBeInTheDocument()
+    expect(screen.getByText('lib.txt')).toBeInTheDocument()
+    expect(screen.getByText('Tệp văn bản TXT')).toBeInTheDocument()
+    expect(screen.getByText('512.0 KB')).toBeInTheDocument()
+
+    const downloadBtn = screen.getByRole('button', { name: 'Tải tệp xuống' })
+    expect(downloadBtn).toBeInTheDocument()
+  })
+
+  it('renders quoted reply context when message has replyTo', () => {
+    const replyMsg: Message = {
+      ...baseMessage,
+      id: 'msg-reply-1',
+      content: 'Tôi trả lời tin này',
+      replyToId: 'parent-1',
+      replyTo: {
+        id: 'parent-1',
+        content: 'Tin nhắn gốc',
+        type: 'TEXT',
+        isRecalled: false,
+        createdAt: '2026-10-26T10:00:00.000Z',
+        sender: {
+          id: 'user-bob',
+          username: 'bob',
+          displayName: 'Bob Trần',
+          avatarUrl: null,
+        },
+      },
+    }
+
+    render(<MessageBubble message={replyMsg} isOutgoing={true} />)
+
+    expect(screen.getByTestId('reply-preview-msg-reply-1')).toBeInTheDocument()
+    expect(screen.getByText('Bob Trần')).toBeInTheDocument()
+    expect(screen.getByText('Tin nhắn gốc')).toBeInTheDocument()
+    expect(screen.getByText('Tôi trả lời tin này')).toBeInTheDocument()
+  })
+
+  it('triggers onScrollToReply when clicking reply preview', async () => {
+    const handleScrollToReply = vi.fn()
+    const replyMsg: Message = {
+      ...baseMessage,
+      id: 'msg-reply-2',
+      content: 'Tin nhắn phản hồi cho người nhận B',
+      replyToId: 'parent-99',
+      replyTo: {
+        id: 'parent-99',
+        content: 'Nội dung tin nhắn x',
+        type: 'TEXT',
+        isRecalled: false,
+        createdAt: '2026-10-26T10:00:00.000Z',
+        sender: {
+          id: 'user-alice',
+          username: 'alice',
+          displayName: 'Alice Nguyễn',
+          avatarUrl: null,
+        },
+      },
+    }
+
+    render(
+      <MessageBubble
+        message={replyMsg}
+        isOutgoing={false}
+        onScrollToReply={handleScrollToReply}
+      />
+    )
+
+    const replyPreview = screen.getByTestId('reply-preview-msg-reply-2')
+    fireEvent.click(replyPreview)
+
+    expect(handleScrollToReply).toHaveBeenCalledWith('parent-99')
+  })
+
+  it('calls onImageClick when clicking on image attachment', () => {
+    const handleImageClick = vi.fn()
+    const imageMsg: Message = {
+      ...baseMessage,
+      type: 'IMAGE',
+      fileUrl: 'https://example.com/lightbox-photo.jpg',
+      content: 'Chuyến đi Đà Lạt',
+    }
+
+    render(
+      <MessageBubble
+        message={imageMsg}
+        isOutgoing={true}
+        onImageClick={handleImageClick}
+      />
+    )
+
+    const imgContainer = screen.getByTestId(`image-attachment-${imageMsg.id}`)
+    fireEvent.click(imgContainer)
+
+    expect(handleImageClick).toHaveBeenCalledWith(
+      'https://example.com/lightbox-photo.jpg',
+      'Chuyến đi Đà Lạt'
+    )
+  })
+
+  it('omits raw file name under image attachment if content matches filename pattern', () => {
+    const imageMsg: Message = {
+      ...baseMessage,
+      type: 'IMAGE',
+      fileUrl: 'https://example.com/photo.png',
+      content: 'Screenshot_2026-10-27_10.png',
+    }
+
+    render(<MessageBubble message={imageMsg} isOutgoing={false} />)
+
+    expect(screen.getByRole('img', { name: 'Hình ảnh đính kèm' })).toBeInTheDocument()
+    expect(screen.queryByText('Screenshot_2026-10-27_10.png')).not.toBeInTheDocument()
+  })
+
+  it('renders micro-actions toolbar to the left (mr-2) for outgoing messages', () => {
+    render(<MessageBubble message={baseMessage} isOutgoing={true} />)
+
+    const toolbar = screen.getByTestId(`message-toolbar-${baseMessage.id}`)
+    expect(toolbar).toBeInTheDocument()
+    expect(toolbar).toHaveClass('mr-2')
+  })
+
+  it('renders micro-actions toolbar to the right (ml-2) for incoming messages', () => {
+    render(<MessageBubble message={baseMessage} isOutgoing={false} />)
+
+    const toolbar = screen.getByTestId(`message-toolbar-${baseMessage.id}`)
+    expect(toolbar).toBeInTheDocument()
+    expect(toolbar).toHaveClass('ml-2')
+  })
+
+  it('does NOT render micro-actions toolbar when message is recalled', () => {
+    const recalledMsg: Message = {
+      ...baseMessage,
+      isRecalled: true,
+      content: '[Tin nhắn đã bị thu hồi]',
+    }
+
+    render(<MessageBubble message={recalledMsg} isOutgoing={true} />)
+
+    expect(screen.queryByTestId(`message-toolbar-${recalledMsg.id}`)).not.toBeInTheDocument()
+  })
 })
+
+

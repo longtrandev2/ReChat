@@ -21,6 +21,7 @@ import {
     ApiTags,
 } from '@nestjs/swagger';
 import { ConversationsService } from './conversations.service.js';
+import { SkipThrottle } from '@nestjs/throttler';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { User } from '../users/entities/user.entity.js';
 import {
@@ -38,6 +39,7 @@ import {
 
 @ApiTags('conversations')
 @ApiBearerAuth('JWT-auth')
+@SkipThrottle({ auth: true })
 @Controller('conversations')
 @UseGuards(AuthGuard('jwt'))
 export class ConversationsController {

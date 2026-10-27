@@ -492,6 +492,7 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
                     content: mockSavedMessage.content,
                     type: mockSavedMessage.type,
                     fileUrl: undefined,
+                    fileSize: null,
                     replyToId: undefined,
                     replyTo: null,
                     reactions: [],
