@@ -211,6 +211,74 @@ describe('MessageBubble Component Tests', () => {
 
     expect(handleScrollToReply).toHaveBeenCalledWith('parent-99')
   })
+
+  it('calls onImageClick when clicking on image attachment', () => {
+    const handleImageClick = vi.fn()
+    const imageMsg: Message = {
+      ...baseMessage,
+      type: 'IMAGE',
+      fileUrl: 'https://example.com/lightbox-photo.jpg',
+      content: 'Chuyến đi Đà Lạt',
+    }
+
+    render(
+      <MessageBubble
+        message={imageMsg}
+        isOutgoing={true}
+        onImageClick={handleImageClick}
+      />
+    )
+
+    const imgContainer = screen.getByTestId(`image-attachment-${imageMsg.id}`)
+    fireEvent.click(imgContainer)
+
+    expect(handleImageClick).toHaveBeenCalledWith(
+      'https://example.com/lightbox-photo.jpg',
+      'Chuyến đi Đà Lạt'
+    )
+  })
+
+  it('omits raw file name under image attachment if content matches filename pattern', () => {
+    const imageMsg: Message = {
+      ...baseMessage,
+      type: 'IMAGE',
+      fileUrl: 'https://example.com/photo.png',
+      content: 'Screenshot_2026-10-27_10.png',
+    }
+
+    render(<MessageBubble message={imageMsg} isOutgoing={false} />)
+
+    expect(screen.getByRole('img', { name: 'Hình ảnh đính kèm' })).toBeInTheDocument()
+    expect(screen.queryByText('Screenshot_2026-10-27_10.png')).not.toBeInTheDocument()
+  })
+
+  it('renders micro-actions toolbar to the left (mr-2) for outgoing messages', () => {
+    render(<MessageBubble message={baseMessage} isOutgoing={true} />)
+
+    const toolbar = screen.getByTestId(`message-toolbar-${baseMessage.id}`)
+    expect(toolbar).toBeInTheDocument()
+    expect(toolbar).toHaveClass('mr-2')
+  })
+
+  it('renders micro-actions toolbar to the right (ml-2) for incoming messages', () => {
+    render(<MessageBubble message={baseMessage} isOutgoing={false} />)
+
+    const toolbar = screen.getByTestId(`message-toolbar-${baseMessage.id}`)
+    expect(toolbar).toBeInTheDocument()
+    expect(toolbar).toHaveClass('ml-2')
+  })
+
+  it('does NOT render micro-actions toolbar when message is recalled', () => {
+    const recalledMsg: Message = {
+      ...baseMessage,
+      isRecalled: true,
+      content: '[Tin nhắn đã bị thu hồi]',
+    }
+
+    render(<MessageBubble message={recalledMsg} isOutgoing={true} />)
+
+    expect(screen.queryByTestId(`message-toolbar-${recalledMsg.id}`)).not.toBeInTheDocument()
+  })
 })
 
 

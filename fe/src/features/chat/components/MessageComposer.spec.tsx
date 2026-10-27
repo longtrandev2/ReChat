@@ -118,11 +118,15 @@ describe('MessageComposer Component Tests', () => {
     })
   })
 
-  it('triggers mediaApi.uploadMedia when file input is changed', async () => {
+  it('renders preview strip when file is selected and triggers uploadMedia on send', async () => {
     vi.mocked(mediaApi.uploadMedia).mockResolvedValueOnce({
       public_id: 'mock-id',
       secure_url: 'https://cloudinary.com/test.png',
     })
+
+    // Mock createObjectURL
+    global.URL.createObjectURL = vi.fn(() => 'blob:mock-preview-url')
+    global.URL.revokeObjectURL = vi.fn()
 
     render(<MessageComposer conversationId="conv-1" onSendMessage={vi.fn()} />)
 
@@ -133,12 +137,113 @@ describe('MessageComposer Component Tests', () => {
       fireEvent.change(fileInput, { target: { files: [file] } })
     })
 
+    // Preview strip should be displayed
+    expect(screen.getByTestId('attachment-preview-strip')).toBeInTheDocument()
+    expect(screen.getByAltText('photo.jpg')).toBeInTheDocument()
+
+    // Send button should be enabled
+    const sendButton = screen.getByRole('button', { name: 'Gửi tin nhắn' })
+    expect(sendButton).not.toBeDisabled()
+
+    // Click send
+    await act(async () => {
+      fireEvent.click(sendButton)
+    })
+
     expect(mediaApi.uploadMedia).toHaveBeenCalledTimes(1)
     expect(mediaApi.uploadMedia).toHaveBeenCalledWith(
       file,
       'conv-1',
       expect.any(Function)
     )
+  })
+
+  it('allows pasting images via clipboard (Ctrl+V) and adding to preview strip', async () => {
+    global.URL.createObjectURL = vi.fn(() => 'blob:mock-pasted-url')
+    global.URL.revokeObjectURL = vi.fn()
+
+    render(<MessageComposer conversationId="conv-1" onSendMessage={vi.fn()} />)
+
+    const composer = screen.getByTestId('message-composer')
+    const pastedFile = new File(['pasted image content'], 'screenshot.png', { type: 'image/png' })
+
+    const clipboardData = {
+      items: [
+        {
+          kind: 'file',
+          type: 'image/png',
+          getAsFile: () => pastedFile,
+        },
+      ],
+    }
+
+    await act(async () => {
+      fireEvent.paste(composer, { clipboardData })
+    })
+
+    expect(screen.getByTestId('attachment-preview-strip')).toBeInTheDocument()
+    expect(screen.getByAltText('screenshot.png')).toBeInTheDocument()
+  })
+
+  it('prevents duplicate attachments when pasting the same file multiple times', async () => {
+    global.URL.createObjectURL = vi.fn(() => 'blob:mock-pasted-url')
+    global.URL.revokeObjectURL = vi.fn()
+
+    render(<MessageComposer conversationId="conv-1" onSendMessage={vi.fn()} />)
+
+    const composer = screen.getByTestId('message-composer')
+    const pastedFile = new File(['duplicate image content'], 'photo-duplicate.png', {
+      type: 'image/png',
+      lastModified: 1700000000000,
+    })
+
+    const clipboardData = {
+      items: [
+        {
+          kind: 'file',
+          type: 'image/png',
+          getAsFile: () => pastedFile,
+        },
+      ],
+    }
+
+    // First paste
+    await act(async () => {
+      fireEvent.paste(composer, { clipboardData })
+    })
+
+    // Second paste of the identical file
+    await act(async () => {
+      fireEvent.paste(composer, { clipboardData })
+    })
+
+    // Should only have 1 thumbnail in preview strip
+    const thumbs = screen.getAllByAltText('photo-duplicate.png')
+    expect(thumbs).toHaveLength(1)
+  })
+
+  it('allows removing an attachment from preview strip', async () => {
+    global.URL.createObjectURL = vi.fn(() => 'blob:mock-url')
+    global.URL.revokeObjectURL = vi.fn()
+
+    render(<MessageComposer conversationId="conv-1" onSendMessage={vi.fn()} />)
+
+    const fileInput = screen.getByTestId('file-upload-input')
+    const file = new File(['dummy content'], 'document.pdf', { type: 'application/pdf' })
+
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [file] } })
+    })
+
+    expect(screen.getByText('document.pdf')).toBeInTheDocument()
+
+    const removeBtn = screen.getByTestId('remove-attachment-btn')
+    await act(async () => {
+      fireEvent.click(removeBtn)
+    })
+
+    expect(screen.queryByText('document.pdf')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('attachment-preview-strip')).not.toBeInTheDocument()
   })
 
   it('enters edit mode, displays edit banner, and triggers onEditMessage on save', async () => {

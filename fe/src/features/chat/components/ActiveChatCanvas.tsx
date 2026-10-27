@@ -3,6 +3,8 @@ import { useParams } from 'react-router-dom'
 import { ChatHeader } from './ChatHeader'
 import { MessageFeed } from './MessageFeed'
 import { MessageComposer } from './MessageComposer'
+import { ImageLightboxModal } from './ImageLightboxModal'
+import { ChatDetailDrawer } from './ChatDetailDrawer'
 import { useConversationStore } from '@/features/conversations/stores/conversation.store'
 import { useMessagesStore } from '../stores/messages.store'
 import { useSocket } from '@/hooks/useSocket'
@@ -38,6 +40,12 @@ export function ActiveChatCanvas() {
 
   // Thông tin đối phương trong cuộc trò chuyện trực tiếp (Direct)
   const [partner, setPartner] = useState<ConversationMemberUser | null>(null)
+
+  // Lightbox xem ảnh toàn màn hình modal
+  const [lightboxImage, setLightboxImage] = useState<{ url: string; alt?: string } | null>(null)
+
+  // Bảng thông tin chi tiết cuộc trò chuyện (Right Panel Telegram / Messenger)
+  const [isDetailOpen, setIsDetailOpen] = useState(false)
 
   // Tìm cuộc hội thoại trong Inbox store
   const conversation = useMemo(() => {
@@ -352,32 +360,58 @@ export function ActiveChatCanvas() {
         conversation={conversation}
         isOnline={isPartnerOnline}
         typingUserNames={typingNames}
+        isInfoOpen={isDetailOpen}
+        onInfoClick={() => setIsDetailOpen((prev) => !prev)}
       />
 
-      {/* Cột luồng chat căn giữa (max-w-3xl) chuẩn Telegram Web */}
-      <div className="flex-1 flex flex-col overflow-hidden relative z-10 w-full max-w-3xl mx-auto">
-        <MessageFeed
-          messages={messages}
-          currentUserId={user?.id || ''}
-          isGroup={conversation.type === 'GROUP'}
-          hasMore={hasMore}
-          isLoadingOlder={isLoadingMessages}
-          lastReadMessageId={lastReadId}
-          typingUserNames={typingNames}
-          onLoadMore={handleLoadMore}
-          onReact={handleReact}
-          onReply={(msg) => useMessagesStore.getState().setReplyingMessage(msg)}
-          onRecall={handleRecall}
-          onEdit={(msg) => useMessagesStore.getState().setEditingMessage({ id: msg.id, content: msg.content })}
-          onScrollToReply={handleScrollToReply}
-        />
+      {/* Vùng nội dung chính: Cột luồng chat và Bảng thông tin chi tiết bên phải */}
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Cột luồng chat mở rộng căn giữa thoải mái trên desktop */}
+        <div className="flex-1 flex flex-col overflow-hidden relative z-10 w-full max-w-4xl xl:max-w-5xl mx-auto px-2 sm:px-4 md:px-6">
+          <MessageFeed
+            messages={messages}
+            currentUserId={user?.id || ''}
+            isGroup={conversation.type === 'GROUP'}
+            hasMore={hasMore}
+            isLoadingOlder={isLoadingMessages}
+            lastReadMessageId={lastReadId}
+            typingUserNames={typingNames}
+            onLoadMore={handleLoadMore}
+            onReact={handleReact}
+            onReply={(msg) => useMessagesStore.getState().setReplyingMessage(msg)}
+            onRecall={handleRecall}
+            onEdit={(msg) => useMessagesStore.getState().setEditingMessage({ id: msg.id, content: msg.content })}
+            onScrollToReply={handleScrollToReply}
+            onImageClick={(url, alt) => setLightboxImage({ url, alt })}
+          />
 
-        <MessageComposer
-          conversationId={conversation.id}
-          onSendMessage={handleSendMessage}
-          onEditMessage={handleEditMessage}
+          <MessageComposer
+            conversationId={conversation.id}
+            onSendMessage={handleSendMessage}
+            onEditMessage={handleEditMessage}
+          />
+        </div>
+
+        {/* Bảng chi tiết bên phải (Telegram / Messenger Drawer) */}
+        <ChatDetailDrawer
+          key={conversation.id}
+          isOpen={isDetailOpen}
+          onClose={() => setIsDetailOpen(false)}
+          conversation={conversation}
+          partner={partner}
+          isOnline={isPartnerOnline}
+          messages={messages}
+          onImageClick={(url, alt) => setLightboxImage({ url, alt })}
         />
       </div>
+
+      {/* Lightbox modal xem ảnh phóng to toàn màn hình */}
+      <ImageLightboxModal
+        isOpen={Boolean(lightboxImage)}
+        imageUrl={lightboxImage?.url || null}
+        altText={lightboxImage?.alt}
+        onClose={() => setLightboxImage(null)}
+      />
     </div>
   )
 }

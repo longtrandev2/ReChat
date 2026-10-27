@@ -19,6 +19,7 @@ interface MessageFeedProps {
   onEdit?: (message: Message) => void
   onRecall?: (message: Message) => void
   onScrollToReply?: (replyToId: string) => void
+  onImageClick?: (imageUrl: string, altText?: string) => void
 }
 
 /**
@@ -42,6 +43,7 @@ export function MessageFeed({
   onEdit,
   onRecall,
   onScrollToReply,
+  onImageClick,
 }: MessageFeedProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const prevScrollHeightRef = useRef<number>(0)
@@ -198,6 +200,7 @@ export function MessageFeed({
                 onEdit={onEdit}
                 onRecall={onRecall}
                 onScrollToReply={onScrollToReply}
+                onImageClick={onImageClick}
               />
             </div>
           )

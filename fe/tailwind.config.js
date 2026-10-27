@@ -30,12 +30,14 @@ export default {
           dark: '#0E1621', // Telegram Dark canvas
         },
         surface: {
+          DEFAULT: '#FFFFFF',
           light: '#FFFFFF',
           'light-2': '#F4F4F5',
           dark: '#17212B', // Telegram Dark surface
           'dark-2': '#242F3D',
         },
         border: {
+          DEFAULT: '#E4E4E7',
           light: '#E4E4E7',
           dark: '#232E3C',
         },

@@ -112,6 +112,7 @@ interface MessageBubbleProps {
   onEdit?: (message: Message) => void
   onRecall?: (message: Message) => void
   onScrollToReply?: (replyToId: string) => void
+  onImageClick?: (imageUrl: string, altText?: string) => void
 }
 
 const QUICK_EMOJIS = ['❤️', '👍', '😂', '🔥', '😮', '😢']
@@ -122,7 +123,7 @@ const QUICK_EMOJIS = ['❤️', '👍', '😂', '🔥', '😮', '😢']
  * - Tin nhận đến: nền #FFFFFF (dark: #182533), đuôi nhọn ở góc dưới trái (rounded-bl-xs) kèm Avatar người gửi
  * - Flex wrap inline meta: tin nhắn ngắn có thời gian và dấu tích nằm cùng hàng với nội dung
  * - Dấu tích phân biệt: 1 tích xám (Đã gửi) vs 2 tích xanh (Đã đọc)
- * - Micro-action toolbar nổi khi hover (Quick Reactions, Reply, More)
+ * - Micro-action toolbar nổi khi hover (Quick Reactions, Reply, More) nằm phía trên bubble không bị che chữ
  * - Danh sách Reaction Pills nhóm emoji với số lượng và trạng thái đã tương tác
  * - Menu hành động: Sao chép, Chỉnh sửa (trong 15 phút), Thu hồi tin nhắn
  */
@@ -138,6 +139,7 @@ export function MessageBubble({
   onEdit,
   onRecall,
   onScrollToReply,
+  onImageClick,
 }: MessageBubbleProps) {
   const [isRecallDialogOpen, setIsRecallDialogOpen] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
@@ -216,6 +218,125 @@ export function MessageBubble({
     }
   }
 
+  // Render thanh thao tác micro-actions đặt ở bên cạnh bong bóng (trái với outgoing, phải với incoming)
+  const renderToolbar = () => {
+    if (message.isRecalled) return null
+
+    return (
+      <div
+        className={cn(
+          'flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-white dark:bg-[#1E2C3A] border border-border/80 dark:border-white/10 shadow-md opacity-0 group-hover:opacity-100 transition-opacity duration-150 backdrop-blur-xs shrink-0 self-center z-20 pointer-events-none group-hover:pointer-events-auto',
+          isOutgoing ? 'mr-2' : 'ml-2'
+        )}
+        data-testid={`message-toolbar-${message.id}`}
+      >
+        {/* Quick Emojis or Emoji Toggle Button */}
+        {showEmojiPicker ? (
+          <div className="flex items-center gap-1 px-1">
+            {QUICK_EMOJIS.map((emoji) => (
+              <button
+                key={emoji}
+                type="button"
+                onClick={() => {
+                  onReact?.(message, emoji)
+                  setShowEmojiPicker(false)
+                }}
+                className="hover:scale-125 active:scale-95 transition-transform text-sm p-0.5 cursor-pointer"
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <button
+            type="button"
+            title="Thả cảm xúc"
+            aria-label="Thả cảm xúc"
+            onClick={() => setShowEmojiPicker(true)}
+            className="p-1 rounded-full text-ink-secondary dark:text-ink-secondary-dark hover:text-amber-500 hover:scale-115 active:scale-90 transition-all cursor-pointer"
+          >
+            <Smile className="w-3.5 h-3.5" />
+          </button>
+        )}
+
+        <button
+          type="button"
+          title="Trả lời"
+          aria-label="Trả lời tin nhắn"
+          onClick={() => onReply?.(message)}
+          className="p-1 rounded-full text-ink-secondary dark:text-ink-secondary-dark hover:text-brand hover:scale-115 active:scale-90 transition-all cursor-pointer"
+        >
+          <Reply className="w-3.5 h-3.5" />
+        </button>
+
+        {/* Radix Dropdown Menu for More Actions */}
+        <DropdownMenu.Root onOpenChange={checkCanEdit}>
+          <DropdownMenu.Trigger asChild>
+            <button
+              type="button"
+              title="Tùy chọn khác"
+              aria-label="Tùy chọn khác"
+              className="p-1 rounded-full text-ink-secondary dark:text-ink-secondary-dark hover:text-ink-primary dark:hover:text-white hover:scale-115 active:scale-90 transition-all cursor-pointer"
+            >
+              <MoreHorizontal className="w-3.5 h-3.5" />
+            </button>
+          </DropdownMenu.Trigger>
+
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              align={isOutgoing ? 'end' : 'start'}
+              side="top"
+              sideOffset={6}
+              className="z-50 min-w-[150px] bg-white dark:bg-[#17212B] text-ink-primary dark:text-[#F5F5F7] border border-border dark:border-white/10 p-1.5 rounded-xl shadow-2xl animate-in fade-in-80 zoom-in-95 text-xs"
+            >
+              <DropdownMenu.Item
+                onClick={handleCopy}
+                className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 dark:hover:bg-white/10 outline-none transition-colors"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                <span>Sao chép</span>
+              </DropdownMenu.Item>
+
+              {message.type === 'FILE' && message.fileUrl && (
+                <DropdownMenu.Item
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    navigator.clipboard.writeText(message.fileUrl || '')
+                    toast.success('Đã sao chép liên kết tệp')
+                  }}
+                  className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 dark:hover:bg-white/10 outline-none transition-colors"
+                >
+                  <Link2 className="w-3.5 h-3.5 text-brand" />
+                  <span>Sao chép liên kết tệp</span>
+                </DropdownMenu.Item>
+              )}
+
+              {canEdit && (
+                <DropdownMenu.Item
+                  onClick={() => onEdit?.(message)}
+                  className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 dark:hover:bg-white/10 outline-none transition-colors"
+                >
+                  <Pencil className="w-3.5 h-3.5 text-brand" />
+                  <span>Chỉnh sửa</span>
+                </DropdownMenu.Item>
+              )}
+
+              {isOutgoing && (
+                <DropdownMenu.Item
+                  onClick={() => setIsRecallDialogOpen(true)}
+                  className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer hover:bg-coral-soft/50 dark:hover:bg-coral/10 text-coral outline-none transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Thu hồi</span>
+                </DropdownMenu.Item>
+              )}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      </div>
+    )
+  }
+
   return (
     <div
       className={cn(
@@ -226,7 +347,7 @@ export function MessageBubble({
     >
       <div
         className={cn(
-          'flex w-full items-end relative',
+          'flex w-full items-center relative',
           isOutgoing ? 'justify-end' : 'justify-start'
         )}
       >
@@ -249,6 +370,9 @@ export function MessageBubble({
           </div>
         )}
 
+        {/* Thanh thao tác micro-actions nằm BÊN TRÁI của bong bóng gửi đi (Outgoing) */}
+        {isOutgoing && renderToolbar()}
+
         {/* Thân bong bóng tin nhắn */}
         <div
           className={cn(
@@ -259,117 +383,6 @@ export function MessageBubble({
           )}
           data-message-box="true"
         >
-          {/* Floating Micro-Actions Toolbar on Hover */}
-          {!message.isRecalled && (
-            <div
-              className={cn(
-                'absolute -top-3.5 z-20 flex items-center gap-0.5 px-1 py-0.5 rounded-full bg-surface-light dark:bg-[#1E2C3A] border border-border-light/80 dark:border-border-dark shadow-md opacity-0 group-hover:opacity-100 transition-all duration-150 pointer-events-none group-hover:pointer-events-auto backdrop-blur-sm right-2'
-              )}
-            >
-              {/* Quick Emojis or Emoji Toggle Button */}
-              {showEmojiPicker ? (
-                <div className="flex items-center gap-1 px-1">
-                  {QUICK_EMOJIS.map((emoji) => (
-                    <button
-                      key={emoji}
-                      type="button"
-                      onClick={() => {
-                        onReact?.(message, emoji)
-                        setShowEmojiPicker(false)
-                      }}
-                      className="hover:scale-125 active:scale-95 transition-transform text-sm p-0.5"
-                    >
-                      {emoji}
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  title="Thả cảm xúc"
-                  aria-label="Thả cảm xúc"
-                  onClick={() => setShowEmojiPicker(true)}
-                  className="p-1 rounded-full text-ink-secondary dark:text-ink-secondary-dark hover:text-amber-500 hover:scale-115 active:scale-90 transition-all cursor-pointer"
-                >
-                  <Smile className="w-3.5 h-3.5" />
-                </button>
-              )}
-
-              <button
-                type="button"
-                title="Trả lời"
-                aria-label="Trả lời tin nhắn"
-                onClick={() => onReply?.(message)}
-                className="p-1 rounded-full text-ink-secondary dark:text-ink-secondary-dark hover:text-brand hover:scale-115 active:scale-90 transition-all cursor-pointer"
-              >
-                <Reply className="w-3.5 h-3.5" />
-              </button>
-
-              {/* Radix Dropdown Menu for More Actions */}
-              <DropdownMenu.Root onOpenChange={checkCanEdit}>
-                <DropdownMenu.Trigger asChild>
-                  <button
-                    type="button"
-                    title="Tùy chọn khác"
-                    aria-label="Tùy chọn khác"
-                    className="p-1 rounded-full text-ink-secondary dark:text-ink-secondary-dark hover:text-ink-primary dark:hover:text-white hover:scale-115 active:scale-90 transition-all cursor-pointer"
-                  >
-                    <MoreHorizontal className="w-3.5 h-3.5" />
-                  </button>
-                </DropdownMenu.Trigger>
-
-                <DropdownMenu.Portal>
-                  <DropdownMenu.Content
-                    align={isOutgoing ? 'end' : 'start'}
-                    sideOffset={5}
-                    className="z-50 min-w-[140px] bg-surface dark:bg-surface-dark border border-border dark:border-border-dark p-1 rounded-xl shadow-telegram animate-in fade-in-80 zoom-in-95 text-xs text-ink-primary dark:text-ink-primary-dark"
-                  >
-                    <DropdownMenu.Item
-                      onClick={handleCopy}
-                      className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer hover:bg-surface-hover dark:hover:bg-surface-dark-secondary outline-none transition-colors"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                      <span>Sao chép</span>
-                    </DropdownMenu.Item>
-
-                    {message.type === 'FILE' && message.fileUrl && (
-                      <DropdownMenu.Item
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          navigator.clipboard.writeText(message.fileUrl || '')
-                          toast.success('Đã sao chép liên kết tệp')
-                        }}
-                        className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer hover:bg-surface-hover dark:hover:bg-surface-dark-secondary outline-none transition-colors"
-                      >
-                        <Link2 className="w-3.5 h-3.5 text-brand" />
-                        <span>Sao chép liên kết tệp</span>
-                      </DropdownMenu.Item>
-                    )}
-
-                    {canEdit && (
-                      <DropdownMenu.Item
-                        onClick={() => onEdit?.(message)}
-                        className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer hover:bg-surface-hover dark:hover:bg-surface-dark-secondary outline-none transition-colors"
-                      >
-                        <Pencil className="w-3.5 h-3.5 text-brand" />
-                        <span>Chỉnh sửa</span>
-                      </DropdownMenu.Item>
-                    )}
-
-                    {isOutgoing && (
-                      <DropdownMenu.Item
-                        onClick={() => setIsRecallDialogOpen(true)}
-                        className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer hover:bg-coral-soft/50 dark:hover:bg-coral/10 text-coral outline-none transition-colors"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Thu hồi</span>
-                      </DropdownMenu.Item>
-                    )}
-                  </DropdownMenu.Content>
-                </DropdownMenu.Portal>
-              </DropdownMenu.Root>
-            </div>
-          )}
 
           {/* Tên người gửi trong Group Chat */}
           {!isOutgoing && isGroup && showSenderName && message.sender && (
@@ -441,120 +454,159 @@ export function MessageBubble({
                 </div>
               )}
 
-              {message.type === 'IMAGE' && message.fileUrl && (
-                <div className="rounded-xl overflow-hidden mb-1.5 max-h-72">
-                  <img
-                    src={message.fileUrl}
-                    alt="Hình ảnh đính kèm"
-                    className="w-full h-full object-cover rounded-xl cursor-pointer hover:opacity-95 transition-opacity"
-                    loading="lazy"
-                    onClick={() => window.open(message.fileUrl || '', '_blank')}
-                  />
-                </div>
-              )}
+              {(() => {
+                const isImageFileName = (text?: string | null) => {
+                  if (!text) return true
+                  return /\.(jpe?g|png|webp|gif|svg|bmp)$/i.test(text.trim())
+                }
+                const hasImageCaption =
+                  message.type === 'IMAGE' &&
+                  Boolean(message.content) &&
+                  !isImageFileName(message.content)
 
-              {/* Tệp tin đính kèm (File Attachment Card Telegram style) */}
-              {message.type === 'FILE' && message.fileUrl && (
-                <div className="mb-1.5 min-w-[220px] max-w-sm">
-                  <div
-                    className={cn(
-                      'flex items-center gap-3 p-2.5 rounded-xl border transition-all duration-150 cursor-pointer group/file select-none',
-                      isOutgoing
-                        ? 'bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 hover:bg-black/10 dark:hover:bg-white/10'
-                        : 'bg-black/5 dark:bg-white/5 border-border-light dark:border-border-dark hover:bg-black/10 dark:hover:bg-white/10'
+                return (
+                  <>
+                    {message.type === 'IMAGE' && message.fileUrl && (
+                      <div
+                        className="rounded-xl overflow-hidden mb-1.5 max-h-80 group/img relative cursor-pointer select-none"
+                        data-testid={`image-attachment-${message.id}`}
+                        onClick={() => {
+                          if (onImageClick) {
+                            onImageClick(message.fileUrl!, message.content || undefined)
+                          } else {
+                            window.open(message.fileUrl || '', '_blank')
+                          }
+                        }}
+                      >
+                        <img
+                          src={message.fileUrl}
+                          alt="Hình ảnh đính kèm"
+                          className="w-full max-h-80 object-cover rounded-xl hover:scale-[1.01] transition-transform duration-150"
+                          loading="lazy"
+                        />
+                      </div>
                     )}
-                    data-testid={`file-attachment-${message.id}`}
-                    onClick={(e) => handleDownloadFile(e, message.fileUrl!, message.content || 'attachment')}
-                    title="Bấm để tải xuống tệp"
-                  >
-                    {/* Icon phân loại file */}
-                    {(() => {
-                      const details = getFileDetails(message.content)
-                      const IconComponent = details.icon
-                      return (
+
+                    {/* Tệp tin đính kèm (File Attachment Card Telegram style) */}
+                    {message.type === 'FILE' && message.fileUrl && (
+                      <div className="mb-1.5 min-w-[220px] max-w-sm">
                         <div
                           className={cn(
-                            'w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border shadow-xs transition-transform group-hover/file:scale-105',
-                            details.bgClass,
-                            details.colorClass
+                            'flex items-center gap-3 p-2.5 rounded-xl border transition-all duration-150 cursor-pointer group/file select-none',
+                            isOutgoing
+                              ? 'bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 hover:bg-black/10 dark:hover:bg-white/10'
+                              : 'bg-black/5 dark:bg-white/5 border-border-light dark:border-border-dark hover:bg-black/10 dark:hover:bg-white/10'
                           )}
+                          data-testid={`file-attachment-${message.id}`}
+                          onClick={(e) =>
+                            handleDownloadFile(
+                              e,
+                              message.fileUrl!,
+                              message.content || 'attachment'
+                            )
+                          }
+                          title="Bấm để tải xuống tệp"
                         >
-                          <IconComponent className="w-5 h-5" />
+                          {/* Icon phân loại file */}
+                          {(() => {
+                            const details = getFileDetails(message.content)
+                            const IconComponent = details.icon
+                            return (
+                              <div
+                                className={cn(
+                                  'w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border shadow-xs transition-transform group-hover/file:scale-105',
+                                  details.bgClass,
+                                  details.colorClass
+                                )}
+                              >
+                                <IconComponent className="w-5 h-5" />
+                              </div>
+                            )
+                          })()}
+
+                          {/* Thông tin tên file, loại file & dung lượng */}
+                          <div className="flex-1 min-w-0 pr-1">
+                            <p
+                              className="text-xs font-semibold truncate text-ink-primary dark:text-ink-primary-dark group-hover/file:text-brand transition-colors"
+                              title={message.content}
+                            >
+                              {message.content || 'Tệp đính kèm'}
+                            </p>
+                            <p className="text-[11px] text-ink-muted select-none mt-0.5 flex items-center gap-1.5">
+                              <span>{getFileDetails(message.content).extLabel}</span>
+                              {message.fileSize ? (
+                                <>
+                                  <span className="opacity-60">•</span>
+                                  <span className="font-medium text-ink-secondary dark:text-ink-secondary-dark">
+                                    {formatFileSize(message.fileSize)}
+                                  </span>
+                                </>
+                              ) : null}
+                            </p>
+                          </div>
+
+                          {/* Nút tải về máy (Download Action) */}
+                          <button
+                            type="button"
+                            title="Tải tệp xuống"
+                            aria-label="Tải tệp xuống"
+                            className="w-8 h-8 rounded-full bg-brand text-white flex items-center justify-center shrink-0 hover:bg-brand-hover hover:scale-110 active:scale-95 transition-all shadow-xs cursor-pointer"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleDownloadFile(
+                                e,
+                                message.fileUrl!,
+                                message.content || 'attachment'
+                              )
+                            }}
+                          >
+                            <Download className="w-4 h-4" />
+                          </button>
                         </div>
-                      )
-                    })()}
+                      </div>
+                    )}
 
-                    {/* Thông tin tên file, loại file & dung lượng */}
-                    <div className="flex-1 min-w-0 pr-1">
-                      <p
-                        className="text-xs font-semibold truncate text-ink-primary dark:text-ink-primary-dark group-hover/file:text-brand transition-colors"
-                        title={message.content}
-                      >
-                        {message.content || 'Tệp đính kèm'}
-                      </p>
-                      <p className="text-[11px] text-ink-muted select-none mt-0.5 flex items-center gap-1.5">
-                        <span>{getFileDetails(message.content).extLabel}</span>
-                        {message.fileSize ? (
-                          <>
-                            <span className="opacity-60">•</span>
-                            <span className="font-medium text-ink-secondary dark:text-ink-secondary-dark">
-                              {formatFileSize(message.fileSize)}
-                            </span>
-                          </>
-                        ) : null}
-                      </p>
+                    {/* Layout Telegram Inline: chữ và thời gian cùng hàng nếu chữ ngắn */}
+                    <div className="flex flex-wrap items-end gap-x-2.5 gap-y-1">
+                      {message.type !== 'FILE' &&
+                        (message.type !== 'IMAGE' || hasImageCaption) &&
+                        message.content && (
+                          <div className="flex-1 min-w-[40px] text-sm leading-relaxed whitespace-pre-wrap break-words">
+                            {message.content}
+                          </div>
+                        )}
+
+                      {/* Thời gian, Trạng thái đã sửa & Trạng thái đã đọc */}
+                      <div className="inline-flex items-center gap-1 select-none text-[11px] text-ink-secondary dark:text-ink-secondary-dark ml-auto shrink-0 leading-none pb-0.5">
+                        {message.isEdited && (
+                          <span className="text-[10px] text-ink-muted italic mr-0.5">
+                            (đã sửa)
+                          </span>
+                        )}
+                        {timeString && <span>{timeString}</span>}
+                        {isOutgoing && (
+                          <span
+                            className="inline-flex items-center"
+                            aria-label={isRead ? 'Đã đọc' : 'Đã gửi'}
+                          >
+                            {isRead ? (
+                              <CheckCheck className="w-3.5 h-3.5 text-[#4FAE4E] dark:text-[#5288C1]" />
+                            ) : (
+                              <Check className="w-3.5 h-3.5 text-ink-muted dark:text-ink-secondary-dark" />
+                            )}
+                          </span>
+                        )}
+                      </div>
                     </div>
-
-                    {/* Nút tải về máy (Download Action) */}
-                    <button
-                      type="button"
-                      title="Tải tệp xuống"
-                      aria-label="Tải tệp xuống"
-                      className="w-8 h-8 rounded-full bg-brand text-white flex items-center justify-center shrink-0 hover:bg-brand-hover hover:scale-110 active:scale-95 transition-all shadow-xs cursor-pointer"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        handleDownloadFile(e, message.fileUrl!, message.content || 'attachment')
-                      }}
-                    >
-                      <Download className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Layout Telegram Inline: chữ và thời gian cùng hàng nếu chữ ngắn */}
-              <div className="flex flex-wrap items-end gap-x-2.5 gap-y-1">
-                {message.type !== 'FILE' && message.content && (
-                  <div className="flex-1 min-w-[40px] text-sm leading-relaxed whitespace-pre-wrap break-words">
-                    {message.content}
-                  </div>
-                )}
-
-                {/* Thời gian, Trạng thái đã sửa & Trạng thái đã đọc */}
-                <div className="inline-flex items-center gap-1 select-none text-[11px] text-ink-secondary dark:text-ink-secondary-dark ml-auto shrink-0 leading-none pb-0.5">
-                  {message.isEdited && (
-                    <span className="text-[10px] text-ink-muted italic mr-0.5">
-                      (đã sửa)
-                    </span>
-                  )}
-                  {timeString && <span>{timeString}</span>}
-                  {isOutgoing && (
-                    <span
-                      className="inline-flex items-center"
-                      aria-label={isRead ? 'Đã đọc' : 'Đã gửi'}
-                    >
-                      {isRead ? (
-                        <CheckCheck className="w-3.5 h-3.5 text-[#4FAE4E] dark:text-[#5288C1]" />
-                      ) : (
-                        <Check className="w-3.5 h-3.5 text-ink-muted dark:text-ink-secondary-dark" />
-                      )}
-                    </span>
-                  )}
-                </div>
-              </div>
+                  </>
+                )
+              })()}
             </div>
           )}
         </div>
+
+        {/* Thanh thao tác micro-actions nằm BÊN PHẢI của bong bóng nhận đến (Incoming) */}
+        {!isOutgoing && renderToolbar()}
       </div>
 
       {/* Danh sách Reaction Pills dưới bubble */}
@@ -588,9 +640,9 @@ export function MessageBubble({
       {/* Modal xác nhận thu hồi tin nhắn */}
       <Dialog.Root open={isRecallDialogOpen} onOpenChange={setIsRecallDialogOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 animate-in fade-in duration-150" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm bg-surface dark:bg-surface-dark border border-border dark:border-border-dark p-6 rounded-2xl shadow-telegram z-50 animate-in zoom-in-95 duration-150 focus:outline-none">
-            <Dialog.Title className="text-lg font-bold text-ink-primary dark:text-ink-primary-dark">
+          <Dialog.Overlay className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 animate-in fade-in duration-150" />
+          <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm bg-white dark:bg-[#17212B] text-ink-primary dark:text-white border border-border dark:border-white/10 p-6 rounded-2xl shadow-2xl z-50 animate-in zoom-in-95 duration-150 focus:outline-none">
+            <Dialog.Title className="text-lg font-bold text-ink-primary dark:text-white">
               Thu hồi tin nhắn?
             </Dialog.Title>
             <Dialog.Description className="text-sm text-ink-secondary dark:text-ink-secondary-dark mt-2 leading-relaxed">
@@ -606,7 +658,7 @@ export function MessageBubble({
                   setIsRecallDialogOpen(false)
                   onRecall?.(message)
                 }}
-                className="bg-coral hover:bg-coral/90 text-white"
+                className="bg-coral hover:bg-coral/90 text-white cursor-pointer"
               >
                 Thu hồi
               </Button>

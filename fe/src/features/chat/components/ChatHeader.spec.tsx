@@ -93,4 +93,31 @@ describe('ChatHeader Component Tests', () => {
     )
     expect(onInfoClick).toHaveBeenCalledTimes(1)
   })
+
+  it('triggers onInfoClick when clicking the avatar/title container', () => {
+    const onInfoClick = vi.fn()
+
+    render(
+      <ChatHeader
+        conversation={directConv}
+        onInfoClick={onInfoClick}
+      />
+    )
+
+    const titleContainer = screen.getByRole('button', { name: 'Xem thông tin cuộc trò chuyện' })
+    fireEvent.click(titleContainer)
+    expect(onInfoClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('applies active styling when isInfoOpen is true', () => {
+    render(
+      <ChatHeader
+        conversation={directConv}
+        isInfoOpen={true}
+      />
+    )
+
+    const infoBtn = screen.getByRole('button', { name: 'Thông tin hội thoại' })
+    expect(infoBtn).toHaveClass('bg-brand/10')
+  })
 })

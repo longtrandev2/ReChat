@@ -183,5 +183,33 @@ describe('ActiveChatCanvas Component Tests', () => {
     expect(mockSocket.off).toHaveBeenCalledWith('messageEdited', expect.any(Function))
     expect(mockSocket.off).toHaveBeenCalledWith('messageReactionUpdated', expect.any(Function))
   })
+
+  it('toggles ChatDetailDrawer when clicking info button and closes when clicking close', () => {
+    render(
+      <MemoryRouter initialEntries={['/chat/conv-test-1']}>
+        <Routes>
+          <Route path="/chat/:conversationId" element={<ActiveChatCanvas />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    // Drawer is initially closed
+    expect(screen.queryByTestId('chat-detail-drawer')).not.toBeInTheDocument()
+
+    // Click info button in header
+    const infoBtn = screen.getByRole('button', { name: 'Thông tin hội thoại' })
+    fireEvent.click(infoBtn)
+
+    // Drawer opens
+    expect(screen.getByTestId('chat-detail-drawer')).toBeInTheDocument()
+    expect(screen.getByText('Thông tin người dùng')).toBeInTheDocument()
+
+    // Click close button on drawer
+    const closeBtn = screen.getByRole('button', { name: 'Đóng bảng thông tin' })
+    fireEvent.click(closeBtn)
+
+    // Drawer closes
+    expect(screen.queryByTestId('chat-detail-drawer')).not.toBeInTheDocument()
+  })
 })
 

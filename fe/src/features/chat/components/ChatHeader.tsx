@@ -6,6 +6,7 @@ interface ChatHeaderProps {
   conversation: Conversation
   isOnline?: boolean
   typingUserNames?: string[]
+  isInfoOpen?: boolean
   onSearchClick?: () => void
   onInfoClick?: () => void
   onBackClick?: () => void
@@ -15,12 +16,14 @@ interface ChatHeaderProps {
  * ChatHeader: Thanh tiêu đề cuộc hội thoại theo chuẩn Telegram Web
  * - Avatar đối phương kèm PresenceDot (Direct) hoặc Icon nhóm (Group)
  * - Tên hội thoại & trạng thái thông minh (Đang trực tuyến / Số thành viên / Soạn tin nhắn)
- * - Nút tìm kiếm và tùy chọn thêm
+ * - Cho phép nhấp vào Avatar/Tiêu đề để mở bảng thông tin chi tiết (Telegram / Messenger style)
+ * - Nút tìm kiếm và nút thông tin chi tiết (Info Drawer)
  */
 export function ChatHeader({
   conversation,
   isOnline = false,
   typingUserNames = [],
+  isInfoOpen = false,
   onSearchClick,
   onInfoClick,
   onBackClick,
@@ -99,24 +102,39 @@ export function ChatHeader({
           <ArrowLeft className="w-5 h-5" />
         </button>
 
-        <div className="relative shrink-0">
-          <Avatar className="w-10 h-10 border border-border-light/60 dark:border-border-dark shadow-xs">
-            <AvatarImage
-              src={conversation.avatarUrl || undefined}
-              alt={conversation.name}
-            />
-            <AvatarFallback className="bg-brand-soft text-brand font-semibold text-sm">
-              {isGroup ? <Users className="w-5 h-5" /> : initials}
-            </AvatarFallback>
-          </Avatar>
-          {!isGroup && <PresenceDot status={isOnline ? 'online' : 'offline'} />}
-        </div>
+        {/* Nhấp vào Avatar hoặc Tiêu đề để mở bảng thông tin chi tiết */}
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label="Xem thông tin cuộc trò chuyện"
+          onClick={onInfoClick}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              onInfoClick?.()
+            }
+          }}
+          className="flex items-center gap-2 md:gap-3 min-w-0 cursor-pointer group/title select-none rounded-xl p-1 -m-1 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+        >
+          <div className="relative shrink-0">
+            <Avatar className="w-10 h-10 border border-border-light/60 dark:border-border-dark shadow-xs group-hover/title:scale-102 transition-transform">
+              <AvatarImage
+                src={conversation.avatarUrl || undefined}
+                alt={conversation.name}
+              />
+              <AvatarFallback className="bg-brand-soft text-brand font-semibold text-sm">
+                {isGroup ? <Users className="w-5 h-5" /> : initials}
+              </AvatarFallback>
+            </Avatar>
+            {!isGroup && <PresenceDot status={isOnline ? 'online' : 'offline'} />}
+          </div>
 
-        <div className="flex flex-col min-w-0 justify-center">
-          <h2 className="text-[15px] font-semibold text-ink-primary dark:text-ink-primary-dark truncate leading-tight">
-            {conversation.name}
-          </h2>
-          <div className="h-4 flex items-center mt-0.5">{renderSubtitle()}</div>
+          <div className="flex flex-col min-w-0 justify-center text-left">
+            <h2 className="text-[15px] font-semibold text-ink-primary dark:text-ink-primary-dark truncate leading-tight group-hover/title:text-brand dark:group-hover/title:text-brand-accent transition-colors">
+              {conversation.name}
+            </h2>
+            <div className="h-4 flex items-center mt-0.5">{renderSubtitle()}</div>
+          </div>
         </div>
       </div>
 
@@ -135,7 +153,11 @@ export function ChatHeader({
           aria-label="Thông tin hội thoại"
           title="Thông tin chi tiết"
           onClick={onInfoClick}
-          className="p-2 rounded-xl hover:bg-surface-hover dark:hover:bg-surface-dark-secondary hover:text-ink-primary dark:hover:text-ink-primary-dark transition-all active:scale-95"
+          className={`p-2 rounded-xl transition-all active:scale-95 ${
+            isInfoOpen
+              ? 'bg-brand/10 text-brand dark:bg-white/10 dark:text-brand-accent'
+              : 'hover:bg-surface-hover dark:hover:bg-surface-dark-secondary hover:text-ink-primary dark:hover:text-ink-primary-dark'
+          }`}
         >
           <MoreVertical className="w-5 h-5" />
         </button>
