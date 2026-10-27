@@ -434,6 +434,23 @@ describe('ConversationsService', () => {
             expect(result).toEqual([msg2, msg1]);
         });
 
+        it('should apply type filter when query.type is provided (e.g. IMAGE or FILE)', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: conversationId });
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'm-1' });
+
+            const mockQb = createMockQueryBuilder([]);
+            mockMessageRepo.createQueryBuilder.mockReturnValue(mockQb);
+
+            await service.getMessages(currentUserId, conversationId, {
+                limit: 20,
+                type: MessageType.IMAGE,
+            });
+
+            expect(mockQb.andWhere).toHaveBeenCalledWith('m.type = :messageType', {
+                messageType: MessageType.IMAGE,
+            });
+        });
+
         it('should correctly enrich messages with reactions loaded from database', async () => {
             mockConversationRepo.findOne.mockResolvedValue({ id: conversationId });
             mockMemberRepo.findOne.mockResolvedValue({ id: 'm-1' });

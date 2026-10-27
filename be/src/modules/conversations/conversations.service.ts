@@ -479,6 +479,11 @@ export class ConversationsService {
             .leftJoinAndSelect('m.sender', 'sender')
             .where('m.conversationId = :conversationId', { conversationId });
 
+        // Lọc theo loại tin nhắn (TEXT, IMAGE, FILE) nếu có
+        if (query.type) {
+            qb.andWhere('m.type = :messageType', { messageType: query.type });
+        }
+
         // Nếu có con trỏ before: Lấy tin nhắn trước mốc đó
         if (query.before) {
             const beforeMessage = await this.messageRepository.findOne({
