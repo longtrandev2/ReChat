@@ -206,10 +206,32 @@ describe('TokenManagerService', () => {
                 return null;
             });
 
-            const result = await service.rotateRefreshToken('old-token-id.any-secret');
+            const result = await service.rotateRefreshToken('old-token-id.any-secret', 'tab-1');
             expect(result).toEqual(cachedPair);
             // Must NOT call signAsync again
             expect(mockJwtService.signAsync).not.toHaveBeenCalled();
+        });
+
+        it('should throw UnauthorizedException if deviceId does not match during 30s Grace Period', async () => {
+            const cachedPair = {
+                accessToken: 'grace-access-token',
+                refreshToken: 'new-token-id.secret',
+                familyId: 'family-1',
+                deviceId: 'device-original',
+                jti: 'jti-1',
+                userId: 'user-uuid-1',
+            };
+
+            mockRedisService.get.mockImplementation(async (key: string) => {
+                if (key === 'auth:grace:old-token-id') {
+                    return JSON.stringify(cachedPair);
+                }
+                return null;
+            });
+
+            await expect(
+                service.rotateRefreshToken('old-token-id.any-secret', 'device-attacker'),
+            ).rejects.toThrow(UnauthorizedException);
         });
 
         it('should successfully rotate token, record in grace period, and record in invalidated tracker', async () => {

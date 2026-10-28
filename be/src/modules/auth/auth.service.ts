@@ -445,7 +445,7 @@ export class AuthService {
         // 2. Blacklist Access Token (JTI và token string)
         if (token) {
             try {
-                const decoded = this.jwtService.decode(token) as any;
+                const decoded = this.jwtService.decode(token) as { exp?: number; jti?: string } | null;
                 const now = Math.floor(Date.now() / 1000);
                 const ttl = decoded?.exp ? Math.max(1, decoded.exp - now) : 900;
                 if (decoded?.jti) {

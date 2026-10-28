@@ -191,9 +191,24 @@ export class TokenManagerService {
         if (graceData) {
             try {
                 const cachedPair = JSON.parse(graceData) as GeneratedTokenPair;
+                // Khóa ràng buộc thiết bị trong thời gian ân hạn: Ngăn chặn thiết bị khác lợi dụng token vừa xoay
+                if (
+                    deviceId &&
+                    cachedPair.deviceId &&
+                    cachedPair.deviceId !== 'default-device' &&
+                    deviceId !== cachedPair.deviceId
+                ) {
+                    this.logger.warn(
+                        `[SECURITY WARNING] Grace period device mismatch: ${deviceId} vs ${cachedPair.deviceId} (User: ${cachedPair.userId})`,
+                    );
+                    throw new UnauthorizedException('Phiên đăng nhập không thuộc thiết bị này');
+                }
                 this.logger.debug(`[GracePeriod] Trả về token mới từ ân hạn cho tab song song: ${tokenId}`);
                 return cachedPair;
             } catch (e) {
+                if (e instanceof UnauthorizedException) {
+                    throw e;
+                }
                 this.logger.warn(`Lỗi parse grace data cho token ${tokenId}: ${e}`);
             }
         }

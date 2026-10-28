@@ -64,9 +64,7 @@ apiClient.interceptors.response.use(
   },
   (error) => {
     if (error.response?.status === 401) {
-      // Token expired or blacklisted in Redis
-      localStorage.removeItem('rechat_access_token')
-      // Only redirect if not already on login or register pages
+      // Token hết hạn: Điểm nối sẽ được nâng cấp thành Silent Refresh Interceptor trong Task 6
       const currentPath = window.location.pathname
       if (!currentPath.includes('/login') && !currentPath.includes('/register') && !currentPath.includes('/verify-otp')) {
         window.location.href = '/login'
