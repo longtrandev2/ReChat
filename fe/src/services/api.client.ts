@@ -1,9 +1,11 @@
 import axios from 'axios'
+import { getDeviceId } from '@/lib/device-id'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api/v1'
 
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -12,10 +14,14 @@ export const apiClient = axios.create({
 
 /**
  * Request Interceptor (Equivalent to Spring OncePerRequestFilter)
- * Automatically attaches Authorization: Bearer <token> if available.
+ * Automatically attaches X-Device-Id and Authorization: Bearer <token> if available.
  */
 apiClient.interceptors.request.use(
   (config) => {
+    if (config.headers) {
+      config.headers['X-Device-Id'] = getDeviceId()
+    }
+
     const token = localStorage.getItem('rechat_access_token')
     if (token && config.headers) {
       config.headers.Authorization = `Bearer ${token}`
