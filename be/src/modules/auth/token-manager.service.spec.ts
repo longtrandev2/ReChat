@@ -259,6 +259,32 @@ describe('TokenManagerService', () => {
             );
         });
 
+        it('should throw UnauthorizedException if deviceId does not match record deviceId (Device Binding mismatch)', async () => {
+            const oldSecret = 'old-secret-123';
+            const oldHash = createHash('sha256').update(oldSecret).digest('hex');
+            const activeRecord = {
+                tokenId: 'token-dev-a',
+                familyId: 'family-dev-a',
+                userId: 'user-1',
+                username: 'alice',
+                deviceId: 'device-a-uuid',
+                tokenHash: oldHash,
+                createdAt: Date.now(),
+                expiresAt: Date.now() + 10000,
+            };
+
+            mockRedisService.get.mockImplementation(async (key: string) => {
+                if (key === 'auth:refresh:token-dev-a') {
+                    return JSON.stringify(activeRecord);
+                }
+                return null;
+            });
+
+            await expect(
+                service.rotateRefreshToken(`token-dev-a.${oldSecret}`, 'device-b-uuid-stolen'),
+            ).rejects.toThrow('Phiên đăng nhập không thuộc thiết bị này');
+        });
+
         it('should detect Token Theft and revoke entire family when old rotated token is reused outside grace period', async () => {
             mockRedisService.get.mockImplementation(async (key: string) => {
                 // Not in grace period

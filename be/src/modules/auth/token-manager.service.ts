@@ -217,7 +217,22 @@ export class TokenManagerService {
             throw new UnauthorizedException('Phiên đăng nhập đã hết hạn hoặc không tồn tại');
         }
 
-        // 3. Tạo cặp token mới kế thừa Token Family
+        // 3. Khóa ràng buộc thiết bị (Device Binding Enforcement):
+        // Nếu token được phát hành cho một thiết bị cụ thể khác 'default-device',
+        // nhưng request refresh lại gửi kèm một deviceId khác -> Chặn nguy cơ đánh cắp Cookie đem sang thiết bị khác!
+        if (
+            deviceId &&
+            record.deviceId &&
+            record.deviceId !== 'default-device' &&
+            deviceId !== record.deviceId
+        ) {
+            this.logger.warn(
+                `[SECURITY WARNING] Phát hiện Refresh Token của thiết bị '${record.deviceId}' được gửi từ thiết bị khác: '${deviceId}' (User: ${record.userId})`,
+            );
+            throw new UnauthorizedException('Phiên đăng nhập không thuộc thiết bị này');
+        }
+
+        // 4. Tạo cặp token mới kế thừa Token Family
         const effectiveDeviceId = deviceId || record.deviceId;
         const newPair = await this.generateTokenPair(
             {
