@@ -103,14 +103,19 @@ export const authApi = {
   },
 
   /**
+   * POST /api/v1/auth/refresh
+   * Đổi HttpOnly Cookie lấy Access Token mới và thông tin User Profile
+   */
+  refresh: async (): Promise<AuthSuccessResponse> => {
+    const res = await apiClient.post<AuthSuccessResponse>('/auth/refresh')
+    return res.data
+  },
+
+  /**
    * POST /api/v1/auth/logout
    */
   logout: async (): Promise<void> => {
-    try {
-      await apiClient.post('/auth/logout')
-    } finally {
-      localStorage.removeItem('rechat_access_token')
-    }
+    await apiClient.post('/auth/logout')
   },
 
   /**

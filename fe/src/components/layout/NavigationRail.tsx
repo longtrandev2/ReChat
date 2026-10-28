@@ -8,7 +8,6 @@ import { Avatar, AvatarFallback, AvatarImage, PresenceDot } from '@/components/u
 import { Button } from '@/components/ui/button'
 import { useAuthStore } from '@/stores/auth.store'
 import { useSocket } from '@/hooks/useSocket'
-import { authApi } from '@/features/auth/services/auth.api'
 import { cn } from '@/lib/utils'
 
 interface NavItem {
@@ -61,11 +60,10 @@ export function NavigationRail() {
   const handleLogout = async () => {
     try {
       setIsLoggingOut(true)
-      await authApi.logout()
+      await logoutStore()
     } catch {
       // Vẫn tiếp tục dọn dẹp state ở client dù API logout gặp sự cố
     } finally {
-      logoutStore()
       setIsLogoutDialogOpen(false)
       setIsLoggingOut(false)
       toast.success('Đã đăng xuất tài khoản')

@@ -12,9 +12,19 @@ export const apiClient = axios.create({
   timeout: 10000,
 })
 
+let tokenGetter: (() => string | null) | null = null
+
+/**
+ * Đăng ký hàm lấy Access Token từ Zustand In-Memory RAM Store
+ * Giúp tránh circular dependency giữa api.client và auth.store.
+ */
+export const registerTokenGetter = (getter: () => string | null) => {
+  tokenGetter = getter
+}
+
 /**
  * Request Interceptor (Equivalent to Spring OncePerRequestFilter)
- * Automatically attaches X-Device-Id and Authorization: Bearer <token> if available.
+ * Tự động gắn Header X-Device-Id và Authorization: Bearer <in-memory-token>.
  */
 apiClient.interceptors.request.use(
   (config) => {
@@ -22,7 +32,7 @@ apiClient.interceptors.request.use(
       config.headers['X-Device-Id'] = getDeviceId()
     }
 
-    const token = localStorage.getItem('rechat_access_token')
+    const token = tokenGetter ? tokenGetter() : null
     if (token && config.headers) {
       config.headers.Authorization = `Bearer ${token}`
     }

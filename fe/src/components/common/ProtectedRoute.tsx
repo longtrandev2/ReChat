@@ -1,30 +1,24 @@
 import type { ReactNode } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/stores/auth.store'
+import { SplashScreen } from '@/components/common/SplashScreen'
 
 interface ProtectedRouteProps {
   children: ReactNode
 }
 
 /**
- * Frontend Route Guard (Equivalent to Spring Security SecurityFilterChain / @PreAuthorize)
- * Prevents unauthorized users from accessing protected views.
+ * Frontend Route Guard:
+ * Chặn người dùng chưa xác thực truy cập vào màn hình chính.
+ * Khi app đang khởi tạo (F5 / cold start), hiển thị SplashScreen để chống nháy màn hình.
  */
 export function ProtectedRoute({ children }: ProtectedRouteProps) {
-  const { isAuthenticated, isLoading } = useAuthStore()
+  const { isAuthenticated, isInitializing, isLoading } = useAuthStore()
   const location = useLocation()
 
-  if (isLoading) {
-    return (
-      <div className="flex h-screen w-screen items-center justify-center bg-canvas-light dark:bg-canvas-dark">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand border-t-transparent" />
-          <p className="text-sm text-ink-secondary dark:text-ink-secondary-dark animate-pulse">
-            Đang tải dữ liệu ReChat...
-          </p>
-        </div>
-      </div>
-    )
+  // Chặn Gate: Nếu đang khôi phục phiên từ Cookie, hiển thị SplashScreen cao cấp
+  if (isInitializing || isLoading) {
+    return <SplashScreen message="Đang xác thực phiên làm việc ReChat..." />
   }
 
   if (!isAuthenticated) {

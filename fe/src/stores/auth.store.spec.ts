@@ -1,16 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useAuthStore } from './auth.store'
-import { apiClient } from '@/services/api.client'
+import { authApi } from '@/features/auth/services/auth.api'
 import type { UserProfile } from '@/types/auth.types'
 
-// Mock apiClient to isolate unit testing of store logic
-vi.mock('@/services/api.client', () => ({
-  apiClient: {
-    get: vi.fn(),
+// Mock authApi to isolate unit testing of store logic
+vi.mock('@/features/auth/services/auth.api', () => ({
+  authApi: {
+    refresh: vi.fn(),
+    logout: vi.fn(),
   },
 }))
 
-describe('useAuthStore (ZOMBIES & AAA Methodology)', () => {
+describe('useAuthStore (In-Memory Token & App Initialization Gate)', () => {
   const mockUser: UserProfile = {
     id: 'user-uuid-123',
     username: 'alex_tr',
@@ -28,48 +29,37 @@ describe('useAuthStore (ZOMBIES & AAA Methodology)', () => {
       token: null,
       user: null,
       isAuthenticated: false,
+      isInitializing: true,
       isLoading: false,
     })
     vi.clearAllMocks()
   })
 
-  // Z - Zero: Initial/Empty session
-  it('Z: initializeAuth completes with unauthenticated state when no token exists in localStorage', async () => {
-    // Arrange: Ensure clean storage
-    expect(localStorage.getItem('rechat_access_token')).toBeNull()
-
-    // Act
-    await useAuthStore.getState().initializeAuth()
-
-    // Assert
+  it('Z: initial state has null token and isInitializing true (RAM-only)', () => {
     const state = useAuthStore.getState()
     expect(state.token).toBeNull()
     expect(state.user).toBeNull()
     expect(state.isAuthenticated).toBe(false)
-    expect(state.isLoading).toBe(false)
-    expect(apiClient.get).not.toHaveBeenCalled()
+    expect(state.isInitializing).toBe(true)
+    expect(localStorage.getItem('rechat_access_token')).toBeNull()
   })
 
-  // O - One: Set authenticated session
-  it('O: setAuth stores token in localStorage and updates in-memory state', () => {
-    // Arrange
-    const token = 'jwt-token-sample-123'
+  it('O: setAuth stores token in RAM only and never writes to localStorage', () => {
+    const token = 'jwt-token-in-memory-123'
 
-    // Act
     useAuthStore.getState().setAuth(token, mockUser)
 
-    // Assert
     const state = useAuthStore.getState()
     expect(state.token).toBe(token)
     expect(state.user).toEqual(mockUser)
     expect(state.isAuthenticated).toBe(true)
+    expect(state.isInitializing).toBe(false)
     expect(state.isLoading).toBe(false)
-    expect(localStorage.getItem('rechat_access_token')).toBe(token)
+    // CRITICAL: LocalStorage must remain clean to prevent XSS exfiltration
+    expect(localStorage.getItem('rechat_access_token')).toBeNull()
   })
 
-  // M - Many: Updates user profile without touching token
-  it('M: setUser updates the user object while preserving authentication token', () => {
-    // Arrange
+  it('M: setUser updates user profile in RAM without altering token', () => {
     const token = 'jwt-token-active'
     useAuthStore.getState().setAuth(token, mockUser)
 
@@ -79,10 +69,8 @@ describe('useAuthStore (ZOMBIES & AAA Methodology)', () => {
       avatarUrl: 'https://example.com/avatar.jpg',
     }
 
-    // Act
     useAuthStore.getState().setUser(updatedUser)
 
-    // Assert
     const state = useAuthStore.getState()
     expect(state.token).toBe(token)
     expect(state.user?.displayName).toBe('Alex Updated')
@@ -90,150 +78,75 @@ describe('useAuthStore (ZOMBIES & AAA Methodology)', () => {
     expect(state.isAuthenticated).toBe(true)
   })
 
-  // B - Boundaries: logout cleans both memory and persistent storage
-  it('B: logout resets all states to null/false and removes item from localStorage', () => {
-    // Arrange
-    useAuthStore.getState().setAuth('jwt-token-to-remove', mockUser)
-    expect(localStorage.getItem('rechat_access_token')).toBe('jwt-token-to-remove')
+  it('B: resetAuth clears all RAM states to null/false immediately', () => {
+    useAuthStore.getState().setAuth('jwt-token-to-reset', mockUser)
 
-    // Act
-    useAuthStore.getState().logout()
+    useAuthStore.getState().resetAuth()
 
-    // Assert
     const state = useAuthStore.getState()
     expect(state.token).toBeNull()
     expect(state.user).toBeNull()
     expect(state.isAuthenticated).toBe(false)
-    expect(state.isLoading).toBe(false)
-    expect(localStorage.getItem('rechat_access_token')).toBeNull()
+    expect(state.isInitializing).toBe(false)
   })
 
-  // E - Exceptions / Error recovery: Token invalid on initializeAuth triggers logout
-  it('E: initializeAuth triggers logout when backend rejects stored token (e.g. 401)', async () => {
-    // Arrange
-    const staleToken = 'stale-or-blacklisted-token'
-    localStorage.setItem('rechat_access_token', staleToken)
-    useAuthStore.setState({ token: staleToken, isAuthenticated: true })
+  it('B: logout calls authApi.logout and resets RAM states', async () => {
+    useAuthStore.getState().setAuth('jwt-token-to-logout', mockUser)
+    vi.mocked(authApi.logout).mockResolvedValueOnce()
 
-    vi.mocked(apiClient.get).mockRejectedValueOnce({
-      response: { status: 401, data: { message: 'Unauthorized' } },
-    })
+    await useAuthStore.getState().logout()
 
-    // Act
-    await useAuthStore.getState().initializeAuth()
-
-    // Assert
+    expect(authApi.logout).toHaveBeenCalledTimes(1)
     const state = useAuthStore.getState()
     expect(state.token).toBeNull()
     expect(state.user).toBeNull()
     expect(state.isAuthenticated).toBe(false)
-    expect(state.isLoading).toBe(false)
-    expect(localStorage.getItem('rechat_access_token')).toBeNull()
+    expect(state.isInitializing).toBe(false)
   })
 
-  // E - Exceptions: Rate limit (429) MUST preserve token and not kick to login
-  it('E: initializeAuth PRESERVES session and does NOT trigger logout on 429 Too Many Requests (F5 resilience)', async () => {
-    // Arrange
-    const validToken = 'valid-token-surviving-throttle'
-    localStorage.setItem('rechat_access_token', validToken)
-    useAuthStore.setState({ token: validToken, isAuthenticated: true })
+  it('S: checkAuth successfully restores in-memory session when HttpOnly cookie is valid', async () => {
+    const refreshResponse = {
+      accessToken: 'new-restored-access-token',
+      user: mockUser,
+    }
+    vi.mocked(authApi.refresh).mockResolvedValueOnce(refreshResponse)
 
-    vi.mocked(apiClient.get).mockRejectedValueOnce({
-      response: { status: 429, data: { message: 'ThrottlerException: Too Many Requests' } },
-    })
+    await useAuthStore.getState().checkAuth()
 
-    // Act
-    await useAuthStore.getState().initializeAuth()
-
-    // Assert: Token and auth state must be retained!
+    expect(authApi.refresh).toHaveBeenCalledTimes(1)
     const state = useAuthStore.getState()
-    expect(state.token).toBe(validToken)
-    expect(state.isAuthenticated).toBe(true)
-    expect(state.isLoading).toBe(false)
-    expect(localStorage.getItem('rechat_access_token')).toBe(validToken)
-  })
-
-  // E - Exceptions: Server error (500) MUST preserve token
-  it('E: initializeAuth PRESERVES session and does NOT trigger logout on 500 Server Error', async () => {
-    // Arrange
-    const validToken = 'valid-token-surviving-server-error'
-    localStorage.setItem('rechat_access_token', validToken)
-    useAuthStore.setState({ token: validToken, isAuthenticated: true })
-
-    vi.mocked(apiClient.get).mockRejectedValueOnce({
-      response: { status: 500, data: { message: 'Internal Server Error' } },
-    })
-
-    // Act
-    await useAuthStore.getState().initializeAuth()
-
-    // Assert: Token must NOT be deleted
-    const state = useAuthStore.getState()
-    expect(state.token).toBe(validToken)
-    expect(state.isAuthenticated).toBe(true)
-    expect(state.isLoading).toBe(false)
-    expect(localStorage.getItem('rechat_access_token')).toBe(validToken)
-  })
-
-  // E - Exceptions: Network connection loss (Offline) MUST preserve token
-  it('E: initializeAuth PRESERVES session and does NOT trigger logout on Network Error', async () => {
-    // Arrange
-    const validToken = 'valid-token-surviving-offline'
-    localStorage.setItem('rechat_access_token', validToken)
-    useAuthStore.setState({ token: validToken, isAuthenticated: true })
-
-    vi.mocked(apiClient.get).mockRejectedValueOnce(new Error('Network Error'))
-
-    // Act
-    await useAuthStore.getState().initializeAuth()
-
-    // Assert: Token must NOT be deleted
-    const state = useAuthStore.getState()
-    expect(state.token).toBe(validToken)
-    expect(state.isAuthenticated).toBe(true)
-    expect(state.isLoading).toBe(false)
-    expect(localStorage.getItem('rechat_access_token')).toBe(validToken)
-  })
-
-  // M - Many: Multiple calls maintain consistency
-  it('M: initializeAuth called multiple times concurrently remains consistent', async () => {
-    // Arrange
-    const validToken = 'valid-token-multiple'
-    localStorage.setItem('rechat_access_token', validToken)
-    useAuthStore.setState({ token: validToken, isAuthenticated: true })
-
-    vi.mocked(apiClient.get).mockResolvedValue({ data: mockUser })
-
-    // Act
-    await Promise.all([
-      useAuthStore.getState().initializeAuth(),
-      useAuthStore.getState().initializeAuth(),
-    ])
-
-    // Assert
-    const state = useAuthStore.getState()
-    expect(state.isAuthenticated).toBe(true)
-    expect(state.user).toEqual(mockUser)
-    expect(state.isLoading).toBe(false)
-  })
-
-  // S - Simple / Happy Path: initializeAuth hydrations user profile successfully
-  it('S: initializeAuth hydrates user profile when token is valid', async () => {
-    // Arrange
-    const validToken = 'valid-jwt-token'
-    localStorage.setItem('rechat_access_token', validToken)
-    useAuthStore.setState({ token: validToken, isAuthenticated: true })
-
-    vi.mocked(apiClient.get).mockResolvedValueOnce({ data: mockUser })
-
-    // Act
-    await useAuthStore.getState().initializeAuth()
-
-    // Assert
-    const state = useAuthStore.getState()
-    expect(apiClient.get).toHaveBeenCalledWith('/auth/me')
+    expect(state.token).toBe('new-restored-access-token')
     expect(state.user).toEqual(mockUser)
     expect(state.isAuthenticated).toBe(true)
+    expect(state.isInitializing).toBe(false)
     expect(state.isLoading).toBe(false)
+  })
+
+  it('E: checkAuth sets unauthenticated state when HttpOnly cookie is missing or rejected (401)', async () => {
+    vi.mocked(authApi.refresh).mockRejectedValueOnce({
+      response: { status: 401, data: { message: 'Refresh token không tồn tại trong cookie' } },
+    })
+
+    await useAuthStore.getState().checkAuth()
+
+    expect(authApi.refresh).toHaveBeenCalledTimes(1)
+    const state = useAuthStore.getState()
+    expect(state.token).toBeNull()
+    expect(state.user).toBeNull()
+    expect(state.isAuthenticated).toBe(false)
+    expect(state.isInitializing).toBe(false)
+    expect(state.isLoading).toBe(false)
+  })
+
+  it('E: checkAuth gracefully handles network failures without breaking the app', async () => {
+    vi.mocked(authApi.refresh).mockRejectedValueOnce(new Error('Network Error'))
+
+    await useAuthStore.getState().checkAuth()
+
+    expect(authApi.refresh).toHaveBeenCalledTimes(1)
+    const state = useAuthStore.getState()
+    expect(state.token).toBeNull()
+    expect(state.isAuthenticated).toBe(false)
+    expect(state.isInitializing).toBe(false)
   })
 })

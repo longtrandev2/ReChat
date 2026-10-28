@@ -1,33 +1,38 @@
 import { create } from 'zustand'
-import axios from 'axios'
-import { apiClient } from '@/services/api.client'
+import { authApi } from '@/features/auth/services/auth.api'
+import { registerTokenGetter } from '@/services/api.client'
 import type { UserProfile } from '@/types/auth.types'
 
 interface AuthState {
   token: string | null
   user: UserProfile | null
   isAuthenticated: boolean
+  isInitializing: boolean
   isLoading: boolean
 
   // Actions
   setAuth: (token: string, user: UserProfile) => void
   setUser: (user: UserProfile) => void
-  logout: () => void
+  resetAuth: () => void
+  logout: () => Promise<void>
+  checkAuth: () => Promise<void>
   initializeAuth: () => Promise<void>
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
-  token: localStorage.getItem('rechat_access_token'),
+  // In-Memory State: Tuyệt đối không đọc/ghi localStorage, ngăn chặn mã độc XSS
+  token: null,
   user: null,
-  isAuthenticated: Boolean(localStorage.getItem('rechat_access_token')),
-  isLoading: Boolean(localStorage.getItem('rechat_access_token')),
+  isAuthenticated: false,
+  isInitializing: true, // App Initialization Gate: Mặc định true để chặn redirect khi F5
+  isLoading: false,
 
   setAuth: (token: string, user: UserProfile) => {
-    localStorage.setItem('rechat_access_token', token)
     set({
       token,
       user,
       isAuthenticated: true,
+      isInitializing: false,
       isLoading: false,
     })
   },
@@ -36,52 +41,60 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ user })
   },
 
-  logout: () => {
-    localStorage.removeItem('rechat_access_token')
+  resetAuth: () => {
     set({
       token: null,
       user: null,
       isAuthenticated: false,
+      isInitializing: false,
       isLoading: false,
     })
   },
 
-  /**
-   * Initializes session on app load by fetching GET /api/v1/auth/me
-   * If token is invalid or blacklisted, logout is triggered.
-   */
-  initializeAuth: async () => {
-    const token = get().token
-    if (!token) {
-      set({ isLoading: false, isAuthenticated: false })
-      return
-    }
-
+  logout: async () => {
     try {
       set({ isLoading: true })
-      const response = await apiClient.get<UserProfile>('/auth/me')
-      set({
-        user: response.data,
-        isAuthenticated: true,
-        isLoading: false,
-      })
-    } catch (error: unknown) {
-      const is401 =
-        axios.isAxiosError(error)
-          ? error.response?.status === 401
-          : typeof error === 'object' &&
-            error !== null &&
-            'response' in error &&
-            (error as { response?: { status?: number } }).response?.status === 401
-
-      if (is401) {
-        // Chỉ đăng xuất khi token thực sự hết hạn hoặc bị thu hồi (401)
-        get().logout()
-      } else {
-        // Lỗi 429 Too Many Requests hoặc sự cố mạng/server tạm thời:
-        // Bảo lưu token và session hợp lệ, không đá văng người dùng ra trang login
-        set({ isLoading: false })
-      }
+      await authApi.logout()
+    } catch (error) {
+      console.warn('Lỗi khi gọi API đăng xuất:', error)
+    } finally {
+      get().resetAuth()
     }
   },
+
+  /**
+   * Khởi tạo và khôi phục phiên khi người dùng F5 hoặc mở ứng dụng:
+   * Gọi POST /api/v1/auth/refresh (trình duyệt tự đính kèm HttpOnly cookie và X-Device-Id).
+   * - Nếu hợp lệ: Cấp Access Token mới vào RAM + nạp UserProfile mà không bị nháy màn hình login.
+   * - Nếu hết hạn / không có cookie: Chuyển về unauthenticated và cho phép điều hướng.
+   */
+  checkAuth: async () => {
+    try {
+      set({ isInitializing: true, isLoading: true })
+      const res = await authApi.refresh()
+      if (res && res.accessToken && res.user) {
+        set({
+          token: res.accessToken,
+          user: res.user,
+          isAuthenticated: true,
+          isInitializing: false,
+          isLoading: false,
+        })
+        return
+      }
+      get().resetAuth()
+    } catch {
+      // Cookie không tồn tại hoặc phiên hết hạn (401/403)
+      get().resetAuth()
+    }
+  },
+
+  // Giữ alias tương thích ngược cho các component/tests cũ
+  initializeAuth: async () => {
+    return get().checkAuth()
+  },
 }))
+
+// Đăng ký token getter để apiClient tự động đọc Access Token từ RAM store
+registerTokenGetter(() => useAuthStore.getState().token)
+
