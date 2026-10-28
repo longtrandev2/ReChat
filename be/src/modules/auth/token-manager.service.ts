@@ -1,10 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { RedisService } from '../../common/redis/redis.service.js';
 import {
     ACCESS_TOKEN_TTL_SECONDS,
+    REFRESH_TOKEN_GRACE_PERIOD_SECONDS,
     REFRESH_TOKEN_TTL_SECONDS,
 } from './constants/auth-cookie.constants.js';
 
@@ -18,6 +19,8 @@ export interface RefreshTokenMetadata {
     tokenId: string;
     familyId: string;
     userId: string;
+    username: string;
+    role?: string;
     deviceId: string;
     tokenHash: string;
     createdAt: number;
@@ -105,13 +108,15 @@ export class TokenManagerService {
             tokenId,
             familyId,
             userId: user.id,
+            username: user.username,
+            role: user.role,
             deviceId,
             tokenHash,
             createdAt: now,
             expiresAt,
         };
 
-        const tokenKey = `auth:refresh:${user.id}:${tokenId}`;
+        const tokenKey = `auth:refresh:${tokenId}`;
         const familyKey = `auth:family:${familyId}`;
         const userSessionsKey = `auth:user_sessions:${user.id}`;
 
@@ -133,11 +138,10 @@ export class TokenManagerService {
      * Xác thực tính hợp lệ của Refresh Token: Kiểm tra Redis và so khớp Hash an toàn chống Timing Attack
      */
     async verifyRefreshTokenRecord(
-        userId: string,
         tokenId: string,
         secret: string,
     ): Promise<RefreshTokenMetadata | null> {
-        const tokenKey = `auth:refresh:${userId}:${tokenId}`;
+        const tokenKey = `auth:refresh:${tokenId}`;
         const rawData = await this.redisService.get(tokenKey);
         if (!rawData) {
             return null;
@@ -166,10 +170,82 @@ export class TokenManagerService {
     }
 
     /**
+     * Xoay vòng Refresh Token (RTR) với 30s Server Grace Period và Phát hiện Trộm Token (Reuse Detection)
+     */
+    async rotateRefreshToken(
+        rawRefreshToken?: string,
+        deviceId?: string,
+    ): Promise<GeneratedTokenPair> {
+        const parsed = this.parseRawRefreshToken(rawRefreshToken);
+        if (!parsed) {
+            throw new UnauthorizedException('Refresh token không hợp lệ hoặc thiếu');
+        }
+
+        const { tokenId, secret } = parsed;
+
+        // 1. Kiểm tra 30s Grace Period (Xử lý Race Condition khi mở nhiều tab cùng lúc)
+        const graceKey = `auth:grace:${tokenId}`;
+        const graceData = await this.redisService.get(graceKey);
+        if (graceData) {
+            try {
+                const cachedPair = JSON.parse(graceData) as GeneratedTokenPair;
+                this.logger.debug(`[GracePeriod] Trả về token mới từ ân hạn cho tab song song: ${tokenId}`);
+                return cachedPair;
+            } catch (e) {
+                this.logger.warn(`Lỗi parse grace data cho token ${tokenId}: ${e}`);
+            }
+        }
+
+        // 2. Xác thực token record trong Redis
+        const record = await this.verifyRefreshTokenRecord(tokenId, secret);
+        if (!record) {
+            // Kiểm tra xem token này có phải là token cũ đã từng được xoay vòng nhưng quá hạn 30s không
+            const invalidatedKey = `auth:invalidated:${tokenId}`;
+            const stolenFamilyId = await this.redisService.get(invalidatedKey);
+            if (stolenFamilyId) {
+                // PHÁT HIỆN HÀNH VI TÁI SỬ DỤNG TOKEN (TOKEN THEFT DETECTED - OWASP 2025)
+                this.logger.error(`[SECURITY ALERT] Phát hiện token cũ bị tái sử dụng! Family: ${stolenFamilyId}, Token: ${tokenId}`);
+                await this.revokeFamily(stolenFamilyId);
+                throw new ForbiddenException({
+                    errorCode: 'SECURITY_TOKEN_THEFT_DETECTED',
+                    message: 'Phát hiện hành vi sử dụng lại token trái phép. Toàn bộ phiên đăng nhập của thiết bị này đã bị hủy để bảo vệ tài khoản.',
+                });
+            }
+
+            throw new UnauthorizedException('Phiên đăng nhập đã hết hạn hoặc không tồn tại');
+        }
+
+        // 3. Tạo cặp token mới kế thừa Token Family
+        const effectiveDeviceId = deviceId || record.deviceId;
+        const newPair = await this.generateTokenPair(
+            {
+                id: record.userId,
+                username: record.username,
+                role: record.role,
+            },
+            effectiveDeviceId,
+            record.familyId,
+        );
+
+        // 4. Vô hiệu hóa token cũ:
+        // - Xóa key active refresh token
+        await this.redisService.del(`auth:refresh:${tokenId}`);
+        await this.redisService.srem(`auth:family:${record.familyId}`, tokenId);
+
+        // - Lưu token mới vào Grace Period với TTL 30 giây (cho các tab khác gửi trễ)
+        await this.redisService.set(graceKey, JSON.stringify(newPair), REFRESH_TOKEN_GRACE_PERIOD_SECONDS);
+
+        // - Lưu vào Invalidated Tracker với TTL 30 ngày (để phát hiện Hacker sau 30s)
+        await this.redisService.set(`auth:invalidated:${tokenId}`, record.familyId, REFRESH_TOKEN_TTL_SECONDS);
+
+        return newPair;
+    }
+
+    /**
      * Thu hồi một Refresh Token cụ thể
      */
-    async revokeToken(userId: string, tokenId: string, familyId?: string): Promise<void> {
-        const tokenKey = `auth:refresh:${userId}:${tokenId}`;
+    async revokeToken(tokenId: string, familyId?: string): Promise<void> {
+        const tokenKey = `auth:refresh:${tokenId}`;
         await this.redisService.del(tokenKey);
 
         if (familyId) {
@@ -180,12 +256,12 @@ export class TokenManagerService {
     /**
      * Hủy diệt toàn bộ Token Family (Dùng khi phát hiện hành vi Token Theft / Hacker tái sử dụng token lậu)
      */
-    async revokeFamily(familyId: string, userId?: string): Promise<void> {
+    async revokeFamily(familyId: string): Promise<void> {
         const familyKey = `auth:family:${familyId}`;
         const tokenIds = await this.redisService.smembers(familyKey);
 
-        if (tokenIds.length > 0 && userId) {
-            const keysToDelete = tokenIds.map((id) => `auth:refresh:${userId}:${id}`);
+        if (tokenIds.length > 0) {
+            const keysToDelete = tokenIds.map((id) => `auth:refresh:${id}`);
             await this.redisService.del(...keysToDelete);
         }
 
