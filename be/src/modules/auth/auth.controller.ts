@@ -9,11 +9,13 @@ import {
     Param,
     Post,
     Req,
+    Res,
+    UnauthorizedException,
     UseGuards,
 } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { Throttle, SkipThrottle } from "@nestjs/throttler";
-import type { Request } from "express";
+import type { Request, Response } from "express";
 import {
     RegisterDto,
     LoginDto,
@@ -29,7 +31,13 @@ import {
 import { AuthService } from "./auth.service.js";
 import { AuthGuard } from "@nestjs/passport";
 import { CurrentUser } from "../../common/decorators/current-user.decorator.js";
+import { DeviceId } from "../../common/decorators/device-id.decorator.js";
 import { User } from "../users/entities/user.entity.js";
+import {
+    REFRESH_TOKEN_COOKIE_NAME,
+    getClearRefreshTokenCookieOptions,
+    getRefreshTokenCookieOptions,
+} from "./constants/auth-cookie.constants.js";
 
 @ApiTags('auth')
 @Controller('auth')
@@ -120,10 +128,29 @@ export class AuthController {
         status: 403,
         description: 'Tài khoản chưa kích hoạt email',
     })
-    login(@Body() loginDto: LoginDto, @Req() req?: Request) {
+    async login(
+        @Body() loginDto: LoginDto,
+        @Req() req?: Request,
+        @Res({ passthrough: true }) res?: Response,
+        @DeviceId() deviceId?: string,
+    ) {
         const ip = req?.ip || req?.socket?.remoteAddress;
         const userAgent = req?.headers ? req.headers['user-agent'] : undefined;
-        return this.authService.login(loginDto, ip, userAgent);
+        const result = await this.authService.login(loginDto, ip, userAgent, deviceId);
+
+        if ('refreshToken' in result && result.refreshToken) {
+            if (res?.cookie) {
+                res.cookie(
+                    REFRESH_TOKEN_COOKIE_NAME,
+                    result.refreshToken,
+                    getRefreshTokenCookieOptions(),
+                );
+            }
+            const { refreshToken: _rt, ...cleanResult } = result;
+            return cleanResult;
+        }
+
+        return result;
     }
 
     /**
@@ -141,10 +168,29 @@ export class AuthController {
         status: 400,
         description: 'Mã OTP không đúng hoặc phiên đăng nhập 2FA đã hết hạn',
     })
-    verify2faLogin(@Body() verifyDto: Verify2faLoginDto, @Req() req?: Request) {
+    async verify2faLogin(
+        @Body() verifyDto: Verify2faLoginDto,
+        @Req() req?: Request,
+        @Res({ passthrough: true }) res?: Response,
+        @DeviceId() deviceId?: string,
+    ) {
         const ip = req?.ip || req?.socket?.remoteAddress;
         const userAgent = req?.headers ? req.headers['user-agent'] : undefined;
-        return this.authService.verify2faLogin(verifyDto, ip, userAgent);
+        const result = await this.authService.verify2faLogin(verifyDto, ip, userAgent, deviceId);
+
+        if (result.refreshToken) {
+            if (res?.cookie) {
+                res.cookie(
+                    REFRESH_TOKEN_COOKIE_NAME,
+                    result.refreshToken,
+                    getRefreshTokenCookieOptions(),
+                );
+            }
+            const { refreshToken: _rt, ...cleanResult } = result;
+            return cleanResult;
+        }
+
+        return result;
     }
 
     /**
@@ -303,6 +349,45 @@ export class AuthController {
     }
 
     /**
+     * Làm mới Access Token thông qua HttpOnly Refresh Token Cookie
+     */
+    @Post('refresh')
+    @HttpCode(HttpStatus.OK)
+    @SkipThrottle({ auth: true }) // Không rate limit refresh để tránh kẹt deadlock đa tab
+    @ApiOperation({ summary: 'Làm mới Access Token thông qua HttpOnly Refresh Token Cookie' })
+    @ApiResponse({
+        status: 200,
+        description: 'Cấp Access Token mới thành công',
+    })
+    @ApiResponse({
+        status: 401,
+        description: 'Cookie không tồn tại hoặc phiên hết hạn',
+    })
+    async refresh(
+        @Req() req: Request,
+        @Res({ passthrough: true }) res: Response,
+        @DeviceId() deviceId: string,
+    ) {
+        const rawRefreshToken = req?.cookies?.[REFRESH_TOKEN_COOKIE_NAME];
+        if (!rawRefreshToken) {
+            throw new UnauthorizedException('Refresh token không tồn tại trong cookie');
+        }
+
+        const result = await this.authService.refreshTokens(rawRefreshToken, deviceId);
+
+        if (res?.cookie) {
+            res.cookie(
+                REFRESH_TOKEN_COOKIE_NAME,
+                result.refreshToken,
+                getRefreshTokenCookieOptions(),
+            );
+        }
+
+        const { refreshToken: _rt, ...cleanResult } = result;
+        return cleanResult;
+    }
+
+    /**
      * Đăng xuất (FR-04)
      */
     @Post('logout')
@@ -314,13 +399,26 @@ export class AuthController {
         status: 200,
         description: 'Đăng xuất thành công',
     })
-    logout(
+    async logout(
         @CurrentUser() user: User,
         @Req() req?: Request,
-        @Headers('x-device-id') deviceId?: string,
+        @Res({ passthrough: true }) res?: Response,
+        @DeviceId() deviceId?: string,
     ) {
         const authHeader = req?.headers ? req.headers['authorization'] : undefined;
         const token = typeof authHeader === 'string' && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
-        return this.authService.logout(user?.id, token, deviceId);
+        const rawRefreshToken = req?.cookies?.[REFRESH_TOKEN_COOKIE_NAME];
+
+        await this.authService.logout(user?.id, token, deviceId, rawRefreshToken);
+
+        if (res?.cookie) {
+            res.cookie(
+                REFRESH_TOKEN_COOKIE_NAME,
+                '',
+                getClearRefreshTokenCookieOptions(),
+            );
+        }
+
+        return { message: 'Đăng xuất thành công' };
     }
 }

@@ -2,6 +2,7 @@
 
 export class AuthResponse {
     accessToken: string;
+    refreshToken?: string;
     user: {
         id: string;
         username: string;

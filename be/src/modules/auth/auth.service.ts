@@ -31,6 +31,7 @@ import {
     Resend2faOtpDto,
 } from "./dto/index.js";
 import { ConfigService } from "@nestjs/config";
+import { TokenManagerService } from "./token-manager.service.js";
 
 @Injectable()
 export class AuthService {
@@ -41,6 +42,7 @@ export class AuthService {
         private readonly redisService: RedisService,
         private readonly mailService: MailService,
         private readonly configService: ConfigService,
+        private readonly tokenManagerService: TokenManagerService,
     ) { }
 
     async register(dto: RegisterDto): Promise<{ message: string; email?: string }> {
@@ -180,7 +182,7 @@ export class AuthService {
         };
     }
 
-    async login(dto: LoginDto, clientIp?: string, userAgent?: string): Promise<LoginResult> {
+    async login(dto: LoginDto, clientIp?: string, userAgent?: string, deviceId?: string): Promise<LoginResult> {
         const account = dto.username.trim();
 
         // Cho phép đăng nhập bằng cả username HOẶC email
@@ -217,7 +219,7 @@ export class AuthService {
                 username: user.username,
                 otp,
                 attempts: 0,
-                deviceId: dto.deviceId,
+                deviceId: deviceId || dto.deviceId,
                 clientIp,
                 userAgent,
             };
@@ -233,18 +235,21 @@ export class AuthService {
             };
         }
 
-        const token = await this.generateToken(user.id, user.username);
+        const effectiveDeviceId = deviceId || dto.deviceId || 'default-device';
+        const tokenPair = await this.tokenManagerService.generateTokenPair(
+            { id: user.id, username: user.username },
+            effectiveDeviceId,
+        );
 
         // Lưu session nếu client gửi kèm deviceId
-        if (dto.deviceId) {
-            await this.redisService.saveSession(user.id, dto.deviceId, {
-                ip: clientIp || 'unknown',
-                userAgent: userAgent || 'unknown',
-            });
-        }
+        await this.redisService.saveSession(user.id, effectiveDeviceId, {
+            ip: clientIp || 'unknown',
+            userAgent: userAgent || 'unknown',
+        });
 
         return {
-            accessToken: token,
+            accessToken: tokenPair.accessToken,
+            refreshToken: tokenPair.refreshToken,
             user: {
                 id: user.id,
                 username: user.username,
@@ -309,6 +314,7 @@ export class AuthService {
         dto: Verify2faLoginDto,
         clientIp?: string,
         userAgent?: string,
+        deviceId?: string,
     ): Promise<AuthResponse> {
         const cachedRaw = await this.redisService.get(`mfa_login:${dto.mfaToken}`);
         if (!cachedRaw) {
@@ -336,15 +342,20 @@ export class AuthService {
             throw new NotFoundException('Người dùng không tồn tại');
         }
 
-        const deviceId = dto.deviceId || mfaData.deviceId || randomUUID();
-        await this.redisService.saveSession(user.id, deviceId, {
+        const effectiveDeviceId = deviceId || dto.deviceId || mfaData.deviceId || 'default-device';
+        const tokenPair = await this.tokenManagerService.generateTokenPair(
+            { id: user.id, username: user.username },
+            effectiveDeviceId,
+        );
+
+        await this.redisService.saveSession(user.id, effectiveDeviceId, {
             ip: clientIp || mfaData.clientIp || 'unknown',
             userAgent: userAgent || mfaData.userAgent || 'unknown',
         });
 
-        const token = await this.generateToken(user.id, user.username);
         return {
-            accessToken: token,
+            accessToken: tokenPair.accessToken,
+            refreshToken: tokenPair.refreshToken,
             user: {
                 id: user.id,
                 username: user.username,
@@ -396,13 +407,61 @@ export class AuthService {
         };
     }
 
-    async logout(userId: string, token?: string, deviceId?: string): Promise<{ message: string }> {
-        if (token) {
-            await this.redisService.blacklistToken(token, 604800); // 7 ngày
+    async refreshTokens(rawRefreshToken: string, deviceId?: string): Promise<AuthResponse> {
+        const newPair = await this.tokenManagerService.rotateRefreshToken(rawRefreshToken, deviceId);
+
+        const user = await this.userRepository.findOne({ where: { id: newPair.userId } });
+        if (!user) {
+            throw new UnauthorizedException('Người dùng không tồn tại hoặc tài khoản đã bị khóa');
         }
-        if (deviceId) {
+
+        return {
+            accessToken: newPair.accessToken,
+            refreshToken: newPair.refreshToken,
+            user: {
+                id: user.id,
+                username: user.username,
+                displayName: user.displayName,
+                avatarUrl: user.avatarUrl,
+                createdAt: user.createdAt,
+            },
+        };
+    }
+
+    async logout(
+        userId?: string,
+        token?: string,
+        deviceId?: string,
+        rawRefreshToken?: string,
+    ): Promise<{ message: string }> {
+        // 1. Thu hồi Refresh Token trên Redis
+        if (rawRefreshToken) {
+            const parsed = this.tokenManagerService.parseRawRefreshToken(rawRefreshToken);
+            if (parsed) {
+                await this.tokenManagerService.revokeToken(parsed.tokenId);
+            }
+        }
+
+        // 2. Blacklist Access Token (JTI và token string)
+        if (token) {
+            try {
+                const decoded = this.jwtService.decode(token) as any;
+                const now = Math.floor(Date.now() / 1000);
+                const ttl = decoded?.exp ? Math.max(1, decoded.exp - now) : 900;
+                if (decoded?.jti) {
+                    await this.redisService.blacklistToken(decoded.jti, ttl);
+                }
+                await this.redisService.blacklistToken(token, ttl);
+            } catch {
+                await this.redisService.blacklistToken(token, 900);
+            }
+        }
+
+        // 3. Xóa thiết bị khỏi danh sách sessions
+        if (userId && deviceId) {
             await this.redisService.deleteSession(userId, deviceId);
         }
+
         return {
             message: 'Đăng xuất thành công',
         };

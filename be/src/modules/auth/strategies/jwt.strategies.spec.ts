@@ -19,6 +19,7 @@ describe('JwtStrategy', () => {
 
         mockRedisService = {
             isTokenBlacklisted: vi.fn().mockResolvedValue(false),
+            get: vi.fn().mockResolvedValue(null),
         };
 
         strategy = new JwtStrategy(mockUserRepository, mockConfigService, mockRedisService);
@@ -70,6 +71,25 @@ describe('JwtStrategy', () => {
                 strategy.validate(mockReq, { sub: 'user-uuid', username: 'alice' }),
             ).rejects.toThrow(UnauthorizedException);
             expect(mockRedisService.isTokenBlacklisted).toHaveBeenCalledWith('blacklisted-token-xyz');
+        });
+
+        it('should throw UnauthorizedException if JTI is blacklisted', async () => {
+            mockRedisService.isTokenBlacklisted.mockImplementation(async (key: string) => key === 'jti-revoked-123');
+
+            await expect(
+                strategy.validate({}, { sub: 'user-uuid', username: 'alice', jti: 'jti-revoked-123' }),
+            ).rejects.toThrow(UnauthorizedException);
+        });
+
+        it('should throw UnauthorizedException if token iat is before user_min_issued_at', async () => {
+            mockRedisService.get.mockImplementation(async (key: string) => {
+                if (key === 'auth:user_min_issued_at:user-uuid') return '1700000500000'; // 500s later
+                return null;
+            });
+
+            await expect(
+                strategy.validate({}, { sub: 'user-uuid', username: 'alice', iat: 1700000000 }), // 0s
+            ).rejects.toThrow(UnauthorizedException);
         });
     });
 });

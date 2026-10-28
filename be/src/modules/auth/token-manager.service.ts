@@ -33,6 +33,7 @@ export interface GeneratedTokenPair {
     familyId: string;
     deviceId: string;
     jti: string;
+    userId: string;
 }
 
 @Injectable()
@@ -131,6 +132,7 @@ export class TokenManagerService {
             familyId,
             deviceId,
             jti,
+            userId: user.id,
         };
     }
 

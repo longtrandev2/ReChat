@@ -196,6 +196,7 @@ describe('TokenManagerService', () => {
                 familyId: 'family-1',
                 deviceId: 'tab-1',
                 jti: 'jti-1',
+                userId: 'user-uuid-1',
             };
 
             mockRedisService.get.mockImplementation(async (key: string) => {
