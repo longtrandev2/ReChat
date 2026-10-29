@@ -61,10 +61,16 @@ const processQueue = (error: unknown, token: string | null = null) => {
       prom.reject(error)
     } else if (token) {
       if (prom.config.headers) {
-        prom.config.headers.Authorization = `Bearer ${token}`
+        if (typeof prom.config.headers.set === 'function') {
+          prom.config.headers.set('Authorization', `Bearer ${token}`)
+        } else {
+          prom.config.headers.Authorization = `Bearer ${token}`
+        }
       }
       prom.config._retry = true
-      prom.resolve(apiClient(prom.config))
+      apiClient(prom.config)
+        .then((res) => prom.resolve(res))
+        .catch((err) => prom.reject(err))
     }
   })
   failedQueue = []
@@ -76,12 +82,15 @@ const handleAuthFailure = () => {
   }
   if (typeof window !== 'undefined' && window.location) {
     const currentPath = window.location.pathname || ''
-    if (
-      !currentPath.includes('/login') &&
-      !currentPath.includes('/register') &&
-      !currentPath.includes('/verify-otp') &&
-      !currentPath.includes('/verify-2fa')
-    ) {
+    const isPublicPage =
+      currentPath.includes('/login') ||
+      currentPath.includes('/register') ||
+      currentPath.includes('/verify-otp') ||
+      currentPath.includes('/verify-2fa') ||
+      currentPath.includes('/forgot-password') ||
+      currentPath.includes('/reset-password')
+
+    if (!isPublicPage && window.location.pathname !== '/login') {
       window.location.href = '/login'
     }
   }
@@ -99,7 +108,11 @@ apiClient.interceptors.request.use(
 
     const token = tokenGetter ? tokenGetter() : null
     if (token && config.headers) {
-      config.headers.Authorization = `Bearer ${token}`
+      if (typeof config.headers.set === 'function') {
+        config.headers.set('Authorization', `Bearer ${token}`)
+      } else {
+        config.headers.Authorization = `Bearer ${token}`
+      }
     }
     return config
   },
@@ -136,13 +149,19 @@ apiClient.interceptors.response.use(
       return Promise.reject(error)
     }
 
-    // 2. Không lặp vô tận: Nếu chính request refresh/login bị 401, hoặc request đã từng retry một lần rồi mà vẫn 401
-    const isAuthEndpoint =
+    // 2. Không lặp vô tận: Nếu request thuộc nhóm endpoint auth công khai hoặc đã từng retry một lần rồi mà vẫn 401
+    const isAuthExemptEndpoint =
       typeof originalRequest.url === 'string' &&
       (originalRequest.url.includes('/auth/refresh') ||
-        originalRequest.url.includes('/auth/login'))
+        originalRequest.url.includes('/auth/login') ||
+        originalRequest.url.includes('/auth/logout') ||
+        originalRequest.url.includes('/auth/register') ||
+        originalRequest.url.includes('/auth/verify-email') ||
+        originalRequest.url.includes('/auth/2fa/verify-login') ||
+        originalRequest.url.includes('/auth/forgot-password') ||
+        originalRequest.url.includes('/auth/reset-password'))
 
-    if (isAuthEndpoint || originalRequest._retry) {
+    if (isAuthExemptEndpoint || originalRequest._retry) {
       return Promise.reject(error)
     }
 
@@ -172,7 +191,11 @@ apiClient.interceptors.response.use(
 
       // Thực thi lại chính request ban đầu với token mới
       if (originalRequest.headers) {
-        originalRequest.headers.Authorization = `Bearer ${newToken}`
+        if (typeof originalRequest.headers.set === 'function') {
+          originalRequest.headers.set('Authorization', `Bearer ${newToken}`)
+        } else {
+          originalRequest.headers.Authorization = `Bearer ${newToken}`
+        }
       }
       return apiClient(originalRequest)
     } catch (refreshError) {
