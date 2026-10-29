@@ -1,7 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { useAuthStore } from './auth.store'
 import { authApi } from '@/features/auth/services/auth.api'
+import { postAuthBroadcast, type AuthBroadcastMessage } from '@/lib/auth-broadcast'
 import type { UserProfile } from '@/types/auth.types'
+
+const mocks = vi.hoisted(() => {
+  let subscriber: ((msg: AuthBroadcastMessage) => void) | null = null
+  return {
+    getSubscriber: () => subscriber,
+    setSubscriber: (listener: (msg: AuthBroadcastMessage) => void) => {
+      subscriber = listener
+    },
+  }
+})
+
+// Mock auth-broadcast module before importing auth.store
+vi.mock('@/lib/auth-broadcast', () => ({
+  postAuthBroadcast: vi.fn(),
+  subscribeToAuthBroadcast: vi.fn((listener) => {
+    mocks.setSubscriber(listener)
+    return () => {}
+  }),
+}))
 
 // Mock authApi to isolate unit testing of store logic
 vi.mock('@/features/auth/services/auth.api', () => ({
@@ -10,6 +29,8 @@ vi.mock('@/features/auth/services/auth.api', () => ({
     logout: vi.fn(),
   },
 }))
+
+import { useAuthStore } from './auth.store'
 
 describe('useAuthStore (In-Memory Token & App Initialization Gate)', () => {
   const mockUser: UserProfile = {
@@ -148,5 +169,93 @@ describe('useAuthStore (In-Memory Token & App Initialization Gate)', () => {
     expect(state.token).toBeNull()
     expect(state.isAuthenticated).toBe(false)
     expect(state.isInitializing).toBe(false)
+  })
+
+  describe('Multi-Tab Synchronization via BroadcastChannel (Task 7.1)', () => {
+    it('broadcasts AUTH_LOGIN when setAuth is called with default broadcast=true', () => {
+      useAuthStore.getState().setAuth('tab-token-123', mockUser)
+
+      expect(postAuthBroadcast).toHaveBeenCalledWith({
+        type: 'AUTH_LOGIN',
+        payload: { token: 'tab-token-123', user: mockUser },
+      })
+    })
+
+    it('does not broadcast when setAuth is called with broadcast=false (prevent echo loop)', () => {
+      useAuthStore.getState().setAuth('tab-token-123', mockUser, false)
+
+      expect(postAuthBroadcast).not.toHaveBeenCalled()
+    })
+
+    it('broadcasts AUTH_LOGOUT when logout is called with default broadcast=true', async () => {
+      useAuthStore.getState().setAuth('token-to-logout', mockUser, false)
+      vi.mocked(authApi.logout).mockResolvedValueOnce()
+
+      await useAuthStore.getState().logout()
+
+      expect(postAuthBroadcast).toHaveBeenCalledWith({ type: 'AUTH_LOGOUT' })
+    })
+
+    it('broadcasts AUTH_TOKEN_REFRESHED when checkAuth succeeds', async () => {
+      const refreshResponse = {
+        accessToken: 'refreshed-multi-tab-token',
+        user: mockUser,
+      }
+      vi.mocked(authApi.refresh).mockResolvedValueOnce(refreshResponse)
+
+      await useAuthStore.getState().checkAuth()
+
+      expect(postAuthBroadcast).toHaveBeenCalledWith({
+        type: 'AUTH_TOKEN_REFRESHED',
+        payload: { token: 'refreshed-multi-tab-token', user: mockUser },
+      })
+    })
+
+    it('handles incoming AUTH_LOGOUT from another tab by resetting RAM auth state', () => {
+      useAuthStore.getState().setAuth('active-tab-token', mockUser, false)
+      expect(useAuthStore.getState().isAuthenticated).toBe(true)
+
+      const subscriber = mocks.getSubscriber()
+      expect(subscriber).toBeDefined()
+      subscriber!({ type: 'AUTH_LOGOUT' })
+
+      const state = useAuthStore.getState()
+      expect(state.token).toBeNull()
+      expect(state.user).toBeNull()
+      expect(state.isAuthenticated).toBe(false)
+    })
+
+    it('handles incoming AUTH_TOKEN_REFRESHED from another tab by updating RAM token without network call', () => {
+      const subscriber = mocks.getSubscriber()
+      expect(subscriber).toBeDefined()
+      const newUser = { ...mockUser, username: 'synced_user' }
+
+      subscriber!({
+        type: 'AUTH_TOKEN_REFRESHED',
+        payload: { token: 'peer-tab-token-777', user: newUser },
+      })
+
+      const state = useAuthStore.getState()
+      expect(state.token).toBe('peer-tab-token-777')
+      expect(state.user?.username).toBe('synced_user')
+      expect(state.isAuthenticated).toBe(true)
+      // Did NOT call authApi.refresh
+      expect(authApi.refresh).not.toHaveBeenCalled()
+    })
+
+    it('handles incoming AUTH_LOGIN from another tab by syncing user into RAM', () => {
+      const subscriber = mocks.getSubscriber()
+      expect(subscriber).toBeDefined()
+
+      subscriber!({
+        type: 'AUTH_LOGIN',
+        payload: { token: 'logged-in-token-888', user: mockUser },
+      })
+
+      const state = useAuthStore.getState()
+      expect(state.token).toBe('logged-in-token-888')
+      expect(state.user).toEqual(mockUser)
+      expect(state.isAuthenticated).toBe(true)
+    })
   })
 })

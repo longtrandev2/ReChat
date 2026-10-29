@@ -5,6 +5,10 @@ import {
   registerAuthRefreshHandler,
   registerAuthResetHandler,
 } from '@/services/api.client'
+import {
+  postAuthBroadcast,
+  subscribeToAuthBroadcast,
+} from '@/lib/auth-broadcast'
 import type { UserProfile } from '@/types/auth.types'
 
 interface AuthState {
@@ -15,10 +19,10 @@ interface AuthState {
   isLoading: boolean
 
   // Actions
-  setAuth: (token: string, user: UserProfile) => void
+  setAuth: (token: string, user: UserProfile, broadcast?: boolean) => void
   setUser: (user: UserProfile) => void
   resetAuth: () => void
-  logout: () => Promise<void>
+  logout: (broadcast?: boolean) => Promise<void>
   checkAuth: () => Promise<void>
   initializeAuth: () => Promise<void>
 }
@@ -31,7 +35,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   isInitializing: true, // App Initialization Gate: Mặc định true để chặn redirect khi F5
   isLoading: false,
 
-  setAuth: (token: string, user: UserProfile) => {
+  setAuth: (token: string, user: UserProfile, broadcast = true) => {
     set({
       token,
       user,
@@ -39,6 +43,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       isInitializing: false,
       isLoading: false,
     })
+    if (broadcast) {
+      postAuthBroadcast({
+        type: 'AUTH_LOGIN',
+        payload: { token, user },
+      })
+    }
   },
 
   setUser: (user: UserProfile) => {
@@ -55,7 +65,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     })
   },
 
-  logout: async () => {
+  logout: async (broadcast = true) => {
     try {
       set({ isLoading: true })
       await authApi.logout()
@@ -63,6 +73,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       console.warn('Lỗi khi gọi API đăng xuất:', error)
     } finally {
       get().resetAuth()
+      if (broadcast) {
+        postAuthBroadcast({ type: 'AUTH_LOGOUT' })
+      }
     }
   },
 
@@ -83,6 +96,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           isAuthenticated: true,
           isInitializing: false,
           isLoading: false,
+        })
+        postAuthBroadcast({
+          type: 'AUTH_TOKEN_REFRESHED',
+          payload: { token: res.accessToken, user: res.user },
         })
         return
       }
@@ -107,7 +124,11 @@ registerAuthRefreshHandler(async () => {
   try {
     const res = await authApi.refresh()
     if (res && res.accessToken && res.user) {
-      useAuthStore.getState().setAuth(res.accessToken, res.user)
+      useAuthStore.getState().setAuth(res.accessToken, res.user, false)
+      postAuthBroadcast({
+        type: 'AUTH_TOKEN_REFRESHED',
+        payload: { token: res.accessToken, user: res.user },
+      })
       return res.accessToken
     }
     return null
@@ -119,5 +140,36 @@ registerAuthRefreshHandler(async () => {
 // Đăng ký handler dọn dẹp state khi phiên xác thực thất bại
 registerAuthResetHandler(() => {
   useAuthStore.getState().resetAuth()
+})
+
+// Đăng ký đồng bộ hóa đa tab qua BroadcastChannel (Task 7.1)
+subscribeToAuthBroadcast((message) => {
+  if (message.type === 'AUTH_LOGOUT') {
+    useAuthStore.getState().resetAuth()
+    if (typeof window !== 'undefined' && window.location) {
+      const currentPath = window.location.pathname || ''
+      const isPublicPage =
+        currentPath.includes('/login') ||
+        currentPath.includes('/register') ||
+        currentPath.includes('/verify-otp') ||
+        currentPath.includes('/verify-2fa') ||
+        currentPath.includes('/forgot-password') ||
+        currentPath.includes('/reset-password')
+
+      if (!isPublicPage && window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
+    }
+  } else if (message.type === 'AUTH_TOKEN_REFRESHED') {
+    useAuthStore.getState().setAuth(message.payload.token, message.payload.user, false)
+  } else if (message.type === 'AUTH_LOGIN') {
+    useAuthStore.getState().setAuth(message.payload.token, message.payload.user, false)
+    if (typeof window !== 'undefined' && window.location) {
+      const currentPath = window.location.pathname || ''
+      if (currentPath === '/login' || currentPath === '/register') {
+        window.location.href = '/chat'
+      }
+    }
+  }
 })
 
