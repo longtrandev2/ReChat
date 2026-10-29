@@ -9,6 +9,7 @@ import { MailService } from '../../common/mail/mail.service.js';
 import { BadRequestException, ConflictException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
+import { TokenManagerService } from './token-manager.service.js';
 
 describe('AuthService', () => {
     let service: AuthService;
@@ -16,6 +17,7 @@ describe('AuthService', () => {
     let mockJwtService: any;
     let mockRedisService: any;
     let mockMailService: any;
+    let mockTokenManagerService: any;
 
     beforeEach(async () => {
         mockUserRepository = {
@@ -30,6 +32,32 @@ describe('AuthService', () => {
 
         mockJwtService = {
             signAsync: vi.fn().mockResolvedValue('mock-jwt-token'),
+            decode: vi.fn().mockReturnValue({ exp: Math.floor(Date.now() / 1000) + 900, jti: 'mock-jti' }),
+        };
+
+        mockTokenManagerService = {
+            generateTokenPair: vi.fn().mockResolvedValue({
+                accessToken: 'mock-jwt-token',
+                refreshToken: 'token-uuid.secret-key',
+                familyId: 'family-1',
+                deviceId: 'dev-1',
+                jti: 'jti-1',
+                userId: 'user-1',
+            }),
+            rotateRefreshToken: vi.fn().mockResolvedValue({
+                accessToken: 'new-jwt-token',
+                refreshToken: 'new-token-uuid.new-secret-key',
+                familyId: 'family-1',
+                deviceId: 'dev-1',
+                jti: 'jti-2',
+                userId: 'user-1',
+            }),
+            parseRawRefreshToken: vi.fn().mockReturnValue({
+                tokenId: 'token-uuid',
+                secret: 'secret-key',
+            }),
+            revokeToken: vi.fn().mockResolvedValue(undefined),
+            revokeFamily: vi.fn().mockResolvedValue(undefined),
         };
 
         mockRedisService = {
@@ -70,6 +98,10 @@ describe('AuthService', () => {
                 {
                     provide: MailService,
                     useValue: mockMailService,
+                },
+                {
+                    provide: TokenManagerService,
+                    useValue: mockTokenManagerService,
                 },
                 {
                     provide: ConfigService,
@@ -391,11 +423,40 @@ describe('AuthService', () => {
             expect(mockRedisService.deleteSession).toHaveBeenCalledWith('user-1', 'dev-2');
         });
 
-        it('should blacklist token and remove device session on logout', async () => {
-            const result = await service.logout('user-1', 'my-jwt-token', 'dev-1');
+        it('should blacklist token and revoke refresh token on logout', async () => {
+            const result = await service.logout('user-1', 'my-jwt-token', 'dev-1', 'raw-token.secret');
             expect(result.message).toContain('Đăng xuất thành công');
-            expect(mockRedisService.blacklistToken).toHaveBeenCalledWith('my-jwt-token', 604800);
+            expect(mockRedisService.blacklistToken).toHaveBeenCalled();
+            expect(mockTokenManagerService.revokeToken).toHaveBeenCalledWith('token-uuid');
             expect(mockRedisService.deleteSession).toHaveBeenCalledWith('user-1', 'dev-1');
+        });
+    });
+
+    describe('refreshTokens', () => {
+        it('should rotate tokens and return user profile when user exists', async () => {
+            const mockUser = {
+                id: 'user-1',
+                username: 'alice',
+                displayName: 'Alice',
+                avatarUrl: null,
+                createdAt: new Date(),
+            };
+            mockUserRepository.findOne.mockResolvedValue(mockUser);
+
+            const result = await service.refreshTokens('valid-token.secret', 'dev-1');
+
+            expect(mockTokenManagerService.rotateRefreshToken).toHaveBeenCalledWith('valid-token.secret', 'dev-1');
+            expect(result).toHaveProperty('accessToken', 'new-jwt-token');
+            expect(result).toHaveProperty('refreshToken', 'new-token-uuid.new-secret-key');
+            expect(result.user.username).toBe('alice');
+        });
+
+        it('should throw UnauthorizedException if user does not exist or was deleted', async () => {
+            mockUserRepository.findOne.mockResolvedValue(null);
+
+            await expect(service.refreshTokens('valid-token.secret', 'dev-1')).rejects.toThrow(
+                UnauthorizedException,
+            );
         });
     });
 });

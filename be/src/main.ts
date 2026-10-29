@@ -3,6 +3,7 @@ import { AppModule, ObserveInstrument } from './app.module.js';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor.js';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
 import { RedisIoAdapter } from './common/adapters/index.js';
@@ -19,6 +20,9 @@ async function bootstrap() {
       contentSecurityPolicy: false, // Cho phép Swagger UI tải inline CSS/JS
     }),
   );
+
+  // Parse Cookie cho xác thực HttpOnly Refresh Token an toàn (OWASP 2025)
+  app.use(cookieParser());
 
   app.enableCors({
     origin: true,
