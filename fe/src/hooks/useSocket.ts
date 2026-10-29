@@ -68,8 +68,39 @@ export function useSocketInit() {
       setStatus('disconnected')
     }
 
-    const handleConnectError = (error: Error) => {
+    const handleConnectError = async (error: Error) => {
+      const isAuthError =
+        error.message?.includes('Unauthorized') ||
+        error.message?.includes('token') ||
+        error.message?.includes('Token') ||
+        error.message?.includes('jwt')
+
+      if (isAuthError) {
+        try {
+          // Thử refresh token trong nền bằng HttpOnly cookie
+          await useAuthStore.getState().checkAuth()
+          const freshToken = useAuthStore.getState().token
+          if (freshToken) {
+            socketClient.updateToken(freshToken)
+            socket.connect()
+            return
+          }
+        } catch {
+          useAuthStore.getState().resetAuth()
+        }
+      }
+
       setStatus('error', error.message || 'Lỗi kết nối máy chủ thời gian thực')
+    }
+
+    const handleForceLogout = (payload?: { reason?: string }) => {
+      console.warn('Nhận lệnh cưỡng chế đăng xuất từ máy chủ:', payload?.reason)
+      socketClient.disconnect()
+      reset()
+      useAuthStore.getState().resetAuth()
+      if (typeof window !== 'undefined' && window.location && window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
     }
 
     const handleUserStatus = (payload: UserStatusEventPayload) => {
@@ -140,6 +171,8 @@ export function useSocketInit() {
     socket.on('connect', handleConnect)
     socket.on('disconnect', handleDisconnect)
     socket.on('connect_error', handleConnectError)
+    socket.on('FORCE_LOGOUT', handleForceLogout)
+    socket.on('auth_error', handleForceLogout)
     socket.on('user_status', handleUserStatus)
     socket.on('userPresence', handleUserStatus)
     socket.on('conversationCreated', handleConversationCreated)
@@ -158,6 +191,8 @@ export function useSocketInit() {
       socket.off('connect', handleConnect)
       socket.off('disconnect', handleDisconnect)
       socket.off('connect_error', handleConnectError)
+      socket.off('FORCE_LOGOUT', handleForceLogout)
+      socket.off('auth_error', handleForceLogout)
       socket.off('user_status', handleUserStatus)
       socket.off('userPresence', handleUserStatus)
       socket.off('conversationCreated', handleConversationCreated)

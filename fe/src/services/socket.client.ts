@@ -20,35 +20,56 @@ export const socketClient = {
   },
 
   /**
-   * Khởi tạo hoặc tái sử dụng kết nối Socket với JWT token
+   * Cập nhật JWT token cho Socket hiện tại mà không làm rớt kết nối đang hoạt động
    */
-  connect(token: string): Socket {
-    // Nếu socket đang kết nối hoặc đã kết nối với cùng token, tái sử dụng instance hiện tại
-    if (
-      socketInstance &&
-      currentToken === token &&
-      (socketInstance.connected || socketInstance.active)
-    ) {
+  updateToken(token: string): void {
+    currentToken = token
+    if (socketInstance) {
+      socketInstance.auth = {
+        token: token.startsWith('Bearer ') ? token : `Bearer ${token}`,
+      }
+    }
+  },
+
+  /**
+   * Khởi tạo hoặc tái sử dụng kết nối Socket với JWT token
+   * Sử dụng Dynamic Token Handshake Callback để tự động cấp token mới nhất khi reconnect.
+   */
+  connect(token?: string): Socket {
+    if (token) {
+      currentToken = token
+    }
+
+    // Nếu socket đang kết nối hoặc đã kết nối, tái sử dụng instance hiện tại
+    if (socketInstance && (socketInstance.connected || socketInstance.active)) {
+      if (token) {
+        this.updateToken(token)
+      }
       return socketInstance
     }
 
-    // Nếu token thay đổi hoặc socket cũ không còn hoạt động, dọn dẹp trước khi tạo mới
+    // Nếu socket cũ không còn hoạt động, dọn dẹp trước khi tạo mới
     if (socketInstance) {
       socketInstance.removeAllListeners()
       socketInstance.disconnect()
       socketInstance = null
     }
 
-    currentToken = token
-
-    // Khởi tạo Socket.io client với handshake auth (BR-11)
+    // Khởi tạo Socket.io client với dynamic auth callback (Task 7.2)
     socketInstance = io(WS_BASE_URL, {
-      auth: {
-        token: token.startsWith('Bearer ') ? token : `Bearer ${token}`,
+      auth: (cb: (data: object) => void) => {
+        const activeToken = currentToken || ''
+        cb({
+          token: activeToken.startsWith('Bearer ')
+            ? activeToken
+            : activeToken
+              ? `Bearer ${activeToken}`
+              : '',
+        })
       },
       transports: ['websocket', 'polling'],
       reconnection: true,
-      reconnectionAttempts: 5,
+      reconnectionAttempts: 10,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
       timeout: 10000,

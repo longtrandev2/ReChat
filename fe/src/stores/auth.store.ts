@@ -5,6 +5,7 @@ import {
   registerAuthRefreshHandler,
   registerAuthResetHandler,
 } from '@/services/api.client'
+import { socketClient } from '@/services/socket.client'
 import {
   postAuthBroadcast,
   subscribeToAuthBroadcast,
@@ -56,6 +57,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   resetAuth: () => {
+    socketClient.disconnect()
     set({
       token: null,
       user: null,
@@ -142,9 +144,10 @@ registerAuthResetHandler(() => {
   useAuthStore.getState().resetAuth()
 })
 
-// Đăng ký đồng bộ hóa đa tab qua BroadcastChannel (Task 7.1)
+// Đăng ký đồng bộ hóa đa tab qua BroadcastChannel (Task 7.1 & Task 7.2)
 subscribeToAuthBroadcast((message) => {
   if (message.type === 'AUTH_LOGOUT') {
+    socketClient.disconnect()
     useAuthStore.getState().resetAuth()
     if (typeof window !== 'undefined' && window.location) {
       const currentPath = window.location.pathname || ''
@@ -162,8 +165,10 @@ subscribeToAuthBroadcast((message) => {
     }
   } else if (message.type === 'AUTH_TOKEN_REFRESHED') {
     useAuthStore.getState().setAuth(message.payload.token, message.payload.user, false)
+    socketClient.updateToken(message.payload.token)
   } else if (message.type === 'AUTH_LOGIN') {
     useAuthStore.getState().setAuth(message.payload.token, message.payload.user, false)
+    socketClient.updateToken(message.payload.token)
     if (typeof window !== 'undefined' && window.location) {
       const currentPath = window.location.pathname || ''
       if (currentPath === '/login' || currentPath === '/register') {
