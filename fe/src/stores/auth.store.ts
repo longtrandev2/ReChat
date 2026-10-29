@@ -1,6 +1,10 @@
 import { create } from 'zustand'
 import { authApi } from '@/features/auth/services/auth.api'
-import { registerTokenGetter } from '@/services/api.client'
+import {
+  registerTokenGetter,
+  registerAuthRefreshHandler,
+  registerAuthResetHandler,
+} from '@/services/api.client'
 import type { UserProfile } from '@/types/auth.types'
 
 interface AuthState {
@@ -97,4 +101,23 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
 // Đăng ký token getter để apiClient tự động đọc Access Token từ RAM store
 registerTokenGetter(() => useAuthStore.getState().token)
+
+// Đăng ký handler tự động làm mới token cho Axios Silent Refresh Interceptor (Task 6)
+registerAuthRefreshHandler(async () => {
+  try {
+    const res = await authApi.refresh()
+    if (res && res.accessToken && res.user) {
+      useAuthStore.getState().setAuth(res.accessToken, res.user)
+      return res.accessToken
+    }
+    return null
+  } catch {
+    return null
+  }
+})
+
+// Đăng ký handler dọn dẹp state khi phiên xác thực thất bại
+registerAuthResetHandler(() => {
+  useAuthStore.getState().resetAuth()
+})
 

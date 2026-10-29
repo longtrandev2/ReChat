@@ -1,5 +1,16 @@
 import axios from 'axios'
+import type { InternalAxiosRequestConfig } from 'axios'
 import { getDeviceId } from '@/lib/device-id'
+
+export interface CustomAxiosRequestConfig extends InternalAxiosRequestConfig {
+  _retry?: boolean
+}
+
+interface QueuedRequest {
+  resolve: (value: unknown) => void
+  reject: (reason?: unknown) => void
+  config: CustomAxiosRequestConfig
+}
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api/v1'
 
@@ -13,6 +24,8 @@ export const apiClient = axios.create({
 })
 
 let tokenGetter: (() => string | null) | null = null
+let authRefreshHandler: (() => Promise<string | null>) | null = null
+let authResetHandler: (() => void) | null = null
 
 /**
  * Đăng ký hàm lấy Access Token từ Zustand In-Memory RAM Store
@@ -20,6 +33,58 @@ let tokenGetter: (() => string | null) | null = null
  */
 export const registerTokenGetter = (getter: () => string | null) => {
   tokenGetter = getter
+}
+
+/**
+ * Đăng ký handler làm mới token bất đồng bộ (Silent Refresh)
+ */
+export const registerAuthRefreshHandler = (handler: () => Promise<string | null>) => {
+  authRefreshHandler = handler
+}
+
+/**
+ * Đăng ký handler dọn dẹp state xác thực khi phiên làm việc bị hủy
+ */
+export const registerAuthResetHandler = (handler: () => void) => {
+  authResetHandler = handler
+}
+
+/**
+ * Trạng thái khóa đồng thời (Concurrency Lock) và Hàng đợi Request (Request Queue)
+ */
+let isRefreshing = false
+let failedQueue: QueuedRequest[] = []
+
+const processQueue = (error: unknown, token: string | null = null) => {
+  failedQueue.forEach((prom) => {
+    if (error) {
+      prom.reject(error)
+    } else if (token) {
+      if (prom.config.headers) {
+        prom.config.headers.Authorization = `Bearer ${token}`
+      }
+      prom.config._retry = true
+      prom.resolve(apiClient(prom.config))
+    }
+  })
+  failedQueue = []
+}
+
+const handleAuthFailure = () => {
+  if (authResetHandler) {
+    authResetHandler()
+  }
+  if (typeof window !== 'undefined' && window.location) {
+    const currentPath = window.location.pathname || ''
+    if (
+      !currentPath.includes('/login') &&
+      !currentPath.includes('/register') &&
+      !currentPath.includes('/verify-otp') &&
+      !currentPath.includes('/verify-2fa')
+    ) {
+      window.location.href = '/login'
+    }
+  }
 }
 
 /**
@@ -43,7 +108,8 @@ apiClient.interceptors.request.use(
 
 /**
  * Response Interceptor (Equivalent to Spring AuthenticationEntryPoint)
- * Catches 401 Unauthorized and clears local session.
+ * - Tự động unwrap envelope { success: true, data: T }
+ * - Silent Refresh Interceptor với Request Queue & Concurrency Lock khi gặp 401
  */
 apiClient.interceptors.response.use(
   (response) => {
@@ -62,14 +128,60 @@ apiClient.interceptors.response.use(
     }
     return response
   },
-  (error) => {
-    if (error.response?.status === 401) {
-      // Token hết hạn: Điểm nối sẽ được nâng cấp thành Silent Refresh Interceptor trong Task 6
-      const currentPath = window.location.pathname
-      if (!currentPath.includes('/login') && !currentPath.includes('/register') && !currentPath.includes('/verify-otp')) {
-        window.location.href = '/login'
-      }
+  async (error) => {
+    const originalRequest = error?.config as CustomAxiosRequestConfig | undefined
+
+    // 1. Nếu không phải lỗi 401 hoặc không có originalRequest (Lỗi mạng / DNS / Timeout) -> Bỏ qua, không xóa phiên
+    if (error?.response?.status !== 401 || !originalRequest) {
+      return Promise.reject(error)
     }
-    return Promise.reject(error)
+
+    // 2. Không lặp vô tận: Nếu chính request refresh/login bị 401, hoặc request đã từng retry một lần rồi mà vẫn 401
+    const isAuthEndpoint =
+      typeof originalRequest.url === 'string' &&
+      (originalRequest.url.includes('/auth/refresh') ||
+        originalRequest.url.includes('/auth/login'))
+
+    if (isAuthEndpoint || originalRequest._retry) {
+      return Promise.reject(error)
+    }
+
+    // 3. Nếu đang có một tiến trình refresh chạy song song (Concurrency Lock) -> Đẩy vào hàng đợi chờ
+    if (isRefreshing) {
+      return new Promise((resolve, reject) => {
+        failedQueue.push({ resolve, reject, config: originalRequest })
+      })
+    }
+
+    // 4. Request đầu tiên nhận 401 giữ khóa và kích hoạt Refresh Token
+    originalRequest._retry = true
+    isRefreshing = true
+
+    try {
+      if (!authRefreshHandler) {
+        throw new Error('Chưa đăng ký AuthRefreshHandler cho apiClient')
+      }
+
+      const newToken = await authRefreshHandler()
+      if (!newToken) {
+        throw new Error('Không thể làm mới Access Token từ HttpOnly Cookie')
+      }
+
+      // Xử lý thông suốt toàn bộ hàng đợi đang chờ với token mới
+      processQueue(null, newToken)
+
+      // Thực thi lại chính request ban đầu với token mới
+      if (originalRequest.headers) {
+        originalRequest.headers.Authorization = `Bearer ${newToken}`
+      }
+      return apiClient(originalRequest)
+    } catch (refreshError) {
+      // Refresh thất bại (Cookie hết hạn hoặc bị hủy): Hủy toàn bộ hàng đợi và đăng xuất an toàn
+      processQueue(refreshError, null)
+      handleAuthFailure()
+      return Promise.reject(refreshError)
+    } finally {
+      isRefreshing = false
+    }
   }
 )
