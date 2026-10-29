@@ -71,6 +71,8 @@ const processQueue = (error: unknown, token: string | null = null) => {
       apiClient(prom.config)
         .then((res) => prom.resolve(res))
         .catch((err) => prom.reject(err))
+    } else {
+      prom.reject(new Error('Phiên xác thực không thể làm mới'))
     }
   })
   failedQueue = []
@@ -157,7 +159,9 @@ apiClient.interceptors.response.use(
         originalRequest.url.includes('/auth/logout') ||
         originalRequest.url.includes('/auth/register') ||
         originalRequest.url.includes('/auth/verify-email') ||
+        originalRequest.url.includes('/auth/resend-verification') ||
         originalRequest.url.includes('/auth/2fa/verify-login') ||
+        originalRequest.url.includes('/auth/2fa/resend-login-otp') ||
         originalRequest.url.includes('/auth/forgot-password') ||
         originalRequest.url.includes('/auth/reset-password'))
 

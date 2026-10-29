@@ -38,6 +38,7 @@ import {
     getClearRefreshTokenCookieOptions,
     getRefreshTokenCookieOptions,
 } from "./constants/auth-cookie.constants.js";
+import { OptionalJwtAuthGuard } from "../../common/guards/optional-jwt-auth.guard.js";
 
 @ApiTags('auth')
 @Controller('auth')
@@ -392,7 +393,7 @@ export class AuthController {
      */
     @Post('logout')
     @HttpCode(HttpStatus.OK)
-    @UseGuards(AuthGuard('jwt'))
+    @UseGuards(OptionalJwtAuthGuard)
     @ApiBearerAuth('JWT-auth')
     @ApiOperation({ summary: 'Đăng xuất khỏi hệ thống và đưa token vào blacklist (FR-04)' })
     @ApiResponse({
@@ -400,7 +401,7 @@ export class AuthController {
         description: 'Đăng xuất thành công',
     })
     async logout(
-        @CurrentUser() user: User,
+        @CurrentUser() user?: User,
         @Req() req?: Request,
         @Res({ passthrough: true }) res?: Response,
         @DeviceId() deviceId?: string,
