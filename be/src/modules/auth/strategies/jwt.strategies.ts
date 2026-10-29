@@ -26,7 +26,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // Kiểm tra token blacklist và payload hợp lệ
     async validate(reqOrPayload: any, maybePayload?: any) {
         let req: any;
-        let payload: { sub: string; username: string };
+        let payload: { sub: string; username: string; jti?: string; iat?: number };
 
         if (maybePayload && reqOrPayload) {
             req = reqOrPayload;
@@ -35,10 +35,26 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
             payload = reqOrPayload;
         }
 
-        if (req && this.redisService) {
-            const token = ExtractJwt.fromAuthHeaderAsBearerToken()(req);
-            if (token && (await this.redisService.isTokenBlacklisted(token))) {
+        if (this.redisService) {
+            // 1. Kiểm tra JTI blacklist (Vô hiệu hóa Access Token cụ thể khi logout)
+            if (payload?.jti && (await this.redisService.isTokenBlacklisted(payload.jti))) {
                 throw new UnauthorizedException('Phiên đăng nhập đã bị thu hồi hoặc đã đăng xuất');
+            }
+
+            // 2. Kiểm tra token string blacklist (Hỗ trợ tương thích ngược token cũ)
+            if (req && req.headers) {
+                const token = ExtractJwt.fromAuthHeaderAsBearerToken()(req);
+                if (token && (await this.redisService.isTokenBlacklisted(token))) {
+                    throw new UnauthorizedException('Phiên đăng nhập đã bị thu hồi hoặc đã đăng xuất');
+                }
+            }
+
+            // 3. Kiểm tra mốc thời gian tối thiểu (Remote Logout / Password Reset)
+            if (payload?.iat && payload?.sub) {
+                const minIat = await this.redisService.get(`auth:user_min_issued_at:${payload.sub}`);
+                if (minIat && payload.iat * 1000 < Number(minIat)) {
+                    throw new UnauthorizedException('Phiên đăng nhập đã bị hủy từ xa');
+                }
             }
         }
 

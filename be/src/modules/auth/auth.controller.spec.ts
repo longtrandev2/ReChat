@@ -5,6 +5,7 @@ import { AuthService } from './auth.service.js';
 import { RegisterDto } from './dto/register.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { User } from '../users/entities/user.entity.js';
+import { REFRESH_TOKEN_COOKIE_NAME } from './constants/auth-cookie.constants.js';
 
 describe('AuthController', () => {
     let controller: AuthController;
@@ -25,6 +26,7 @@ describe('AuthController', () => {
             revokeSession: vi.fn(),
             forgotPassword: vi.fn(),
             resetPassword: vi.fn(),
+            refreshTokens: vi.fn(),
             logout: vi.fn().mockResolvedValue({ message: 'Đăng xuất thành công' }),
         };
 
@@ -107,7 +109,7 @@ describe('AuthController', () => {
     });
 
     describe('login', () => {
-        it('should call authService.login and return result', async () => {
+        it('should call authService.login and return result without cookie when no refreshToken', async () => {
             const dto: LoginDto = {
                 username: 'alice',
                 password: 'password123',
@@ -124,19 +126,68 @@ describe('AuthController', () => {
 
             const result = await controller.login(dto);
             expect(result).toEqual(mockResponse);
-            expect(mockAuthService.login).toHaveBeenCalledWith(dto, undefined, undefined);
+            expect(mockAuthService.login).toHaveBeenCalledWith(dto, undefined, undefined, undefined);
+        });
+
+        it('should set refresh token cookie and strip it from body when login returns refreshToken', async () => {
+            const dto: LoginDto = {
+                username: 'alice',
+                password: 'password123',
+            };
+            const mockResponse = {
+                accessToken: 'jwt_alice_token',
+                refreshToken: 'token-id-123.secret-456',
+                user: {
+                    id: 'user-1',
+                    username: 'alice',
+                    createdAt: new Date(),
+                },
+            };
+            mockAuthService.login.mockResolvedValue(mockResponse);
+
+            const mockReq = { ip: '1.2.3.4', headers: { 'user-agent': 'Chrome' } } as any;
+            const mockRes = { cookie: vi.fn() } as any;
+
+            const result = await controller.login(dto, mockReq, mockRes, 'dev-1');
+            expect(mockAuthService.login).toHaveBeenCalledWith(dto, '1.2.3.4', 'Chrome', 'dev-1');
+            expect(mockRes.cookie).toHaveBeenCalledWith(
+                REFRESH_TOKEN_COOKIE_NAME,
+                'token-id-123.secret-456',
+                expect.any(Object),
+            );
+            expect(result).toEqual({
+                accessToken: 'jwt_alice_token',
+                user: mockResponse.user,
+            });
+            expect(result).not.toHaveProperty('refreshToken');
         });
     });
 
     describe('verify2faLogin', () => {
-        it('should call authService.verify2faLogin and return result', async () => {
+        it('should call authService.verify2faLogin and set cookie when refreshToken is returned', async () => {
             const dto = { mfaToken: 'token-123', otp: '123456' };
-            const mockResponse = { accessToken: 'jwt_alice_token', user: { id: 'u1', username: 'alice', createdAt: new Date() } };
+            const mockResponse = {
+                accessToken: 'jwt_alice_token',
+                refreshToken: 'token-id-123.secret-456',
+                user: { id: 'u1', username: 'alice', createdAt: new Date() },
+            };
             mockAuthService.verify2faLogin.mockResolvedValue(mockResponse);
 
-            const result = await controller.verify2faLogin(dto);
-            expect(result).toEqual(mockResponse);
-            expect(mockAuthService.verify2faLogin).toHaveBeenCalledWith(dto, undefined, undefined);
+            const mockReq = { ip: '1.2.3.4', headers: { 'user-agent': 'Chrome' } } as any;
+            const mockRes = { cookie: vi.fn() } as any;
+
+            const result = await controller.verify2faLogin(dto, mockReq, mockRes, 'dev-1');
+            expect(mockAuthService.verify2faLogin).toHaveBeenCalledWith(dto, '1.2.3.4', 'Chrome', 'dev-1');
+            expect(mockRes.cookie).toHaveBeenCalledWith(
+                REFRESH_TOKEN_COOKIE_NAME,
+                'token-id-123.secret-456',
+                expect.any(Object),
+            );
+            expect(result).toEqual({
+                accessToken: 'jwt_alice_token',
+                user: mockResponse.user,
+            });
+            expect(result).not.toHaveProperty('refreshToken');
         });
     });
 
@@ -274,12 +325,66 @@ describe('AuthController', () => {
         });
     });
 
+    describe('refresh', () => {
+        it('should throw UnauthorizedException if cookie is missing', async () => {
+            const mockReq = { cookies: {} } as any;
+            const mockRes = { cookie: vi.fn() } as any;
+
+            await expect(controller.refresh(mockReq, mockRes, 'dev-1')).rejects.toThrow(
+                'Refresh token không tồn tại trong cookie',
+            );
+        });
+
+        it('should rotate tokens, set new cookie, and return new access token', async () => {
+            const mockReq = { cookies: { [REFRESH_TOKEN_COOKIE_NAME]: 'old-token.secret' } } as any;
+            const mockRes = { cookie: vi.fn() } as any;
+            const mockRotateResult = {
+                accessToken: 'new_jwt_token',
+                refreshToken: 'new-token.new-secret',
+                user: { id: 'u1', username: 'alice' },
+            };
+            mockAuthService.refreshTokens.mockResolvedValue(mockRotateResult);
+
+            const result = await controller.refresh(mockReq, mockRes, 'dev-1');
+
+            expect(mockAuthService.refreshTokens).toHaveBeenCalledWith('old-token.secret', 'dev-1');
+            expect(mockRes.cookie).toHaveBeenCalledWith(
+                REFRESH_TOKEN_COOKIE_NAME,
+                'new-token.new-secret',
+                expect.any(Object),
+            );
+            expect(result).toEqual({
+                accessToken: 'new_jwt_token',
+                user: { id: 'u1', username: 'alice' },
+            });
+            expect(result).not.toHaveProperty('refreshToken');
+        });
+    });
+
     describe('logout', () => {
-        it('should return logout success message', async () => {
+        it('should return logout success message without cookie', async () => {
             const user = { id: 'user-1' } as User;
             const result = await controller.logout(user);
             expect(result).toEqual({ message: 'Đăng xuất thành công' });
-            expect(mockAuthService.logout).toHaveBeenCalledWith('user-1', undefined, undefined);
+            expect(mockAuthService.logout).toHaveBeenCalledWith('user-1', undefined, undefined, undefined);
+        });
+
+        it('should call authService.logout, clear cookie, and return success message when req and res provided', async () => {
+            const user = { id: 'user-1' } as User;
+            const mockReq = {
+                headers: { authorization: 'Bearer access_token_123' },
+                cookies: { [REFRESH_TOKEN_COOKIE_NAME]: 'refresh_token_123' },
+            } as any;
+            const mockRes = { cookie: vi.fn() } as any;
+
+            const result = await controller.logout(user, mockReq, mockRes, 'dev-1');
+            expect(result).toEqual({ message: 'Đăng xuất thành công' });
+            expect(mockAuthService.logout).toHaveBeenCalledWith('user-1', 'access_token_123', 'dev-1', 'refresh_token_123');
+            expect(mockRes.cookie).toHaveBeenCalledWith(
+                REFRESH_TOKEN_COOKIE_NAME,
+                '',
+                expect.any(Object),
+            );
         });
     });
 });
