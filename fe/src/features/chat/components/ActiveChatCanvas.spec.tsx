@@ -213,5 +213,47 @@ describe('ActiveChatCanvas Component Tests', () => {
     // Drawer closes
     expect(screen.queryByTestId('chat-detail-drawer')).not.toBeInTheDocument()
   })
+
+  it('shows drag-and-drop overlay on drag enter and hides on drag leave or drop', () => {
+    render(
+      <MemoryRouter initialEntries={['/chat/conv-test-1']}>
+        <Routes>
+          <Route path="/chat/:conversationId" element={<ActiveChatCanvas />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    const canvas = screen.getByTestId('active-chat-canvas')
+    expect(screen.queryByTestId('drag-drop-overlay')).not.toBeInTheDocument()
+
+    // Trigger drag enter with Files
+    fireEvent.dragEnter(canvas, {
+      dataTransfer: {
+        types: ['Files'],
+      },
+    })
+    expect(screen.getByTestId('drag-drop-overlay')).toBeInTheDocument()
+    expect(screen.getByText('Thả tệp vào đây để gửi')).toBeInTheDocument()
+
+    // Trigger drag leave
+    fireEvent.dragLeave(canvas)
+    expect(screen.queryByTestId('drag-drop-overlay')).not.toBeInTheDocument()
+
+    // Trigger drag enter then drop
+    fireEvent.dragEnter(canvas, {
+      dataTransfer: {
+        types: ['Files'],
+      },
+    })
+    expect(screen.getByTestId('drag-drop-overlay')).toBeInTheDocument()
+
+    const testFile = new File(['readme'], 'README.md', { type: 'text/markdown' })
+    fireEvent.drop(canvas, {
+      dataTransfer: {
+        files: [testFile],
+      },
+    })
+    expect(screen.queryByTestId('drag-drop-overlay')).not.toBeInTheDocument()
+  })
 })
 

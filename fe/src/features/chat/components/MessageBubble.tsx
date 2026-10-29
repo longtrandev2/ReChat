@@ -14,6 +14,7 @@ import {
   FileSpreadsheet,
   FileArchive,
   FileCode,
+  FileAudio,
   File,
 } from 'lucide-react'
 import { format } from 'date-fns'
@@ -66,17 +67,59 @@ function getFileDetails(fileName: string = ''): FileDetails {
         colorClass: 'text-amber-600 dark:text-amber-400',
         bgClass: 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-900/50',
       }
+    case 'ppt':
+    case 'pptx':
+      return {
+        icon: FileText,
+        extLabel: 'Thuyết trình PowerPoint',
+        colorClass: 'text-amber-600 dark:text-amber-400',
+        bgClass: 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-900/50',
+      }
     case 'txt':
-    case 'md':
+    case 'rtf':
       return {
         icon: FileText,
         extLabel: 'Tệp văn bản TXT',
         colorClass: 'text-slate-600 dark:text-slate-400',
         bgClass: 'bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800',
       }
+    case 'md':
+      return {
+        icon: FileCode,
+        extLabel: 'Tài liệu Markdown',
+        colorClass: 'text-cyan-600 dark:text-cyan-400',
+        bgClass: 'bg-cyan-50 dark:bg-cyan-950/40 border-cyan-200 dark:border-cyan-900/50',
+      }
+    case 'mp3':
+    case 'wav':
+    case 'm4a':
+    case 'ogg':
+    case 'aac':
+      return {
+        icon: FileAudio,
+        extLabel: 'Tệp âm thanh',
+        colorClass: 'text-indigo-600 dark:text-indigo-400',
+        bgClass: 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-900/50',
+      }
+    case 'xml':
+    case 'yaml':
+    case 'yml':
+    case 'log':
+      return {
+        icon: FileCode,
+        extLabel: 'Tệp cấu hình / Log',
+        colorClass: 'text-sky-600 dark:text-sky-400',
+        bgClass: 'bg-sky-50 dark:bg-sky-950/40 border-sky-200 dark:border-sky-900/50',
+      }
+    case 'json':
+      return {
+        icon: FileCode,
+        extLabel: 'Tệp dữ liệu JSON',
+        colorClass: 'text-emerald-600 dark:text-emerald-400',
+        bgClass: 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900/50',
+      }
     case 'js':
     case 'ts':
-    case 'json':
     case 'html':
     case 'css':
       return {

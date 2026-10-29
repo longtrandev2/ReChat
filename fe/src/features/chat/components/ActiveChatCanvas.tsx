@@ -1,8 +1,9 @@
-import { useEffect, useCallback, useMemo, useState } from 'react'
+import { useEffect, useCallback, useMemo, useState, useRef } from 'react'
 import { useParams } from 'react-router-dom'
+import { UploadCloud } from 'lucide-react'
 import { ChatHeader } from './ChatHeader'
 import { MessageFeed } from './MessageFeed'
-import { MessageComposer } from './MessageComposer'
+import { MessageComposer, type MessageComposerHandle } from './MessageComposer'
 import { ImageLightboxModal } from './ImageLightboxModal'
 import { ChatDetailDrawer } from './ChatDetailDrawer'
 import { useConversationStore } from '@/features/conversations/stores/conversation.store'
@@ -46,6 +47,48 @@ export function ActiveChatCanvas() {
 
   // Bảng thông tin chi tiết cuộc trò chuyện (Right Panel Telegram / Messenger)
   const [isDetailOpen, setIsDetailOpen] = useState(false)
+
+  // Drag & drop tệp tin toàn bộ vùng hội thoại (Canvas Drag & Drop)
+  const [isDraggingFile, setIsDraggingFile] = useState(false)
+  const composerRef = useRef<MessageComposerHandle>(null)
+  const dragCounterRef = useRef(0)
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.dataTransfer.types && Array.from(e.dataTransfer.types).includes('Files')) {
+      dragCounterRef.current += 1
+      if (dragCounterRef.current === 1) {
+        setIsDraggingFile(true)
+      }
+    }
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounterRef.current -= 1
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0
+      setIsDraggingFile(false)
+    }
+  }, [])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'copy'
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounterRef.current = 0
+    setIsDraggingFile(false)
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      composerRef.current?.addFiles(e.dataTransfer.files)
+    }
+  }, [])
 
   // Tìm cuộc hội thoại trong Inbox store
   const conversation = useMemo(() => {
@@ -348,7 +391,33 @@ export function ActiveChatCanvas() {
     <div
       className="flex-1 flex flex-col h-full bg-gradient-to-b from-[#E8EFF6] via-canvas-light to-[#E1EAF2] dark:from-[#111B27] dark:via-[#0E1621] dark:to-[#0A1017] relative overflow-hidden transition-colors"
       data-testid="active-chat-canvas"
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
     >
+      {/* Overlay kéo thả tệp chuẩn Telegram Web */}
+      {isDraggingFile && (
+        <div
+          className="absolute inset-4 z-50 rounded-2xl border-2 border-dashed border-brand bg-brand/10 dark:bg-brand/20 backdrop-blur-xs flex flex-col items-center justify-center pointer-events-none transition-all duration-200 animate-in fade-in"
+          data-testid="drag-drop-overlay"
+        >
+          <div className="flex flex-col items-center gap-3 p-6 rounded-2xl bg-white/95 dark:bg-[#17212B]/95 shadow-xl border border-border-light dark:border-border-dark">
+            <div className="w-16 h-16 rounded-full bg-brand-soft dark:bg-brand/20 flex items-center justify-center text-brand dark:text-brand-accent animate-bounce">
+              <UploadCloud className="w-8 h-8" />
+            </div>
+            <div className="text-center">
+              <p className="text-base font-semibold text-ink-primary dark:text-ink-primary-dark">
+                Thả tệp vào đây để gửi
+              </p>
+              <p className="text-xs text-ink-secondary dark:text-ink-secondary-dark mt-1">
+                Hỗ trợ ảnh (tối đa 5MB), tài liệu & âm thanh (tối đa 25MB)
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Texture họa tiết nền Telegram sang trọng */}
       <div
         className="absolute inset-0 pointer-events-none opacity-[0.04] dark:opacity-[0.055] bg-[radial-gradient(#2481CC_1.2px,transparent_1.2px)] [background-size:20px_20px]"
@@ -386,7 +455,9 @@ export function ActiveChatCanvas() {
           />
 
           <MessageComposer
+            ref={composerRef}
             conversationId={conversation.id}
+            quickEmoji={conversation.quickEmoji || '👍'}
             onSendMessage={handleSendMessage}
             onEditMessage={handleEditMessage}
           />

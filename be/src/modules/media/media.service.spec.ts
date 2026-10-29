@@ -58,6 +58,28 @@ describe('MediaService', () => {
             await expect(service.uploadMedia(scriptFile)).rejects.toThrow(
                 'Định dạng tệp tin bị cấm vì lý do bảo mật',
             );
+
+            const ps1File = {
+                originalname: 'hack.ps1',
+                mimetype: 'text/plain',
+                buffer: Buffer.from('Write-Host "hack"'),
+                size: 50,
+            } as Express.Multer.File;
+
+            await expect(service.uploadMedia(ps1File)).rejects.toThrow(
+                'Định dạng tệp tin bị cấm vì lý do bảo mật',
+            );
+
+            const htmlFile = {
+                originalname: 'phishing.html',
+                mimetype: 'text/html',
+                buffer: Buffer.from('<script>alert(1)</script>'),
+                size: 50,
+            } as Express.Multer.File;
+
+            await expect(service.uploadMedia(htmlFile)).rejects.toThrow(
+                'Định dạng tệp tin bị cấm vì lý do bảo mật',
+            );
         });
 
         it('nên ném lỗi BadRequestException nếu ảnh vượt quá 5MB', async () => {
@@ -153,6 +175,40 @@ describe('MediaService', () => {
                 'rechat/files',
                 'raw',
             );
+        });
+
+        it('nên hỗ trợ tải lên tệp Markdown (.md) và tệp âm thanh (.mp3)', async () => {
+            const mdFile = {
+                originalname: 'README.md',
+                mimetype: 'text/markdown',
+                buffer: Buffer.from('# Hello World'),
+                size: 512,
+            } as Express.Multer.File;
+
+            vi.spyOn(service, 'uploadToCloudinary').mockResolvedValueOnce({
+                secure_url: 'https://res.cloudinary.com/demo/raw/upload/v1234/rechat/files/README-123.md',
+                public_id: 'rechat/files/README-123.md',
+            });
+
+            const mdResult = await service.uploadMedia(mdFile);
+            expect(mdResult.type).toBe(MessageType.FILE);
+            expect(mdResult.originalName).toBe('README.md');
+
+            const audioFile = {
+                originalname: 'voice.mp3',
+                mimetype: 'audio/mpeg',
+                buffer: Buffer.from('audio-data'),
+                size: 10240,
+            } as Express.Multer.File;
+
+            vi.spyOn(service, 'uploadToCloudinary').mockResolvedValueOnce({
+                secure_url: 'https://res.cloudinary.com/demo/raw/upload/v1234/rechat/files/voice-123.mp3',
+                public_id: 'rechat/files/voice-123.mp3',
+            });
+
+            const audioResult = await service.uploadMedia(audioFile);
+            expect(audioResult.type).toBe(MessageType.FILE);
+            expect(audioResult.originalName).toBe('voice.mp3');
         });
     });
 

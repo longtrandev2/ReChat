@@ -39,6 +39,7 @@ export interface Conversation {
   type: ConversationType
   name: string
   avatarUrl: string | null
+  quickEmoji?: string
   unreadCount: number
   lastMessage: LastMessage | null
   lastMessageAt: string
