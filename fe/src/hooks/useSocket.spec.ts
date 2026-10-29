@@ -4,6 +4,7 @@ import { useSocketInit, useSocket } from './useSocket'
 import { socketClient } from '@/services/socket.client'
 import { useAuthStore } from '@/stores/auth.store'
 import { useSocketStore } from '@/stores/socket.store'
+import { postAuthBroadcast } from '@/lib/auth-broadcast'
 import type { Socket } from 'socket.io-client'
 
 vi.mock('@/services/socket.client', () => ({
@@ -14,6 +15,14 @@ vi.mock('@/services/socket.client', () => ({
     getSocket: vi.fn(),
   },
 }))
+
+vi.mock('@/lib/auth-broadcast', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth-broadcast')>()
+  return {
+    ...actual,
+    postAuthBroadcast: vi.fn(),
+  }
+})
 
 interface MockSocket {
   connected: boolean
@@ -106,7 +115,7 @@ describe('useSocket & useSocketInit (Task 7.2)', () => {
     expect(mockSocket.connect).toHaveBeenCalled()
   })
 
-  it('handles FORCE_LOGOUT by disconnecting socket and resetting auth state', () => {
+  it('handles FORCE_LOGOUT by disconnecting socket, resetting auth state, and broadcasting logout', () => {
     useAuthStore.setState({
       token: 'jwt-active',
       isAuthenticated: true,
@@ -121,6 +130,49 @@ describe('useSocket & useSocketInit (Task 7.2)', () => {
     expect(socketClient.disconnect).toHaveBeenCalled()
     expect(useAuthStore.getState().isAuthenticated).toBe(false)
     expect(useSocketStore.getState().status).toBe('disconnected')
+    expect(postAuthBroadcast).toHaveBeenCalledWith({ type: 'AUTH_LOGOUT' })
+  })
+
+  it('prevents concurrent duplicate refresh calls when multiple connect_error events fire rapidly', async () => {
+    useAuthStore.setState({
+      token: 'jwt-expired-token',
+      isAuthenticated: true,
+    })
+
+    let resolveRefresh: (() => void) | undefined
+    const mockCheckAuth = vi.fn().mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRefresh = () => {
+            useAuthStore.setState({ token: 'new-refreshed-jwt-token' })
+            resolve()
+          }
+        })
+    )
+    useAuthStore.getState().checkAuth = mockCheckAuth
+
+    renderHook(() => useSocketInit())
+
+    // Trigger first and second connect_error while first is in-flight
+    let p1: unknown
+    let p2: unknown
+    act(() => {
+      p1 = mockSocketListeners['connect_error']?.(new Error('Unauthorized: jwt expired'))
+      p2 = mockSocketListeners['connect_error']?.(new Error('Unauthorized: jwt expired'))
+    })
+
+    // Only 1 checkAuth invocation should happen
+    expect(mockCheckAuth).toHaveBeenCalledTimes(1)
+    // Status should not flip to generic error
+    expect(useSocketStore.getState().status).not.toBe('error')
+
+    // Resolve the first refresh
+    await act(async () => {
+      resolveRefresh?.()
+      await Promise.all([p1, p2])
+    })
+
+    expect(socketClient.updateToken).toHaveBeenCalledWith('new-refreshed-jwt-token')
   })
 
   it('exposes socket store status through useSocket hook', () => {

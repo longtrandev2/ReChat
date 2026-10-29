@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { socketClient } from '@/services/socket.client'
 import { useSocketStore } from '@/stores/socket.store'
 import { useAuthStore } from '@/stores/auth.store'
+import { postAuthBroadcast } from '@/lib/auth-broadcast'
 import { useConversationStore } from '@/features/conversations/stores/conversation.store'
 import { useMessagesStore } from '@/features/chat/stores/messages.store'
 import type { Conversation, LastMessage } from '@/features/conversations/types/conversation.types'
@@ -68,6 +69,8 @@ export function useSocketInit() {
       setStatus('disconnected')
     }
 
+    let isRefreshingSocket = false
+
     const handleConnectError = async (error: Error) => {
       const isAuthError =
         error.message?.includes('Unauthorized') ||
@@ -76,18 +79,24 @@ export function useSocketInit() {
         error.message?.includes('jwt')
 
       if (isAuthError) {
-        try {
-          // Thử refresh token trong nền bằng HttpOnly cookie
-          await useAuthStore.getState().checkAuth()
-          const freshToken = useAuthStore.getState().token
-          if (freshToken) {
-            socketClient.updateToken(freshToken)
-            socket.connect()
-            return
+        if (!isRefreshingSocket) {
+          isRefreshingSocket = true
+          try {
+            // Thử refresh token trong nền bằng HttpOnly cookie
+            await useAuthStore.getState().checkAuth()
+            const freshToken = useAuthStore.getState().token
+            if (freshToken) {
+              socketClient.updateToken(freshToken)
+              socket.connect()
+              return
+            }
+          } catch {
+            useAuthStore.getState().resetAuth()
+          } finally {
+            isRefreshingSocket = false
           }
-        } catch {
-          useAuthStore.getState().resetAuth()
         }
+        return
       }
 
       setStatus('error', error.message || 'Lỗi kết nối máy chủ thời gian thực')
@@ -98,6 +107,7 @@ export function useSocketInit() {
       socketClient.disconnect()
       reset()
       useAuthStore.getState().resetAuth()
+      postAuthBroadcast({ type: 'AUTH_LOGOUT' })
       if (typeof window !== 'undefined' && window.location && window.location.pathname !== '/login') {
         window.location.href = '/login'
       }
