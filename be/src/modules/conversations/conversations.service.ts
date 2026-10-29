@@ -423,6 +423,9 @@ export class ConversationsService {
                 name: displayName,
                 avatarUrl,
                 partnerId,
+                isOnline: c.type === ConversationType.DIRECT
+                    ? c.members.find((m) => m.user.id !== currentUserId)?.user?.isOnline
+                    : undefined,
                 unreadCount: myMember ? myMember.unreadCount : 0,
                 lastMessage: lastMsg
                     ? {

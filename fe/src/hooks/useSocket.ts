@@ -10,7 +10,8 @@ import type { Message } from '@/features/chat/types/message.types'
 
 interface UserStatusEventPayload {
   userId: string
-  status: 'ONLINE' | 'OFFLINE'
+  status?: 'ONLINE' | 'OFFLINE'
+  isOnline?: boolean
   lastSeen?: string
 }
 
@@ -114,8 +115,10 @@ export function useSocketInit() {
     }
 
     const handleUserStatus = (payload: UserStatusEventPayload) => {
-      if (payload && payload.userId && payload.status) {
-        updateUserStatus(payload.userId, payload.status, payload.lastSeen)
+      if (payload && payload.userId) {
+        const status: 'ONLINE' | 'OFFLINE' =
+          payload.status || (payload.isOnline ? 'ONLINE' : 'OFFLINE')
+        updateUserStatus(payload.userId, status, payload.lastSeen)
       }
     }
 

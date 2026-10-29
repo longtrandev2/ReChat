@@ -92,6 +92,35 @@ describe('useSocket & useSocketInit (Task 7.2)', () => {
     expect(useSocketStore.getState().status).toBe('connected')
   })
 
+  it('updates onlineUsers presence when receiving userPresence event with isOnline boolean', () => {
+    useAuthStore.setState({
+      token: 'jwt-valid-token-123',
+      isAuthenticated: true,
+    })
+
+    renderHook(() => useSocketInit())
+
+    act(() => {
+      mockSocketListeners['userPresence']?.({
+        userId: 'partner-user-123',
+        isOnline: true,
+        lastSeen: new Date().toISOString(),
+      })
+    })
+
+    expect(useSocketStore.getState().isUserOnline('partner-user-123')).toBe(true)
+
+    act(() => {
+      mockSocketListeners['userPresence']?.({
+        userId: 'partner-user-123',
+        isOnline: false,
+        lastSeen: new Date().toISOString(),
+      })
+    })
+
+    expect(useSocketStore.getState().isUserOnline('partner-user-123')).toBe(false)
+  })
+
   it('handles connect_error by triggering silent refresh and updating socket token', async () => {
     useAuthStore.setState({
       token: 'jwt-expired-token',

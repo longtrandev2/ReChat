@@ -3,6 +3,7 @@ import { Search, X, MessageSquarePlus } from 'lucide-react'
 import { useConversationStore, type FilterTab } from '../stores/conversation.store'
 import { ConversationItem } from './ConversationItem'
 import { useSocket } from '@/hooks/useSocket'
+import { useSocketStore } from '@/stores/socket.store'
 import { useAuthStore } from '@/stores/auth.store'
 import { cn } from '@/lib/utils'
 
@@ -186,7 +187,8 @@ export function ConversationSidebar({
             const isOnline = Boolean(
               conv.type === 'DIRECT' &&
                 partnerId &&
-                isUserOnline(partnerId)
+                (isUserOnline(partnerId) ||
+                  (conv.isOnline && useSocketStore.getState().onlineUsers[partnerId]?.status !== 'OFFLINE'))
             )
 
             return (

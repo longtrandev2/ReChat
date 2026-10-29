@@ -46,6 +46,7 @@ export interface Conversation {
   updatedAt: string
   memberCount?: number
   partnerId?: string
+  isOnline?: boolean
   members?: ConversationMember[]
 }
 
