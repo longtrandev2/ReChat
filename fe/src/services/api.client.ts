@@ -165,7 +165,10 @@ apiClient.interceptors.response.use(
         originalRequest.url.includes('/auth/forgot-password') ||
         originalRequest.url.includes('/auth/reset-password'))
 
-    if (isAuthExemptEndpoint || originalRequest._retry) {
+    // 401 do sai mật khẩu xác nhận (đổi mật khẩu, tắt 2FA) chứ không phải token hết hạn -> không refresh
+    const isInvalidPasswordError = error?.response?.data?.errorCode === 'INVALID_CURRENT_PASSWORD'
+
+    if (isAuthExemptEndpoint || isInvalidPasswordError || originalRequest._retry) {
       return Promise.reject(error)
     }
 

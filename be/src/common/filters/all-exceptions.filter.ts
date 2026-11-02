@@ -20,6 +20,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
         let status = HttpStatus.INTERNAL_SERVER_ERROR;
         let message: string | string[] = 'Internal server error';
         let error = 'Internal Server Error';
+        // Mã lỗi máy-đọc-được (vd: SECURITY_TOKEN_THEFT_DETECTED, INVALID_CURRENT_PASSWORD) cho client phân nhánh xử lý
+        let errorCode: string | undefined;
 
         if (exception instanceof HttpException) {
             status = exception.getStatus();
@@ -32,6 +34,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
                 const resObj = res as Record<string, any>;
                 message = resObj.message || exception.message;
                 error = resObj.error || exception.name;
+                errorCode = typeof resObj.errorCode === 'string' ? resObj.errorCode : undefined;
             }
         } else if (exception instanceof Error) {
             message = exception.message;
@@ -44,6 +47,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
             statusCode: status,
             message,
             error,
+            ...(errorCode ? { errorCode } : {}),
             timestamp: new Date().toISOString(),
             path: request?.url || '',
         };

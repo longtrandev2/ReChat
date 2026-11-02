@@ -127,6 +127,23 @@ describe('apiClient', () => {
       expect(mockRefresh).not.toHaveBeenCalled()
     })
 
+    it('does not trigger silent refresh on 401 caused by a wrong current password', async () => {
+      const { rejected } = getResponseInterceptor()
+      const mockRefresh = vi.fn()
+      registerAuthRefreshHandler(mockRefresh)
+
+      const wrongPasswordError = {
+        response: {
+          status: 401,
+          data: { success: false, errorCode: 'INVALID_CURRENT_PASSWORD', message: 'Sai mật khẩu' },
+        },
+        config: { url: '/auth/change-password', headers: new AxiosHeaders() } as CustomAxiosRequestConfig,
+      }
+
+      await expect(rejected(wrongPasswordError)).rejects.toEqual(wrongPasswordError)
+      expect(mockRefresh).not.toHaveBeenCalled()
+    })
+
     it('does not retry if request already has _retry flag set', async () => {
       const { rejected } = getResponseInterceptor()
       const mockRefresh = vi.fn()

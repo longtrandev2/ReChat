@@ -43,6 +43,10 @@ const MAX_OTP_ATTEMPTS = 5;
 /** Số lần gửi lại OTP 2FA đăng nhập tối đa cho một mfaToken */
 const MAX_2FA_LOGIN_RESENDS = 3;
 const emailVerifyAttemptsKey = (email: string) => `email_verify_attempts:${email}`;
+/**
+ * 401 do sai mật khẩu xác nhận (không phải do token hết hạn): FE dựa vào mã này để KHÔNG kích hoạt silent refresh.
+ */
+export const INVALID_CURRENT_PASSWORD = 'INVALID_CURRENT_PASSWORD';
 
 @Injectable()
 export class AuthService {
@@ -343,7 +347,7 @@ export class AuthService {
         const dbUser = await this.findUserWithPasswordOrFail(user.id);
         const isMatch = await bcrypt.compare(dto.password, dbUser.password);
         if (!isMatch) {
-            throw new UnauthorizedException('Mật khẩu không chính xác');
+            throw new UnauthorizedException({ errorCode: INVALID_CURRENT_PASSWORD, message: 'Mật khẩu không chính xác' });
         }
 
         await this.userRepository.update(user.id, { twoFactorEnabled: false });
@@ -593,7 +597,10 @@ export class AuthService {
         const dbUser = await this.findUserWithPasswordOrFail(user.id);
         const isCurrentPasswordValid = await bcrypt.compare(dto.currentPassword, dbUser.password);
         if (!isCurrentPasswordValid) {
-            throw new UnauthorizedException('Mật khẩu hiện tại không chính xác');
+            throw new UnauthorizedException({
+                errorCode: INVALID_CURRENT_PASSWORD,
+                message: 'Mật khẩu hiện tại không chính xác',
+            });
         }
 
         const hashedPassword = await bcrypt.hash(dto.newPassword, 10);

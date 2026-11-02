@@ -554,9 +554,12 @@ describe('AuthService', () => {
         });
 
         it('should throw UnauthorizedException when the current password is wrong', async () => {
-            await expect(
-                service.changePassword(reqUser, { ...validDto, currentPassword: 'Wrong@123' }, 'dev-1'),
-            ).rejects.toThrow(UnauthorizedException);
+            const error = await service
+                .changePassword(reqUser, { ...validDto, currentPassword: 'Wrong@123' }, 'dev-1')
+                .catch((e) => e);
+            expect(error).toBeInstanceOf(UnauthorizedException);
+            // errorCode giúp FE phân biệt với 401 do token hết hạn (không kích hoạt silent refresh)
+            expect(error.getResponse()).toMatchObject({ errorCode: 'INVALID_CURRENT_PASSWORD' });
             expect(mockUserRepository.update).not.toHaveBeenCalled();
             expect(mockTokenManagerService.revokeAllDevices).not.toHaveBeenCalled();
         });

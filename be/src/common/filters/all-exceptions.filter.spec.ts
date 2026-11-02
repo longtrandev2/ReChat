@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { AllExceptionsFilter } from './all-exceptions.filter.js';
-import { ArgumentsHost, BadRequestException, HttpStatus } from '@nestjs/common';
+import { ArgumentsHost, BadRequestException, HttpStatus, UnauthorizedException } from '@nestjs/common';
 
 describe('AllExceptionsFilter', () => {
     const filter = new AllExceptionsFilter();
@@ -28,6 +28,27 @@ describe('AllExceptionsFilter', () => {
                 message: 'Mật khẩu không hợp lệ',
                 path: '/api/v1/auth/login',
             }),
+        );
+    });
+
+    it('should forward a machine-readable errorCode when the exception provides one', () => {
+        const jsonMock = vi.fn();
+        const statusMock = vi.fn().mockReturnValue({ json: jsonMock });
+        const mockHost = {
+            switchToHttp: () => ({
+                getResponse: () => ({ status: statusMock }),
+                getRequest: () => ({ url: '/api/v1/auth/change-password' }),
+            }),
+        } as unknown as ArgumentsHost;
+
+        filter.catch(
+            new UnauthorizedException({ errorCode: 'INVALID_CURRENT_PASSWORD', message: 'Sai mật khẩu' }),
+            mockHost,
+        );
+
+        expect(statusMock).toHaveBeenCalledWith(401);
+        expect(jsonMock).toHaveBeenCalledWith(
+            expect.objectContaining({ errorCode: 'INVALID_CURRENT_PASSWORD', message: 'Sai mật khẩu' }),
         );
     });
 
