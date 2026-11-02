@@ -143,6 +143,8 @@ export function ActiveChatCanvas() {
       .then((detail) => {
         if (!isMounted || !detail) return
 
+        useConversationStore.getState().addOrUpdateConversation(detail)
+
         if (detail.type === 'DIRECT' && Array.isArray(detail.members)) {
           const otherMember = detail.members.find((m) => m?.user?.id !== user?.id)
           if (otherMember?.user) {
@@ -285,12 +287,47 @@ export function ActiveChatCanvas() {
       }
     }
 
+    const onConversationCustomized = (payload: {
+      conversationId: string
+      changes?: { name?: string; avatarUrl?: string; quickEmoji?: string }
+      name?: string
+      avatarUrl?: string
+      quickEmoji?: string
+    }) => {
+      if (payload.conversationId === conversationId) {
+        const changes = payload.changes || {}
+        const name = payload.name ?? changes.name
+        const avatarUrl = payload.avatarUrl ?? changes.avatarUrl
+        const quickEmoji = payload.quickEmoji ?? changes.quickEmoji
+        useConversationStore.getState().updateConversation(conversationId, {
+          ...(name !== undefined ? { name } : {}),
+          ...(avatarUrl !== undefined ? { avatarUrl } : {}),
+          ...(quickEmoji !== undefined ? { quickEmoji } : {}),
+        })
+      }
+    }
+
+    const onGroupMemberUpdated = (payload: { conversationId: string }) => {
+      if (payload.conversationId === conversationId) {
+        conversationApi
+          .getConversationById(conversationId)
+          .then((detail) => {
+            if (detail) {
+              useConversationStore.getState().addOrUpdateConversation(detail)
+            }
+          })
+          .catch(() => {})
+      }
+    }
+
     if (socket && typeof socket.on === 'function') {
       socket.on('messageRecalled', onRecalled)
       socket.on('messageEdited', onEdited)
       socket.on('messageReactionUpdated', onReactionUpdated)
       socket.on('messagePinned', onMessagePinned)
       socket.on('messageUnpinned', onMessageUnpinned)
+      socket.on('conversationCustomized', onConversationCustomized)
+      socket.on('groupMemberUpdated', onGroupMemberUpdated)
     }
 
     return () => {
@@ -301,6 +338,8 @@ export function ActiveChatCanvas() {
           socket.off('messageReactionUpdated', onReactionUpdated)
           socket.off('messagePinned', onMessagePinned)
           socket.off('messageUnpinned', onMessageUnpinned)
+          socket.off('conversationCustomized', onConversationCustomized)
+          socket.off('groupMemberUpdated', onGroupMemberUpdated)
         }
         if (socket.connected && typeof socket.emit === 'function') {
           socket.emit('leaveConversation', { conversationId })
@@ -606,6 +645,9 @@ export function ActiveChatCanvas() {
           partner={partner}
           isOnline={isPartnerOnline}
           messages={messages}
+          pinnedMessages={pinnedMessages}
+          onUnpinMessage={handleUnpinMessage}
+          onJumpToMessage={handleScrollToReply}
           onImageClick={(url, alt) => setLightboxImage({ url, alt })}
         />
       </div>

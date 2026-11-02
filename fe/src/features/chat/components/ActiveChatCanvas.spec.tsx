@@ -213,7 +213,7 @@ describe('ActiveChatCanvas Component Tests', () => {
 
     // Drawer opens
     expect(screen.getByTestId('chat-detail-drawer')).toBeInTheDocument()
-    expect(screen.getByText('Thông tin người dùng')).toBeInTheDocument()
+    expect(screen.getByText('Thông tin cuộc trò chuyện')).toBeInTheDocument()
 
     // Click close button on drawer
     const closeBtn = screen.getByRole('button', { name: 'Đóng bảng thông tin' })

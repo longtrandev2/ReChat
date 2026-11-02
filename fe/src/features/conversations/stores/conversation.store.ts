@@ -18,6 +18,8 @@ export interface ConversationState {
   setSearchQuery: (query: string) => void
   setFilterTab: (tab: FilterTab) => void
   addOrUpdateConversation: (conversation: Conversation) => void
+  updateConversation: (id: string, partial: Partial<Conversation>) => void
+  removeConversation: (conversationId: string) => void
   handleNewMessage: (conversationId: string, message: LastMessage, isSelf?: boolean) => void
   markConversationAsRead: (conversationId: string) => Promise<void>
   getFilteredConversations: () => Conversation[]
@@ -90,6 +92,22 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
         conversations: sortByRecency(nextList),
       }
     })
+  },
+
+  updateConversation: (id: string, partial: Partial<Conversation>) => {
+    set((state) => ({
+      conversations: state.conversations.map((c) =>
+        c.id === id ? { ...c, ...partial } : c
+      ),
+    }))
+  },
+
+  removeConversation: (conversationId: string) => {
+    set((state) => ({
+      conversations: state.conversations.filter((c) => c.id !== conversationId),
+      activeConversationId:
+        state.activeConversationId === conversationId ? null : state.activeConversationId,
+    }))
   },
 
   handleNewMessage: (conversationId: string, message: LastMessage, isSelf = false) => {
