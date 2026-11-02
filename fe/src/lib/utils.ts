@@ -19,3 +19,14 @@ export function formatFileSize(bytes?: number | null): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+
+/**
+ * Lấy thông báo lỗi thân thiện từ lỗi Axios của NestJS backend.
+ * Hỗ trợ `message` dạng chuỗi hoặc mảng (lỗi class-validator trả về nhiều thông báo).
+ */
+export function getApiErrorMessage(error: unknown, fallback: string): string {
+  const message = (error as { response?: { data?: { message?: unknown } } })?.response?.data?.message
+  if (Array.isArray(message) && message.length > 0) return String(message[0])
+  if (typeof message === 'string' && message.trim()) return message
+  return fallback
+}

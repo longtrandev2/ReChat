@@ -15,6 +15,7 @@ import { ChatLayout } from '@/features/conversations/components/ChatLayout'
 import { WelcomeEmptyCanvas } from '@/components/layout/WelcomeEmptyCanvas'
 import { ActiveChatCanvas } from '@/features/chat/components/ActiveChatCanvas'
 import { FriendsPage } from '@/features/friends/pages/FriendsPage'
+import { SettingsPage } from '@/features/settings/pages/SettingsPage'
 
 export function App() {
   const { checkAuth } = useAuthStore()
@@ -52,14 +53,7 @@ export function App() {
             <Route path=":conversationId" element={<ActiveChatCanvas />} />
           </Route>
           <Route path="/friends" element={<FriendsPage />} />
-          <Route
-            path="/settings"
-            element={
-              <div className="flex h-full w-full items-center justify-center p-6 text-ink-secondary">
-                <p className="text-lg font-medium">Cài đặt Tài khoản (Settings)</p>
-              </div>
-            }
-          />
+          <Route path="/settings" element={<SettingsPage />} />
         </Route>
 
         {/* Default Fallback Redirect */}
