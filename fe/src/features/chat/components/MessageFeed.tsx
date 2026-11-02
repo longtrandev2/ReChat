@@ -13,6 +13,7 @@ interface MessageFeedProps {
   hasMore?: boolean
   lastReadMessageId?: string
   typingUserNames?: string[]
+  searchKeyword?: string
   onLoadMore?: () => void
   onReact?: (message: Message, emoji: string) => void
   onReply?: (message: Message) => void
@@ -20,6 +21,8 @@ interface MessageFeedProps {
   onRecall?: (message: Message) => void
   onScrollToReply?: (replyToId: string) => void
   onImageClick?: (imageUrl: string, altText?: string) => void
+  onPin?: (message: Message) => void
+  onUnpin?: (message: Message) => void
 }
 
 /**
@@ -37,6 +40,7 @@ export function MessageFeed({
   hasMore = false,
   lastReadMessageId,
   typingUserNames = [],
+  searchKeyword,
   onLoadMore,
   onReact,
   onReply,
@@ -44,6 +48,8 @@ export function MessageFeed({
   onRecall,
   onScrollToReply,
   onImageClick,
+  onPin,
+  onUnpin,
 }: MessageFeedProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const prevScrollHeightRef = useRef<number>(0)
@@ -195,12 +201,15 @@ export function MessageFeed({
                 showSenderName={showSenderName}
                 showAvatar={showAvatar}
                 isRead={isRead}
+                searchKeyword={searchKeyword}
                 onReact={onReact}
                 onReply={onReply}
                 onEdit={onEdit}
                 onRecall={onRecall}
                 onScrollToReply={onScrollToReply}
                 onImageClick={onImageClick}
+                onPin={onPin}
+                onUnpin={onUnpin}
               />
             </div>
           )

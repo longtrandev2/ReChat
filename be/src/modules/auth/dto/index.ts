@@ -9,3 +9,4 @@ export * from './enable-2fa.dto.js';
 export * from './disable-2fa.dto.js';
 export * from './verify-2fa-login.dto.js';
 export * from './resend-2fa-otp.dto.js';
+export * from './change-password.dto.js';

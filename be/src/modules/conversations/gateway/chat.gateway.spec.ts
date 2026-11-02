@@ -11,6 +11,8 @@ import { MessageType } from '../entities/message.entity.js';
 import { User } from '../../users/entities/user.entity.js';
 import { Friendship, FriendshipStatus } from '../../friends/entities/friendship.entity.js';
 import { Socket } from 'socket.io';
+import { RedisService } from '../../../common/redis/redis.service.js';
+import { AuthSessionsRevokedEvent } from '../../../common/events/auth-session.events.js';
 import {
     FriendRequestSentEvent,
     FriendRequestAcceptedEvent,
@@ -24,6 +26,9 @@ import {
     MessageRecalledEvent,
     MessageEditedEvent,
     MessageReactionEvent,
+    ConversationCustomizedEvent,
+    UserBlockedEvent,
+    UserUnblockedEvent,
 } from '../../../common/events/index.js';
 
 describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () => {
@@ -44,6 +49,8 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
         recallMessage: ReturnType<typeof vi.fn>;
         editMessage: ReturnType<typeof vi.fn>;
         reactMessage: ReturnType<typeof vi.fn>;
+        updateGroup: ReturnType<typeof vi.fn>;
+        updateQuickEmoji: ReturnType<typeof vi.fn>;
     };
     let mockUserRepository: {
         findOne: ReturnType<typeof vi.fn>;
@@ -51,6 +58,10 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
     };
     let mockFriendshipRepository: {
         find: ReturnType<typeof vi.fn>;
+    };
+    let mockRedisService: {
+        isTokenBlacklisted: ReturnType<typeof vi.fn>;
+        get: ReturnType<typeof vi.fn>;
     };
     let mockServer: {
         to: ReturnType<typeof vi.fn>;
@@ -100,6 +111,8 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
             recallMessage: vi.fn(),
             editMessage: vi.fn(),
             reactMessage: vi.fn(),
+            updateGroup: vi.fn(),
+            updateQuickEmoji: vi.fn(),
         };
 
         mockUserRepository = {
@@ -114,6 +127,11 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
 
         mockFriendshipRepository = {
             find: vi.fn().mockResolvedValue([]),
+        };
+
+        mockRedisService = {
+            isTokenBlacklisted: vi.fn().mockResolvedValue(false),
+            get: vi.fn().mockResolvedValue(null),
         };
 
         mockServer = {
@@ -143,6 +161,10 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
                 {
                     provide: getRepositoryToken(Friendship),
                     useValue: mockFriendshipRepository,
+                },
+                {
+                    provide: RedisService,
+                    useValue: mockRedisService,
                 },
             ],
         }).compile();
@@ -183,6 +205,54 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
             });
             expect(client.disconnect).toHaveBeenCalledWith(true);
             expect(client.data.user).toBeUndefined();
+            expect(mockConnectionManager.addConnection).not.toHaveBeenCalled();
+        });
+
+        it('registers a handshake middleware that authenticates BEFORE the client receives connect (race fix)', async () => {
+            const server = { use: vi.fn() };
+            gateway.afterInit(server as any);
+            const middleware = server.use.mock.calls[0][0];
+
+            const rejected = vi.fn();
+            await new Promise<void>((resolve) => middleware(createMockSocket() as Socket, (err?: Error) => { rejected(err); resolve(); }));
+            expect(rejected.mock.calls[0][0]?.message).toBe('Unauthorized: Missing authentication token');
+
+            mockJwtService.verifyAsync.mockResolvedValue({ sub: 'user-uuid-1', username: 'john_doe', did: 'laptop-1' });
+            const client = createMockSocket({ token: 'Bearer valid.jwt.token' }) as Socket;
+            const accepted = vi.fn();
+            await new Promise<void>((resolve) => middleware(client, (err?: Error) => { accepted(err); resolve(); }));
+            expect(accepted).toHaveBeenCalledWith(undefined);
+            expect(client.data.user).toEqual(expect.objectContaining({ id: 'user-uuid-1' }));
+            expect(client.data.deviceId).toBe('laptop-1');
+        });
+
+        it('should reject a blacklisted (logged out) token by JTI', async () => {
+            const client = createMockSocket({ token: 'Bearer revoked.jwt.token' }) as Socket;
+            mockJwtService.verifyAsync.mockResolvedValue({ sub: 'user-uuid-1', username: 'john_doe', jti: 'jti-revoked' });
+            mockRedisService.isTokenBlacklisted.mockImplementation(async (key: string) => key === 'jti-revoked');
+
+            await gateway.handleConnection(client);
+
+            expect(client.disconnect).toHaveBeenCalledWith(true);
+            expect(client.data.user).toBeUndefined();
+            expect(mockConnectionManager.addConnection).not.toHaveBeenCalled();
+        });
+
+        it('should reject a token whose device was remotely logged out', async () => {
+            const client = createMockSocket({ token: 'Bearer old.device.token' }) as Socket;
+            mockJwtService.verifyAsync.mockResolvedValue({
+                sub: 'user-uuid-1',
+                username: 'john_doe',
+                did: 'device-2',
+                iat: 1700000000,
+            });
+            mockRedisService.get.mockImplementation(async (key: string) =>
+                key === 'auth:device_min_issued_at:user-uuid-1:device-2' ? '1700000500000' : null,
+            );
+
+            await gateway.handleConnection(client);
+
+            expect(client.disconnect).toHaveBeenCalledWith(true);
             expect(mockConnectionManager.addConnection).not.toHaveBeenCalled();
         });
 
@@ -248,6 +318,16 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
 
             expect(client.join).toHaveBeenCalledWith(`user_${userId}`);
             expect(mockConnectionManager.addConnection).toHaveBeenCalledWith(userId, client.id);
+        });
+
+        it('should also join a per-device room when the token carries a device id (did)', async () => {
+            mockJwtService.verifyAsync.mockResolvedValue({ sub: userId, username: 'john_doe', did: 'laptop-1' });
+            const client = createMockSocket(clientToken) as Socket;
+
+            await gateway.handleConnection(client);
+
+            expect(client.join).toHaveBeenCalledWith(`device_${userId}_laptop-1`);
+            expect(client.data.deviceId).toBe('laptop-1');
         });
 
         it('should mark user ONLINE in DB and broadcast userPresence when isFirstConnection is true', async () => {
@@ -555,6 +635,26 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
                 expect(result).toEqual({ status: 'success' });
             });
 
+            it('should validate membership before broadcasting typing (BR-08)', async () => {
+                const client = createMockSocket() as Socket;
+                client.data.user = { id: userId, username: 'john_doe' };
+
+                await gateway.handleTyping(client, { conversationId, isTyping: true });
+
+                expect(mockConversationsService.validateMembership).toHaveBeenCalledWith(conversationId, userId);
+            });
+
+            it('should reject typing from a non-member and NOT broadcast (BR-08)', async () => {
+                const client = createMockSocket() as Socket;
+                client.data.user = { id: userId, username: 'john_doe' };
+                mockConversationsService.validateMembership.mockRejectedValueOnce(new ForbiddenException());
+
+                await expect(
+                    gateway.handleTyping(client, { conversationId, isTyping: true }),
+                ).rejects.toThrow(ForbiddenException);
+                expect(client.to).not.toHaveBeenCalled();
+            });
+
             it('should broadcast userTyping with isTyping: false when user stops typing', async () => {
                 const client = createMockSocket() as Socket;
                 client.data.user = { id: userId, username: 'john_doe' };
@@ -637,6 +737,51 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
     describe('Notification Event Listeners (In-App Event Bus)', () => {
         beforeEach(() => {
             gateway.server = mockServer as any;
+        });
+
+        describe('handleSessionsRevoked (H2: cut live sockets of revoked sessions)', () => {
+            const setupServer = () => {
+                const operator = {
+                    except: vi.fn().mockReturnThis(),
+                    disconnectSockets: vi.fn(),
+                };
+                const server = { in: vi.fn().mockReturnValue(operator) };
+                gateway.server = server as any;
+                return { server, operator };
+            };
+
+            it('disconnects only the sockets of the listed devices (remote logout)', () => {
+                const { server, operator } = setupServer();
+
+                gateway.handleSessionsRevoked(
+                    new AuthSessionsRevokedEvent('u1', { type: 'devices', deviceIds: ['phone', 'tablet'] }),
+                );
+
+                expect(server.in).toHaveBeenCalledWith('device_u1_phone');
+                expect(server.in).toHaveBeenCalledWith('device_u1_tablet');
+                expect(operator.disconnectSockets).toHaveBeenCalledTimes(2);
+                expect(operator.disconnectSockets).toHaveBeenCalledWith(true);
+            });
+
+            it('disconnects every socket of the user except the current device (change password)', () => {
+                const { server, operator } = setupServer();
+
+                gateway.handleSessionsRevoked(new AuthSessionsRevokedEvent('u1', { type: 'allExcept', deviceId: 'laptop' }));
+
+                expect(server.in).toHaveBeenCalledWith('user_u1');
+                expect(operator.except).toHaveBeenCalledWith('device_u1_laptop');
+                expect(operator.disconnectSockets).toHaveBeenCalledWith(true);
+            });
+
+            it('disconnects every socket of the user (password reset)', () => {
+                const { server, operator } = setupServer();
+
+                gateway.handleSessionsRevoked(new AuthSessionsRevokedEvent('u1', { type: 'all' }));
+
+                expect(server.in).toHaveBeenCalledWith('user_u1');
+                expect(operator.except).not.toHaveBeenCalled();
+                expect(operator.disconnectSockets).toHaveBeenCalledWith(true);
+            });
         });
 
         it('handleFriendRequestSent should emit friendRequestReceived to recipient room', () => {
@@ -765,6 +910,63 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
                     action: 'ADDED',
                 }),
             );
+        });
+
+        it.each(['REMOVED', 'LEFT'] as const)(
+            'handleGroupMemberEvent (%s) should make the target user sockets leave the conv room (BR-08)',
+            (action) => {
+                const socketsLeave = vi.fn();
+                const inMock = vi.fn().mockReturnValue({ socketsLeave });
+                (mockServer as any).in = inMock;
+
+                gateway.handleGroupMemberEvent(
+                    new GroupMemberEvent('conv-1', action, { id: 'u1', displayName: 'Admin' }, ['u2']),
+                );
+
+                expect(inMock).toHaveBeenCalledWith('user_u2');
+                expect(socketsLeave).toHaveBeenCalledWith('conv_conv-1');
+                // Thông báo được phát trước khi đẩy socket ra khỏi room
+                expect(mockServer.emit).toHaveBeenCalledWith('groupMemberUpdated', expect.objectContaining({ action }));
+            },
+        );
+
+        it.each(['ADDED', 'ROLE_UPDATED', 'TRANSFER_OWNER'] as const)(
+            'handleGroupMemberEvent (%s) should NOT remove sockets from the conv room',
+            (action) => {
+                const socketsLeave = vi.fn();
+                (mockServer as any).in = vi.fn().mockReturnValue({ socketsLeave });
+
+                gateway.handleGroupMemberEvent(
+                    new GroupMemberEvent('conv-1', action, { id: 'u1', displayName: 'Admin' }, ['u2']),
+                );
+
+                expect(socketsLeave).not.toHaveBeenCalled();
+            },
+        );
+
+        it('handleUserBlocked should emit userBlocked to both users personal rooms with conversationId', () => {
+            gateway.handleUserBlocked(new UserBlockedEvent('u1', 'u2', 'conv-1'));
+
+            expect(mockServer.to).toHaveBeenCalledWith('user_u1');
+            expect(mockServer.to).toHaveBeenCalledWith('user_u2');
+            expect(mockServer.emit).toHaveBeenCalledTimes(2);
+            expect(mockServer.emit).toHaveBeenCalledWith('userBlocked', {
+                blockerId: 'u1',
+                blockedId: 'u2',
+                conversationId: 'conv-1',
+            });
+        });
+
+        it('handleUserUnblocked should emit userUnblocked to both users with conversationId null when no DIRECT chat', () => {
+            gateway.handleUserUnblocked(new UserUnblockedEvent('u1', 'u2', null));
+
+            expect(mockServer.to).toHaveBeenCalledWith('user_u1');
+            expect(mockServer.to).toHaveBeenCalledWith('user_u2');
+            expect(mockServer.emit).toHaveBeenCalledWith('userUnblocked', {
+                blockerId: 'u1',
+                blockedId: 'u2',
+                conversationId: null,
+            });
         });
 
         it('handleMessagePinned should emit messagePinned when pinned and messageUnpinned when unpinned', () => {
@@ -1017,6 +1219,64 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
             );
             expect(result.status).toBe('success');
             expect(result.data).toEqual(mockReactionResult);
+        });
+
+        it('handleCustomizeConversation should throw WsException if client has no authenticated user', async () => {
+            const client = createMockSocket() as Socket;
+            client.data = {};
+
+            await expect(
+                gateway.handleCustomizeConversation(client, { conversationId: 'conv-1', quickEmoji: '🔥' }),
+            ).rejects.toThrow(WsException);
+        });
+
+        it('handleCustomizeConversation should delegate to service methods and return updated data', async () => {
+            const client = createMockSocket() as Socket;
+            client.data.user = { id: 'user-uuid-1', username: 'john_doe' };
+
+            mockConversationsService.updateGroup.mockResolvedValueOnce({ id: 'conv-1', name: 'New Name' });
+            mockConversationsService.updateQuickEmoji.mockResolvedValueOnce({ quickEmoji: '🔥' });
+
+            const result = await gateway.handleCustomizeConversation(client, {
+                conversationId: 'conv-1',
+                name: 'New Name',
+                quickEmoji: '🔥',
+            });
+
+            expect(mockConversationsService.updateGroup).toHaveBeenCalledWith(
+                'user-uuid-1',
+                'conv-1',
+                { name: 'New Name', avatarUrl: undefined },
+            );
+            expect(mockConversationsService.updateQuickEmoji).toHaveBeenCalledWith(
+                'user-uuid-1',
+                'conv-1',
+                { emoji: '🔥' },
+            );
+            expect(result.status).toBe('success');
+            expect(result.data.quickEmoji).toBe('🔥');
+        });
+
+        it('handleConversationCustomized should broadcast to room and member user channels', () => {
+            const event = new ConversationCustomizedEvent(
+                'conv-1',
+                { id: 'user-1', displayName: 'User One' },
+                { quickEmoji: '🎉' },
+                ['user-1', 'user-2'],
+            );
+
+            gateway.handleConversationCustomized(event);
+
+            expect(mockServer.to).toHaveBeenCalledWith('conv_conv-1');
+            expect(mockServer.to).toHaveBeenCalledWith('user_user-1');
+            expect(mockServer.to).toHaveBeenCalledWith('user_user-2');
+            expect(mockServer.emit).toHaveBeenCalledWith(
+                'conversationCustomized',
+                expect.objectContaining({
+                    conversationId: 'conv-1',
+                    quickEmoji: '🎉',
+                }),
+            );
         });
     });
 });

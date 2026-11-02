@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { ActiveChatCanvas } from './ActiveChatCanvas'
 import { useConversationStore } from '@/features/conversations/stores/conversation.store'
@@ -13,6 +14,15 @@ import type { Socket } from 'socket.io-client'
 vi.mock('@/services/socket.client', () => ({
   socketClient: {
     getSocket: vi.fn(),
+  },
+}))
+
+vi.mock('@/features/conversations/services/conversation.api', () => ({
+  conversationApi: {
+    getConversationById: vi.fn().mockResolvedValue(null),
+    getPinnedMessages: vi.fn().mockResolvedValue([]),
+    pinMessage: vi.fn().mockResolvedValue(undefined),
+    unpinMessage: vi.fn().mockResolvedValue(undefined),
   },
 }))
 
@@ -186,7 +196,8 @@ describe('ActiveChatCanvas Component Tests', () => {
     expect(mockSocket.off).toHaveBeenCalledWith('messageReactionUpdated', expect.any(Function))
   })
 
-  it('toggles ChatDetailDrawer when clicking info button and closes when clicking close', () => {
+  it('toggles ChatDetailDrawer when choosing menu info item and closes when clicking close', async () => {
+    const user = userEvent.setup()
     render(
       <MemoryRouter initialEntries={['/chat/conv-test-1']}>
         <Routes>
@@ -199,12 +210,12 @@ describe('ActiveChatCanvas Component Tests', () => {
     expect(screen.queryByTestId('chat-detail-drawer')).not.toBeInTheDocument()
 
     // Click info button in header
-    const infoBtn = screen.getByRole('button', { name: 'Thông tin hội thoại' })
-    fireEvent.click(infoBtn)
+    await user.click(screen.getByRole('button', { name: 'Tùy chọn hội thoại' }))
+    await user.click(await screen.findByRole('menuitem', { name: /Xem thông tin/ }))
 
     // Drawer opens
     expect(screen.getByTestId('chat-detail-drawer')).toBeInTheDocument()
-    expect(screen.getByText('Thông tin người dùng')).toBeInTheDocument()
+    expect(screen.getByText('Thông tin cuộc trò chuyện')).toBeInTheDocument()
 
     // Click close button on drawer
     const closeBtn = screen.getByRole('button', { name: 'Đóng bảng thông tin' })
@@ -213,5 +224,157 @@ describe('ActiveChatCanvas Component Tests', () => {
     // Drawer closes
     expect(screen.queryByTestId('chat-detail-drawer')).not.toBeInTheDocument()
   })
-})
 
+  it('shows drag-and-drop overlay on drag enter and hides on drag leave or drop', () => {
+    render(
+      <MemoryRouter initialEntries={['/chat/conv-test-1']}>
+        <Routes>
+          <Route path="/chat/:conversationId" element={<ActiveChatCanvas />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    const canvas = screen.getByTestId('active-chat-canvas')
+    expect(screen.queryByTestId('drag-drop-overlay')).not.toBeInTheDocument()
+
+    // Trigger drag enter with Files
+    fireEvent.dragEnter(canvas, {
+      dataTransfer: {
+        types: ['Files'],
+      },
+    })
+    expect(screen.getByTestId('drag-drop-overlay')).toBeInTheDocument()
+    expect(screen.getByText('Thả tệp vào đây để gửi')).toBeInTheDocument()
+
+    // Trigger drag leave
+    fireEvent.dragLeave(canvas)
+    expect(screen.queryByTestId('drag-drop-overlay')).not.toBeInTheDocument()
+
+    // Trigger drag enter then drop
+    fireEvent.dragEnter(canvas, {
+      dataTransfer: {
+        types: ['Files'],
+      },
+    })
+    expect(screen.getByTestId('drag-drop-overlay')).toBeInTheDocument()
+
+    const testFile = new File(['readme'], 'README.md', { type: 'text/markdown' })
+    fireEvent.drop(canvas, {
+      dataTransfer: {
+        files: [testFile],
+      },
+    })
+    expect(screen.queryByTestId('drag-drop-overlay')).not.toBeInTheDocument()
+  })
+
+  it('fetches and renders PinnedMessageBar when pinned messages exist', async () => {
+    const { conversationApi } = await import('@/features/conversations/services/conversation.api')
+    const pinnedMsg: Message = {
+      ...mockMsg,
+      id: 'pinned-1',
+      content: 'Nội dung đã được ghim',
+      isPinned: true,
+    }
+    vi.mocked(conversationApi.getPinnedMessages).mockResolvedValueOnce([pinnedMsg])
+
+    render(
+      <MemoryRouter initialEntries={['/chat/conv-test-1']}>
+        <Routes>
+          <Route path="/chat/:conversationId" element={<ActiveChatCanvas />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    const pinnedBar = await screen.findByTestId('pinned-message-bar')
+    expect(pinnedBar).toBeInTheDocument()
+    expect(screen.getByText('Nội dung đã được ghim')).toBeInTheDocument()
+  })
+
+  it('updates pinned messages on messagePinned and messageUnpinned socket events', async () => {
+    let messagePinnedCallback: ((payload: unknown) => void) | undefined
+    let messageUnpinnedCallback: ((payload: unknown) => void) | undefined
+
+    mockSocket.on.mockImplementation((event: string, cb: (...args: unknown[]) => void) => {
+      if (event === 'messagePinned') {
+        messagePinnedCallback = cb as (payload: unknown) => void
+      }
+      if (event === 'messageUnpinned') {
+        messageUnpinnedCallback = cb as (payload: unknown) => void
+      }
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/chat/conv-test-1']}>
+        <Routes>
+          <Route path="/chat/:conversationId" element={<ActiveChatCanvas />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(screen.queryByTestId('pinned-message-bar')).not.toBeInTheDocument()
+
+    // Trigger messagePinned socket event
+    const newPin: Message = {
+      ...mockMsg,
+      id: 'socket-pin-1',
+      content: 'Tin ghim từ socket',
+      isPinned: true,
+    }
+    await act(async () => {
+      messagePinnedCallback?.({
+        conversationId: 'conv-test-1',
+        messageId: 'socket-pin-1',
+        message: newPin,
+        pinnedBy: { id: 'sender-1', displayName: 'Nguyễn Văn A' },
+      })
+    })
+
+    const pinnedBar = await screen.findByTestId('pinned-message-bar')
+    expect(pinnedBar).toBeInTheDocument()
+    expect(screen.getByText('Tin ghim từ socket')).toBeInTheDocument()
+
+    // Trigger messageUnpinned socket event
+    act(() => {
+      messageUnpinnedCallback?.({
+        conversationId: 'conv-test-1',
+        messageId: 'socket-pin-1',
+      })
+    })
+
+    expect(screen.queryByTestId('pinned-message-bar')).not.toBeInTheDocument()
+  })
+
+  it('M4: realtime messagePinned payload with only senderName shows the sender name', async () => {
+    let messagePinnedCallback: ((payload: unknown) => void) | undefined
+    mockSocket.on.mockImplementation((event: string, cb: (...args: unknown[]) => void) => {
+      if (event === 'messagePinned') messagePinnedCallback = cb as (payload: unknown) => void
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/chat/conv-test-1']}>
+        <Routes>
+          <Route path="/chat/:conversationId" element={<ActiveChatCanvas />} />
+        </Routes>
+      </MemoryRouter>
+    )
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      messagePinnedCallback?.({
+        conversationId: 'conv-test-1',
+        messageId: 'rt-pin-1',
+        message: { id: 'rt-pin-1', content: 'Chao Alice', senderName: 'qa_bob' },
+        pinnedBy: { id: 'a', displayName: 'Alice' },
+      })
+    })
+
+    expect(await screen.findByText('qa_bob:')).toBeInTheDocument()
+    expect(screen.queryByText('Người dùng:')).not.toBeInTheDocument()
+  })
+})

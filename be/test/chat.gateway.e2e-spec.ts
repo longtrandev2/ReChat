@@ -147,17 +147,10 @@ describe('ChatGateway (e2e) - Layer 5 Real-time Verification', () => {
             transports: ['websocket'],
         });
 
-        const exceptionPromise = waitForEvent(socket, 'exception');
-        const disconnectPromise = waitForEvent(socket, 'disconnect');
-
-        const [exception] = await Promise.all([exceptionPromise, disconnectPromise]);
-
-        expect(exception).toEqual(
-            expect.objectContaining({
-                status: 'error',
-                message: 'Unauthorized: Missing authentication token',
-            }),
-        );
+        // Xác thực ở middleware handshake: kết nối bị từ chối trước khi 'connect' (client nhận connect_error)
+        const error = await waitForEvent<Error>(socket, 'connect_error');
+        expect(error.message).toBe('Unauthorized: Missing authentication token');
+        expect(socket.connected).toBe(false);
 
         socket.close();
         await new Promise((r) => setTimeout(r, 50));

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useImperativeHandle } from 'react'
 import {
   Send,
   Paperclip,
@@ -10,11 +10,18 @@ import {
   Reply,
   FileText,
 } from 'lucide-react'
+import * as Popover from '@radix-ui/react-popover'
+import EmojiPicker, { Theme, type EmojiClickData } from 'emoji-picker-react'
 import { toast } from 'sonner'
 import { socketClient } from '@/services/socket.client'
 import { mediaApi } from '../services/media.api'
 import { useMessagesStore } from '../stores/messages.store'
-import { formatFileSize } from '@/lib/utils'
+import { formatFileSize, cn } from '@/lib/utils'
+import {
+  validateAttachment,
+  MAX_ATTACHMENTS,
+  FILE_INPUT_ACCEPT,
+} from '../utils/file-validation'
 
 interface PendingAttachment {
   id: string
@@ -23,11 +30,17 @@ interface PendingAttachment {
   isImage: boolean
 }
 
+export interface MessageComposerHandle {
+  addFiles: (files: FileList | File[]) => void
+}
+
 interface MessageComposerProps {
   conversationId: string
   onSendMessage: (content: string, replyToId?: string) => void | Promise<void>
   onEditMessage?: (messageId: string, content: string) => void | Promise<void>
   disabled?: boolean
+  quickEmoji?: string
+  ref?: React.Ref<MessageComposerHandle>
 }
 
 /**
@@ -47,6 +60,8 @@ export function MessageComposer({
   onSendMessage,
   onEditMessage,
   disabled = false,
+  quickEmoji = '👍',
+  ref,
 }: MessageComposerProps) {
   const [content, setContent] = useState('')
   const [prevEditingId, setPrevEditingId] = useState<string | null>(null)
@@ -54,6 +69,27 @@ export function MessageComposer({
   const [isUploading, setIsUploading] = useState(false)
   const [uploadPercent, setUploadPercent] = useState(0)
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
+  const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false)
+
+  // Nhận diện theme sáng / tối cho EmojiPicker
+  const [isDark, setIsDark] = useState(() => {
+    if (typeof document !== 'undefined') {
+      return document.documentElement.classList.contains('dark')
+    }
+    return false
+  })
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const observer = new MutationObserver(() => {
+      setIsDark(document.documentElement.classList.contains('dark'))
+    })
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class'],
+    })
+    return () => observer.disconnect()
+  }, [])
 
   const {
     editingMessage,
@@ -101,6 +137,11 @@ export function MessageComposer({
   }, [editingMessage, adjustHeight])
 
   // Dọn dẹp các Blob URL xem trước ảnh khi component unmount
+  const pendingAttachmentsRef = useRef(pendingAttachments)
+  useEffect(() => {
+    pendingAttachmentsRef.current = pendingAttachments
+  }, [pendingAttachments])
+
   useEffect(() => {
     return () => {
       pendingAttachments.forEach((att) => {
@@ -116,37 +157,64 @@ export function MessageComposer({
     const fileArray = Array.from(files)
     if (fileArray.length === 0) return
 
+    const currentAttachments = pendingAttachmentsRef.current
+    const remainingSlots = MAX_ATTACHMENTS - currentAttachments.length
+
+    if (remainingSlots <= 0) {
+      toast.error(`Chỉ được gửi tối đa ${MAX_ATTACHMENTS} tệp đính kèm trong một lần gửi`, {
+        id: 'composer-max-files-error',
+      })
+      return
+    }
+
+    const filesToProcess = fileArray.slice(0, remainingSlots)
+    if (fileArray.length > remainingSlots) {
+      toast.warning(
+        `Chỉ có thể chọn thêm tối đa ${remainingSlots} tệp nữa (tối đa ${MAX_ATTACHMENTS} tệp)`,
+        { id: 'composer-slot-warning' }
+      )
+    }
+
+    const existingKeys = new Set(
+      currentAttachments.map((p) => `${p.file.name}_${p.file.size}`)
+    )
     const validAttachments: PendingAttachment[] = []
 
-    for (const file of fileArray) {
-      const isImage = file.type.startsWith('image/')
-      const maxSizeBytes = isImage ? 5 * 1024 * 1024 : 25 * 1024 * 1024
+    for (const file of filesToProcess) {
+      const fileKey = `${file.name}_${file.size}`
+      if (existingKeys.has(fileKey)) {
+        continue
+      }
 
-      if (file.size > maxSizeBytes) {
-        toast.error(
-          `"${file.name}" vượt quá dung lượng cho phép (${isImage ? '5MB' : '25MB'})`
-        )
+      const validation = validateAttachment(file)
+      if (!validation.valid) {
+        toast.error(validation.error || `Tệp "${file.name}" không hợp lệ`, {
+          id: `file-invalid-${file.name}`,
+        })
         continue
       }
 
       validAttachments.push({
         id: `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         file,
-        isImage,
-        previewUrl: isImage ? URL.createObjectURL(file) : undefined,
+        isImage: validation.isImage,
+        previewUrl: validation.isImage ? URL.createObjectURL(file) : undefined,
       })
     }
 
     if (validAttachments.length > 0) {
-      setPendingAttachments((prev) => {
-        const existingKeys = new Set(prev.map((p) => `${p.file.name}_${p.file.size}`))
-        const uniqueNew = validAttachments.filter(
-          (v) => !existingKeys.has(`${v.file.name}_${v.file.size}`)
-        )
-        return [...prev, ...uniqueNew]
-      })
+      setPendingAttachments((prev) => [...prev, ...validAttachments])
     }
   }, [])
+
+  // Cung cấp hàm addFiles cho component cha (ActiveChatCanvas) qua ref
+  useImperativeHandle(
+    ref,
+    () => ({
+      addFiles,
+    }),
+    [addFiles]
+  )
 
   // Xóa một tệp khỏi danh sách chờ gửi
   const handleRemoveAttachment = useCallback((id: string) => {
@@ -190,6 +258,40 @@ export function MessageComposer({
     setContent('')
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
+    }
+  }
+
+  // Xử lý chọn biểu tượng cảm xúc từ Emoji Picker popover
+  const handleEmojiSelect = (emojiData: EmojiClickData) => {
+    const textarea = textareaRef.current
+    if (!textarea) {
+      setContent((prev) => prev + emojiData.emoji)
+      return
+    }
+
+    const start = textarea.selectionStart ?? content.length
+    const end = textarea.selectionEnd ?? content.length
+    const newContent =
+      content.substring(0, start) + emojiData.emoji + content.substring(end)
+    setContent(newContent)
+
+    // Focus lại và đặt con trỏ chuột ngay sau emoji vừa chèn
+    requestAnimationFrame(() => {
+      textarea.focus()
+      const newCursor = start + emojiData.emoji.length
+      textarea.setSelectionRange(newCursor, newCursor)
+      adjustHeight()
+    })
+  }
+
+  // Xử lý gửi biểu tượng cảm xúc nhanh (Quick Emoji) khi ô nhập rỗng
+  const handleSendQuickEmoji = async () => {
+    if (disabled || isUploading || isSending) return
+    try {
+      setIsSending(true)
+      await onSendMessage(quickEmoji)
+    } finally {
+      setIsSending(false)
     }
   }
 
@@ -315,6 +417,10 @@ export function MessageComposer({
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
+    } else if (e.key === 'Escape' && editingMessage) {
+      // Esc hủy chỉnh sửa tin nhắn (FR-39)
+      e.preventDefault()
+      handleCancelEdit()
     }
   }
 
@@ -463,7 +569,7 @@ export function MessageComposer({
           type="file"
           multiple
           onChange={handleFileInputChange}
-          accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.zip,.rar,.txt"
+          accept={FILE_INPUT_ACCEPT}
           className="hidden"
           data-testid="file-upload-input"
         />
@@ -509,38 +615,74 @@ export function MessageComposer({
             aria-label="Nội dung tin nhắn"
           />
 
-          {/* Nút biểu tượng cảm xúc */}
-          <button
-            type="button"
-            aria-label="Chọn biểu tượng cảm xúc"
-            title="Biểu tượng cảm xúc"
-            disabled={disabled || isUploading}
-            onClick={() => setContent((prev) => prev + ' 😊')}
-            className="p-1.5 text-ink-secondary dark:text-ink-secondary-dark hover:text-amber-500 dark:hover:text-amber-400 hover:scale-115 active:scale-90 transition-all duration-150 disabled:opacity-40 mb-0.5 cursor-pointer"
-          >
-            <Smile className="w-5 h-5 transition-transform" />
-          </button>
+          {/* Popover Thư viện biểu tượng cảm xúc Emoji Picker */}
+          <Popover.Root open={isEmojiPickerOpen} onOpenChange={setIsEmojiPickerOpen}>
+            <Popover.Trigger asChild>
+              <button
+                type="button"
+                aria-label="Chọn biểu tượng cảm xúc"
+                title="Biểu tượng cảm xúc"
+                disabled={disabled || isUploading}
+                className={cn(
+                  'p-1.5 text-ink-secondary dark:text-ink-secondary-dark hover:text-amber-500 dark:hover:text-amber-400 hover:scale-115 active:scale-90 transition-all duration-150 disabled:opacity-40 mb-0.5 cursor-pointer',
+                  isEmojiPickerOpen && 'text-amber-500 dark:text-amber-400 scale-110'
+                )}
+              >
+                <Smile className="w-5 h-5 transition-transform" />
+              </button>
+            </Popover.Trigger>
+            <Popover.Portal>
+              <Popover.Content
+                side="top"
+                align="end"
+                sideOffset={12}
+                className="z-50 rounded-2xl shadow-2xl border border-border-light dark:border-border-dark overflow-hidden animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 duration-150"
+              >
+                <EmojiPicker
+                  onEmojiClick={handleEmojiSelect}
+                  theme={isDark ? Theme.DARK : Theme.LIGHT}
+                  lazyLoadEmojis
+                  searchPlaceHolder="Tìm kiếm biểu tượng..."
+                  width={340}
+                  height={400}
+                />
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
         </div>
 
-        {/* Nút gửi tin nhắn / lưu chỉnh sửa */}
-        <button
-          type="button"
-          aria-label={editingMessage ? 'Lưu chỉnh sửa' : 'Gửi tin nhắn'}
-          title={
-            editingMessage
-              ? 'Lưu chỉnh sửa (Enter)'
-              : 'Gửi tin nhắn (Enter)'
-          }
-          onClick={handleSend}
-          disabled={!canSend}
-          className="w-11 h-11 rounded-full bg-brand text-white flex items-center justify-center shrink-0 hover:bg-brand-hover hover:scale-105 active:scale-95 transition-all duration-150 shadow-md hover:shadow-brand/25 disabled:opacity-40 disabled:hover:bg-brand disabled:hover:scale-100 disabled:active:scale-100 disabled:shadow-none group cursor-pointer"
-        >
-          {editingMessage ? (
-            <Check className="w-5 h-5 transition-transform duration-150 group-hover:scale-110" />
-          ) : (
-            <Send className="w-5 h-5 ml-0.5 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-          )}
-        </button>
+        {/* Nút gửi tin nhắn / lưu chỉnh sửa HOẶC Nút Quick Emoji mặc định khi ô nhập rỗng */}
+        {canSend || editingMessage ? (
+          <button
+            type="button"
+            aria-label={editingMessage ? 'Lưu chỉnh sửa' : 'Gửi tin nhắn'}
+            title={
+              editingMessage
+                ? 'Lưu chỉnh sửa (Enter)'
+                : 'Gửi tin nhắn (Enter)'
+            }
+            onClick={handleSend}
+            disabled={!canSend && !editingMessage}
+            className="w-11 h-11 rounded-full bg-brand text-white flex items-center justify-center shrink-0 hover:bg-brand-hover hover:scale-105 active:scale-95 transition-all duration-150 shadow-md hover:shadow-brand/25 disabled:opacity-40 disabled:hover:bg-brand disabled:hover:scale-100 disabled:active:scale-100 disabled:shadow-none group cursor-pointer"
+          >
+            {editingMessage ? (
+              <Check className="w-5 h-5 transition-transform duration-150 group-hover:scale-110" />
+            ) : (
+              <Send className="w-5 h-5 ml-0.5 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+            )}
+          </button>
+        ) : (
+          <button
+            type="button"
+            aria-label={`Gửi biểu tượng cảm xúc nhanh (${quickEmoji})`}
+            title={`Gửi nhanh ${quickEmoji}`}
+            disabled={disabled || isUploading || isSending}
+            onClick={handleSendQuickEmoji}
+            className="w-11 h-11 rounded-full bg-surface-light dark:bg-[#17212B] border border-border-light/80 dark:border-border-dark text-xl flex items-center justify-center shrink-0 hover:scale-115 active:scale-90 hover:bg-brand-soft/40 dark:hover:bg-white/10 transition-all duration-150 shadow-xs hover:shadow-md disabled:opacity-40 cursor-pointer select-none"
+          >
+            <span className="leading-none select-none">{quickEmoji}</span>
+          </button>
+        )}
       </div>
     </div>
   )

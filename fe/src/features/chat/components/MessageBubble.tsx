@@ -14,7 +14,10 @@ import {
   FileSpreadsheet,
   FileArchive,
   FileCode,
+  FileAudio,
   File,
+  Pin,
+  PinOff,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
@@ -66,17 +69,59 @@ function getFileDetails(fileName: string = ''): FileDetails {
         colorClass: 'text-amber-600 dark:text-amber-400',
         bgClass: 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-900/50',
       }
+    case 'ppt':
+    case 'pptx':
+      return {
+        icon: FileText,
+        extLabel: 'Thuyết trình PowerPoint',
+        colorClass: 'text-amber-600 dark:text-amber-400',
+        bgClass: 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-900/50',
+      }
     case 'txt':
-    case 'md':
+    case 'rtf':
       return {
         icon: FileText,
         extLabel: 'Tệp văn bản TXT',
         colorClass: 'text-slate-600 dark:text-slate-400',
         bgClass: 'bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800',
       }
+    case 'md':
+      return {
+        icon: FileCode,
+        extLabel: 'Tài liệu Markdown',
+        colorClass: 'text-cyan-600 dark:text-cyan-400',
+        bgClass: 'bg-cyan-50 dark:bg-cyan-950/40 border-cyan-200 dark:border-cyan-900/50',
+      }
+    case 'mp3':
+    case 'wav':
+    case 'm4a':
+    case 'ogg':
+    case 'aac':
+      return {
+        icon: FileAudio,
+        extLabel: 'Tệp âm thanh',
+        colorClass: 'text-indigo-600 dark:text-indigo-400',
+        bgClass: 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-900/50',
+      }
+    case 'xml':
+    case 'yaml':
+    case 'yml':
+    case 'log':
+      return {
+        icon: FileCode,
+        extLabel: 'Tệp cấu hình / Log',
+        colorClass: 'text-sky-600 dark:text-sky-400',
+        bgClass: 'bg-sky-50 dark:bg-sky-950/40 border-sky-200 dark:border-sky-900/50',
+      }
+    case 'json':
+      return {
+        icon: FileCode,
+        extLabel: 'Tệp dữ liệu JSON',
+        colorClass: 'text-emerald-600 dark:text-emerald-400',
+        bgClass: 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900/50',
+      }
     case 'js':
     case 'ts':
-    case 'json':
     case 'html':
     case 'css':
       return {
@@ -99,6 +144,38 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import type { Message } from '../types/message.types'
 import { cn, formatFileSize } from '@/lib/utils'
+import { isSafeHttpUrl, openSafeUrl } from '@/lib/safe-url'
+
+/**
+ * Hàm phân tách và bôi sáng từ khóa tìm kiếm (Telegram Search Highlight)
+ * - Tạm thời xuất hiện khi thanh tìm kiếm có query
+ * - Giữ nguyên chữ hoa/thường nguyên bản của tin nhắn
+ */
+function renderHighlightedText(text: string, searchKeyword?: string) {
+  const trimmed = searchKeyword?.trim()
+  if (!trimmed) return text
+
+  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const regex = new RegExp(`(${escaped})`, 'gi')
+  const parts = text.split(regex)
+
+  if (parts.length <= 1) return text
+
+  return parts.map((part, index) => {
+    if (part.toLowerCase() === trimmed.toLowerCase()) {
+      return (
+        <mark
+          key={index}
+          className="bg-amber-300 dark:bg-amber-400 text-ink-primary font-semibold px-0.5 rounded-xs"
+          data-testid="search-highlight"
+        >
+          {part}
+        </mark>
+      )
+    }
+    return part
+  })
+}
 
 interface MessageBubbleProps {
   message: Message
@@ -107,15 +184,18 @@ interface MessageBubbleProps {
   showSenderName?: boolean
   showAvatar?: boolean
   isRead?: boolean
+  searchKeyword?: string
   onReply?: (message: Message) => void
   onReact?: (message: Message, emoji: string) => void
   onEdit?: (message: Message) => void
   onRecall?: (message: Message) => void
   onScrollToReply?: (replyToId: string) => void
   onImageClick?: (imageUrl: string, altText?: string) => void
+  onPin?: (message: Message) => void
+  onUnpin?: (message: Message) => void
 }
 
-const QUICK_EMOJIS = ['❤️', '👍', '😂', '🔥', '😮', '😢']
+const QUICK_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏']
 
 /**
  * MessageBubble: Bong bóng tin nhắn Telegram chuẩn thiết kế
@@ -134,16 +214,32 @@ export function MessageBubble({
   showSenderName = false,
   showAvatar = true,
   isRead = false,
+  searchKeyword,
   onReply,
   onReact,
   onEdit,
   onRecall,
   onScrollToReply,
   onImageClick,
+  onPin,
+  onUnpin,
 }: MessageBubbleProps) {
   const [isRecallDialogOpen, setIsRecallDialogOpen] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const [canEdit, setCanEdit] = useState(false)
+
+  if (message.type === 'SYSTEM') {
+    return (
+      <div
+        className="flex justify-center my-2.5 w-full select-none"
+        data-testid="system-message"
+      >
+        <span className="px-3.5 py-1 rounded-full bg-black/[0.04] dark:bg-white/[0.08] text-[11px] font-medium text-ink-secondary dark:text-ink-secondary-dark text-center max-w-[85%] leading-relaxed shadow-xs">
+          {message.content}
+        </span>
+      </div>
+    )
+  }
 
   const timeString = (() => {
     try {
@@ -192,6 +288,11 @@ export function MessageBubble({
     fileName: string
   ) => {
     e.stopPropagation()
+    // Chỉ cho phép http/https (chặn javascript:, data:, file:...)
+    if (!isSafeHttpUrl(fileUrl)) {
+      toast.error('Liên kết tệp không hợp lệ')
+      return
+    }
     try {
       let downloadUrl = fileUrl
       if (downloadUrl.includes('/upload/') && !downloadUrl.includes('/fl_attachment')) {
@@ -214,7 +315,7 @@ export function MessageBubble({
       if (fallbackUrl.includes('/upload/') && !fallbackUrl.includes('/fl_attachment')) {
         fallbackUrl = fallbackUrl.replace('/upload/', '/upload/fl_attachment/')
       }
-      window.open(fallbackUrl, '_blank')
+      openSafeUrl(fallbackUrl)
     }
   }
 
@@ -296,6 +397,30 @@ export function MessageBubble({
                 <Copy className="w-3.5 h-3.5" />
                 <span>Sao chép</span>
               </DropdownMenu.Item>
+
+              {message.isPinned ? (
+                onUnpin && (
+                  <DropdownMenu.Item
+                    onClick={() => onUnpin(message)}
+                    className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 dark:hover:bg-white/10 outline-none transition-colors"
+                    data-testid={`unpin-message-${message.id}`}
+                  >
+                    <PinOff className="w-3.5 h-3.5 text-amber-500" />
+                    <span>Bỏ ghim tin nhắn</span>
+                  </DropdownMenu.Item>
+                )
+              ) : (
+                onPin && (
+                  <DropdownMenu.Item
+                    onClick={() => onPin(message)}
+                    className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 dark:hover:bg-white/10 outline-none transition-colors"
+                    data-testid={`pin-message-${message.id}`}
+                  >
+                    <Pin className="w-3.5 h-3.5 text-brand" />
+                    <span>Ghim tin nhắn</span>
+                  </DropdownMenu.Item>
+                )
+              )}
 
               {message.type === 'FILE' && message.fileUrl && (
                 <DropdownMenu.Item
@@ -474,7 +599,7 @@ export function MessageBubble({
                           if (onImageClick) {
                             onImageClick(message.fileUrl!, message.content || undefined)
                           } else {
-                            window.open(message.fileUrl || '', '_blank')
+                            openSafeUrl(message.fileUrl)
                           }
                         }}
                       >
@@ -530,7 +655,7 @@ export function MessageBubble({
                               className="text-xs font-semibold truncate text-ink-primary dark:text-ink-primary-dark group-hover/file:text-brand transition-colors"
                               title={message.content}
                             >
-                              {message.content || 'Tệp đính kèm'}
+                              {renderHighlightedText(message.content || 'Tệp đính kèm', searchKeyword)}
                             </p>
                             <p className="text-[11px] text-ink-muted select-none mt-0.5 flex items-center gap-1.5">
                               <span>{getFileDetails(message.content).extLabel}</span>
@@ -572,7 +697,7 @@ export function MessageBubble({
                         (message.type !== 'IMAGE' || hasImageCaption) &&
                         message.content && (
                           <div className="flex-1 min-w-[40px] text-sm leading-relaxed whitespace-pre-wrap break-words">
-                            {message.content}
+                            {renderHighlightedText(message.content, searchKeyword)}
                           </div>
                         )}
 
@@ -580,7 +705,17 @@ export function MessageBubble({
                       <div className="inline-flex items-center gap-1 select-none text-[11px] text-ink-secondary dark:text-ink-secondary-dark ml-auto shrink-0 leading-none pb-0.5">
                         {message.isEdited && (
                           <span className="text-[10px] text-ink-muted italic mr-0.5">
-                            (đã sửa)
+                            (đã chỉnh sửa)
+                          </span>
+                        )}
+                        {message.isPinned && (
+                          <span
+                            className="inline-flex items-center text-brand dark:text-brand-accent ml-0.5"
+                            title="Tin nhắn đã ghim"
+                            aria-label="Tin nhắn đã ghim"
+                            data-testid={`pinned-indicator-${message.id}`}
+                          >
+                            <Pin className="w-3 h-3 fill-current rotate-45" />
                           </span>
                         )}
                         {timeString && <span>{timeString}</span>}

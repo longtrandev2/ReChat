@@ -5,6 +5,7 @@ import { ConversationMember } from './entities/conversation-member.entity.js';
 import { Message } from './entities/message.entity.js';
 import { MessageReaction } from './entities/message-reaction.entity.js';
 import { ConversationsService } from './conversations.service.js';
+import { ConversationActionsService } from './conversation-actions.service.js';
 import { ConversationsController } from './conversations.controller.js';
 import { UsersModule } from '../users/user.module.js';
 import { FriendsModule } from '../friends/friends.module.js';
@@ -30,7 +31,7 @@ import { Friendship } from '../friends/entities/friendship.entity.js';
         AuthModule,
     ],
     controllers: [ConversationsController],
-    providers: [ConversationsService, ConnectionManagerService, ChatGateway],
+    providers: [ConversationsService, ConversationActionsService, ConnectionManagerService, ChatGateway],
     exports: [ConversationsService, ConnectionManagerService, ChatGateway],
 })
 export class ConversationsModule { }

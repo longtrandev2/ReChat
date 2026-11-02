@@ -43,9 +43,9 @@ export const authApi = {
    * Returns JWT token + User or 2FA challenge
    */
   login: async (data: LoginPayload): Promise<AuthSuccessResponse | Login2FAChallengeResponse> => {
-    const payload = data.usernameOrEmail.includes('@')
-      ? { email: data.usernameOrEmail, password: data.password }
-      : { username: data.usernameOrEmail, password: data.password }
+    // LoginDto backend chỉ có trường `username` (nhận cả username lẫn email).
+    // Gửi `email` sẽ bị ValidationPipe(whitelist) lọc bỏ => 400 "Tài khoản hoặc email không được để trống".
+    const payload = { username: data.usernameOrEmail.trim(), password: data.password }
 
     const res = await apiClient.post<AuthSuccessResponse | Login2FAChallengeResponse>(
       '/auth/login',
@@ -103,14 +103,19 @@ export const authApi = {
   },
 
   /**
+   * POST /api/v1/auth/refresh
+   * Đổi HttpOnly Cookie lấy Access Token mới và thông tin User Profile
+   */
+  refresh: async (): Promise<AuthSuccessResponse> => {
+    const res = await apiClient.post<AuthSuccessResponse>('/auth/refresh')
+    return res.data
+  },
+
+  /**
    * POST /api/v1/auth/logout
    */
   logout: async (): Promise<void> => {
-    try {
-      await apiClient.post('/auth/logout')
-    } finally {
-      localStorage.removeItem('rechat_access_token')
-    }
+    await apiClient.post('/auth/logout')
   },
 
   /**

@@ -1,16 +1,38 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { useAuthStore } from './auth.store'
-import { apiClient } from '@/services/api.client'
+import { authApi } from '@/features/auth/services/auth.api'
+import { postAuthBroadcast, type AuthBroadcastMessage } from '@/lib/auth-broadcast'
 import type { UserProfile } from '@/types/auth.types'
 
-// Mock apiClient to isolate unit testing of store logic
-vi.mock('@/services/api.client', () => ({
-  apiClient: {
-    get: vi.fn(),
+const mocks = vi.hoisted(() => {
+  let subscriber: ((msg: AuthBroadcastMessage) => void) | null = null
+  return {
+    getSubscriber: () => subscriber,
+    setSubscriber: (listener: (msg: AuthBroadcastMessage) => void) => {
+      subscriber = listener
+    },
+  }
+})
+
+// Mock auth-broadcast module before importing auth.store
+vi.mock('@/lib/auth-broadcast', () => ({
+  postAuthBroadcast: vi.fn(),
+  subscribeToAuthBroadcast: vi.fn((listener) => {
+    mocks.setSubscriber(listener)
+    return () => {}
+  }),
+}))
+
+// Mock authApi to isolate unit testing of store logic
+vi.mock('@/features/auth/services/auth.api', () => ({
+  authApi: {
+    refresh: vi.fn(),
+    logout: vi.fn(),
   },
 }))
 
-describe('useAuthStore (ZOMBIES & AAA Methodology)', () => {
+import { useAuthStore } from './auth.store'
+
+describe('useAuthStore (In-Memory Token & App Initialization Gate)', () => {
   const mockUser: UserProfile = {
     id: 'user-uuid-123',
     username: 'alex_tr',
@@ -28,48 +50,37 @@ describe('useAuthStore (ZOMBIES & AAA Methodology)', () => {
       token: null,
       user: null,
       isAuthenticated: false,
+      isInitializing: true,
       isLoading: false,
     })
     vi.clearAllMocks()
   })
 
-  // Z - Zero: Initial/Empty session
-  it('Z: initializeAuth completes with unauthenticated state when no token exists in localStorage', async () => {
-    // Arrange: Ensure clean storage
-    expect(localStorage.getItem('rechat_access_token')).toBeNull()
-
-    // Act
-    await useAuthStore.getState().initializeAuth()
-
-    // Assert
+  it('Z: initial state has null token and isInitializing true (RAM-only)', () => {
     const state = useAuthStore.getState()
     expect(state.token).toBeNull()
     expect(state.user).toBeNull()
     expect(state.isAuthenticated).toBe(false)
-    expect(state.isLoading).toBe(false)
-    expect(apiClient.get).not.toHaveBeenCalled()
+    expect(state.isInitializing).toBe(true)
+    expect(localStorage.getItem('rechat_access_token')).toBeNull()
   })
 
-  // O - One: Set authenticated session
-  it('O: setAuth stores token in localStorage and updates in-memory state', () => {
-    // Arrange
-    const token = 'jwt-token-sample-123'
+  it('O: setAuth stores token in RAM only and never writes to localStorage', () => {
+    const token = 'jwt-token-in-memory-123'
 
-    // Act
     useAuthStore.getState().setAuth(token, mockUser)
 
-    // Assert
     const state = useAuthStore.getState()
     expect(state.token).toBe(token)
     expect(state.user).toEqual(mockUser)
     expect(state.isAuthenticated).toBe(true)
+    expect(state.isInitializing).toBe(false)
     expect(state.isLoading).toBe(false)
-    expect(localStorage.getItem('rechat_access_token')).toBe(token)
+    // CRITICAL: LocalStorage must remain clean to prevent XSS exfiltration
+    expect(localStorage.getItem('rechat_access_token')).toBeNull()
   })
 
-  // M - Many: Updates user profile without touching token
-  it('M: setUser updates the user object while preserving authentication token', () => {
-    // Arrange
+  it('M: setUser updates user profile in RAM without altering token', () => {
     const token = 'jwt-token-active'
     useAuthStore.getState().setAuth(token, mockUser)
 
@@ -79,10 +90,8 @@ describe('useAuthStore (ZOMBIES & AAA Methodology)', () => {
       avatarUrl: 'https://example.com/avatar.jpg',
     }
 
-    // Act
     useAuthStore.getState().setUser(updatedUser)
 
-    // Assert
     const state = useAuthStore.getState()
     expect(state.token).toBe(token)
     expect(state.user?.displayName).toBe('Alex Updated')
@@ -90,150 +99,187 @@ describe('useAuthStore (ZOMBIES & AAA Methodology)', () => {
     expect(state.isAuthenticated).toBe(true)
   })
 
-  // B - Boundaries: logout cleans both memory and persistent storage
-  it('B: logout resets all states to null/false and removes item from localStorage', () => {
-    // Arrange
-    useAuthStore.getState().setAuth('jwt-token-to-remove', mockUser)
-    expect(localStorage.getItem('rechat_access_token')).toBe('jwt-token-to-remove')
+  it('B: resetAuth clears all RAM states to null/false immediately', () => {
+    useAuthStore.getState().setAuth('jwt-token-to-reset', mockUser)
 
-    // Act
-    useAuthStore.getState().logout()
+    useAuthStore.getState().resetAuth()
 
-    // Assert
     const state = useAuthStore.getState()
     expect(state.token).toBeNull()
     expect(state.user).toBeNull()
     expect(state.isAuthenticated).toBe(false)
-    expect(state.isLoading).toBe(false)
-    expect(localStorage.getItem('rechat_access_token')).toBeNull()
+    expect(state.isInitializing).toBe(false)
   })
 
-  // E - Exceptions / Error recovery: Token invalid on initializeAuth triggers logout
-  it('E: initializeAuth triggers logout when backend rejects stored token (e.g. 401)', async () => {
-    // Arrange
-    const staleToken = 'stale-or-blacklisted-token'
-    localStorage.setItem('rechat_access_token', staleToken)
-    useAuthStore.setState({ token: staleToken, isAuthenticated: true })
+  it('B: logout calls authApi.logout and resets RAM states', async () => {
+    useAuthStore.getState().setAuth('jwt-token-to-logout', mockUser)
+    vi.mocked(authApi.logout).mockResolvedValueOnce()
 
-    vi.mocked(apiClient.get).mockRejectedValueOnce({
-      response: { status: 401, data: { message: 'Unauthorized' } },
-    })
+    await useAuthStore.getState().logout()
 
-    // Act
-    await useAuthStore.getState().initializeAuth()
-
-    // Assert
+    expect(authApi.logout).toHaveBeenCalledTimes(1)
     const state = useAuthStore.getState()
     expect(state.token).toBeNull()
     expect(state.user).toBeNull()
     expect(state.isAuthenticated).toBe(false)
-    expect(state.isLoading).toBe(false)
-    expect(localStorage.getItem('rechat_access_token')).toBeNull()
+    expect(state.isInitializing).toBe(false)
   })
 
-  // E - Exceptions: Rate limit (429) MUST preserve token and not kick to login
-  it('E: initializeAuth PRESERVES session and does NOT trigger logout on 429 Too Many Requests (F5 resilience)', async () => {
-    // Arrange
-    const validToken = 'valid-token-surviving-throttle'
-    localStorage.setItem('rechat_access_token', validToken)
-    useAuthStore.setState({ token: validToken, isAuthenticated: true })
+  it('S: checkAuth successfully restores in-memory session when HttpOnly cookie is valid', async () => {
+    const refreshResponse = {
+      accessToken: 'new-restored-access-token',
+      user: mockUser,
+    }
+    vi.mocked(authApi.refresh).mockResolvedValueOnce(refreshResponse)
 
-    vi.mocked(apiClient.get).mockRejectedValueOnce({
-      response: { status: 429, data: { message: 'ThrottlerException: Too Many Requests' } },
-    })
+    await useAuthStore.getState().checkAuth()
 
-    // Act
-    await useAuthStore.getState().initializeAuth()
-
-    // Assert: Token and auth state must be retained!
+    expect(authApi.refresh).toHaveBeenCalledTimes(1)
     const state = useAuthStore.getState()
-    expect(state.token).toBe(validToken)
-    expect(state.isAuthenticated).toBe(true)
-    expect(state.isLoading).toBe(false)
-    expect(localStorage.getItem('rechat_access_token')).toBe(validToken)
-  })
-
-  // E - Exceptions: Server error (500) MUST preserve token
-  it('E: initializeAuth PRESERVES session and does NOT trigger logout on 500 Server Error', async () => {
-    // Arrange
-    const validToken = 'valid-token-surviving-server-error'
-    localStorage.setItem('rechat_access_token', validToken)
-    useAuthStore.setState({ token: validToken, isAuthenticated: true })
-
-    vi.mocked(apiClient.get).mockRejectedValueOnce({
-      response: { status: 500, data: { message: 'Internal Server Error' } },
-    })
-
-    // Act
-    await useAuthStore.getState().initializeAuth()
-
-    // Assert: Token must NOT be deleted
-    const state = useAuthStore.getState()
-    expect(state.token).toBe(validToken)
-    expect(state.isAuthenticated).toBe(true)
-    expect(state.isLoading).toBe(false)
-    expect(localStorage.getItem('rechat_access_token')).toBe(validToken)
-  })
-
-  // E - Exceptions: Network connection loss (Offline) MUST preserve token
-  it('E: initializeAuth PRESERVES session and does NOT trigger logout on Network Error', async () => {
-    // Arrange
-    const validToken = 'valid-token-surviving-offline'
-    localStorage.setItem('rechat_access_token', validToken)
-    useAuthStore.setState({ token: validToken, isAuthenticated: true })
-
-    vi.mocked(apiClient.get).mockRejectedValueOnce(new Error('Network Error'))
-
-    // Act
-    await useAuthStore.getState().initializeAuth()
-
-    // Assert: Token must NOT be deleted
-    const state = useAuthStore.getState()
-    expect(state.token).toBe(validToken)
-    expect(state.isAuthenticated).toBe(true)
-    expect(state.isLoading).toBe(false)
-    expect(localStorage.getItem('rechat_access_token')).toBe(validToken)
-  })
-
-  // M - Many: Multiple calls maintain consistency
-  it('M: initializeAuth called multiple times concurrently remains consistent', async () => {
-    // Arrange
-    const validToken = 'valid-token-multiple'
-    localStorage.setItem('rechat_access_token', validToken)
-    useAuthStore.setState({ token: validToken, isAuthenticated: true })
-
-    vi.mocked(apiClient.get).mockResolvedValue({ data: mockUser })
-
-    // Act
-    await Promise.all([
-      useAuthStore.getState().initializeAuth(),
-      useAuthStore.getState().initializeAuth(),
-    ])
-
-    // Assert
-    const state = useAuthStore.getState()
-    expect(state.isAuthenticated).toBe(true)
-    expect(state.user).toEqual(mockUser)
-    expect(state.isLoading).toBe(false)
-  })
-
-  // S - Simple / Happy Path: initializeAuth hydrations user profile successfully
-  it('S: initializeAuth hydrates user profile when token is valid', async () => {
-    // Arrange
-    const validToken = 'valid-jwt-token'
-    localStorage.setItem('rechat_access_token', validToken)
-    useAuthStore.setState({ token: validToken, isAuthenticated: true })
-
-    vi.mocked(apiClient.get).mockResolvedValueOnce({ data: mockUser })
-
-    // Act
-    await useAuthStore.getState().initializeAuth()
-
-    // Assert
-    const state = useAuthStore.getState()
-    expect(apiClient.get).toHaveBeenCalledWith('/auth/me')
+    expect(state.token).toBe('new-restored-access-token')
     expect(state.user).toEqual(mockUser)
     expect(state.isAuthenticated).toBe(true)
+    expect(state.isInitializing).toBe(false)
     expect(state.isLoading).toBe(false)
+  })
+
+  it('E: checkAuth sets unauthenticated state when HttpOnly cookie is missing or rejected (401)', async () => {
+    vi.mocked(authApi.refresh).mockRejectedValueOnce({
+      response: { status: 401, data: { message: 'Refresh token không tồn tại trong cookie' } },
+    })
+
+    await useAuthStore.getState().checkAuth()
+
+    expect(authApi.refresh).toHaveBeenCalledTimes(1)
+    const state = useAuthStore.getState()
+    expect(state.token).toBeNull()
+    expect(state.user).toBeNull()
+    expect(state.isAuthenticated).toBe(false)
+    expect(state.isInitializing).toBe(false)
+    expect(state.isLoading).toBe(false)
+  })
+
+  it('E: checkAuth gracefully handles network failures without breaking the app', async () => {
+    vi.mocked(authApi.refresh).mockRejectedValueOnce(new Error('Network Error'))
+
+    await useAuthStore.getState().checkAuth()
+
+    expect(authApi.refresh).toHaveBeenCalledTimes(1)
+    const state = useAuthStore.getState()
+    expect(state.token).toBeNull()
+    expect(state.isAuthenticated).toBe(false)
+    expect(state.isInitializing).toBe(false)
+  })
+
+  describe('Multi-Tab Synchronization via BroadcastChannel (Task 7.1)', () => {
+    it('broadcasts AUTH_LOGIN when setAuth is called with default broadcast=true', () => {
+      useAuthStore.getState().setAuth('tab-token-123', mockUser)
+
+      expect(postAuthBroadcast).toHaveBeenCalledWith({
+        type: 'AUTH_LOGIN',
+        payload: { token: 'tab-token-123', user: mockUser },
+      })
+    })
+
+    it('does not broadcast when setAuth is called with broadcast=false (prevent echo loop)', () => {
+      useAuthStore.getState().setAuth('tab-token-123', mockUser, false)
+
+      expect(postAuthBroadcast).not.toHaveBeenCalled()
+    })
+
+    it('broadcasts AUTH_LOGOUT when logout is called with default broadcast=true', async () => {
+      useAuthStore.getState().setAuth('token-to-logout', mockUser, false)
+      vi.mocked(authApi.logout).mockResolvedValueOnce()
+
+      await useAuthStore.getState().logout()
+
+      expect(postAuthBroadcast).toHaveBeenCalledWith({ type: 'AUTH_LOGOUT' })
+    })
+
+    it('broadcasts AUTH_TOKEN_REFRESHED when checkAuth succeeds', async () => {
+      const refreshResponse = {
+        accessToken: 'refreshed-multi-tab-token',
+        user: mockUser,
+      }
+      vi.mocked(authApi.refresh).mockResolvedValueOnce(refreshResponse)
+
+      await useAuthStore.getState().checkAuth()
+
+      expect(postAuthBroadcast).toHaveBeenCalledWith({
+        type: 'AUTH_TOKEN_REFRESHED',
+        payload: { token: 'refreshed-multi-tab-token', user: mockUser },
+      })
+    })
+
+    it('handles incoming AUTH_LOGOUT from another tab by resetting RAM auth state', () => {
+      useAuthStore.getState().setAuth('active-tab-token', mockUser, false)
+      expect(useAuthStore.getState().isAuthenticated).toBe(true)
+
+      const subscriber = mocks.getSubscriber()
+      expect(subscriber).toBeDefined()
+      subscriber!({ type: 'AUTH_LOGOUT' })
+
+      const state = useAuthStore.getState()
+      expect(state.token).toBeNull()
+      expect(state.user).toBeNull()
+      expect(state.isAuthenticated).toBe(false)
+    })
+
+    it('handles incoming AUTH_TOKEN_REFRESHED from another tab by updating RAM token without network call', () => {
+      const subscriber = mocks.getSubscriber()
+      expect(subscriber).toBeDefined()
+      const newUser = { ...mockUser, username: 'synced_user' }
+
+      subscriber!({
+        type: 'AUTH_TOKEN_REFRESHED',
+        payload: { token: 'peer-tab-token-777', user: newUser },
+      })
+
+      const state = useAuthStore.getState()
+      expect(state.token).toBe('peer-tab-token-777')
+      expect(state.user?.username).toBe('synced_user')
+      expect(state.isAuthenticated).toBe(true)
+      // Did NOT call authApi.refresh
+      expect(authApi.refresh).not.toHaveBeenCalled()
+    })
+
+    it('handles incoming AUTH_LOGIN from another tab by syncing user into RAM', () => {
+      const subscriber = mocks.getSubscriber()
+      expect(subscriber).toBeDefined()
+
+      subscriber!({
+        type: 'AUTH_LOGIN',
+        payload: { token: 'logged-in-token-888', user: mockUser },
+      })
+
+      const state = useAuthStore.getState()
+      expect(state.token).toBe('logged-in-token-888')
+      expect(state.user).toEqual(mockUser)
+      expect(state.isAuthenticated).toBe(true)
+    })
+  })
+  describe('AUTH_USER_UPDATED broadcast (multi-tab profile sync)', () => {
+    it('updates the user in RAM without network call when authenticated', () => {
+      useAuthStore.setState({ token: 't', user: mockUser, isAuthenticated: true })
+      const subscriber = mocks.getSubscriber()
+
+      subscriber!({
+        type: 'AUTH_USER_UPDATED',
+        payload: { user: { ...mockUser, displayName: 'Tên Mới' } },
+      })
+
+      expect(useAuthStore.getState().user?.displayName).toBe('Tên Mới')
+      expect(useAuthStore.getState().token).toBe('t')
+      expect(authApi.refresh).not.toHaveBeenCalled()
+    })
+
+    it('ignores AUTH_USER_UPDATED when this tab is not authenticated', () => {
+      useAuthStore.setState({ token: null, user: null, isAuthenticated: false })
+      const subscriber = mocks.getSubscriber()
+
+      subscriber!({ type: 'AUTH_USER_UPDATED', payload: { user: mockUser } })
+
+      expect(useAuthStore.getState().user).toBeNull()
+    })
   })
 })

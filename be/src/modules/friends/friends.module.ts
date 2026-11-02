@@ -2,12 +2,13 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { UsersModule } from '../users/user.module.js';
 import { Friendship } from './entities/friendship.entity.js';
+import { Conversation } from '../conversations/entities/conversation.entity.js';
 import { FriendsService } from './friends.service.js';
 import { FriendsController } from './friends.controller.js';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([Friendship]),
+        TypeOrmModule.forFeature([Friendship, Conversation]),
         UsersModule,
     ],
     controllers: [FriendsController],

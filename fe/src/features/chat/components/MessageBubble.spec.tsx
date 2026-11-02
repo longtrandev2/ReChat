@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MessageBubble } from './MessageBubble'
 import type { Message } from '../types/message.types'
 
@@ -113,7 +114,7 @@ describe('MessageBubble Component Tests', () => {
     expect(handleReact).toHaveBeenCalledWith(reactedMsg, '❤️')
   })
 
-  it('renders (đã sửa) indicator when message isEdited is true', () => {
+  it('renders (đã chỉnh sửa) indicator when message isEdited is true', () => {
     const editedMsg: Message = {
       ...baseMessage,
       isEdited: true,
@@ -122,7 +123,7 @@ describe('MessageBubble Component Tests', () => {
 
     render(<MessageBubble message={editedMsg} isOutgoing={true} />)
 
-    expect(screen.getByText('(đã sửa)')).toBeInTheDocument()
+    expect(screen.getByText('(đã chỉnh sửa)')).toBeInTheDocument()
     expect(screen.getByText('Nội dung sau khi sửa')).toBeInTheDocument()
   })
 
@@ -278,6 +279,164 @@ describe('MessageBubble Component Tests', () => {
     render(<MessageBubble message={recalledMsg} isOutgoing={true} />)
 
     expect(screen.queryByTestId(`message-toolbar-${recalledMsg.id}`)).not.toBeInTheDocument()
+  })
+
+  it('renders pinned indicator badge when isPinned is true', () => {
+    const pinnedMsg: Message = {
+      ...baseMessage,
+      isPinned: true,
+    }
+
+    render(<MessageBubble message={pinnedMsg} isOutgoing={true} />)
+
+    expect(screen.getByTestId(`pinned-indicator-${pinnedMsg.id}`)).toBeInTheDocument()
+  })
+
+  it('renders pin option in dropdown and triggers onPin callback', async () => {
+    const user = userEvent.setup()
+    const handlePin = vi.fn()
+
+    render(
+      <MessageBubble
+        message={baseMessage}
+        isOutgoing={true}
+        onPin={handlePin}
+      />
+    )
+
+    const moreButton = screen.getByTitle('Tùy chọn khác')
+    await user.click(moreButton)
+
+    const pinMenuItem = await screen.findByTestId(`pin-message-${baseMessage.id}`)
+    expect(pinMenuItem).toBeInTheDocument()
+
+    await user.click(pinMenuItem)
+    expect(handlePin).toHaveBeenCalledWith(baseMessage)
+  })
+
+  it('renders unpin option in dropdown when message is pinned and triggers onUnpin callback', async () => {
+    const user = userEvent.setup()
+    const handleUnpin = vi.fn()
+    const pinnedMsg: Message = {
+      ...baseMessage,
+      isPinned: true,
+    }
+
+    render(
+      <MessageBubble
+        message={pinnedMsg}
+        isOutgoing={true}
+        onUnpin={handleUnpin}
+      />
+    )
+
+    const moreButton = screen.getByTitle('Tùy chọn khác')
+    await user.click(moreButton)
+
+    const unpinMenuItem = await screen.findByTestId(`unpin-message-${pinnedMsg.id}`)
+    expect(unpinMenuItem).toBeInTheDocument()
+
+    await user.click(unpinMenuItem)
+    expect(handleUnpin).toHaveBeenCalledWith(pinnedMsg)
+  })
+
+  it('renders SYSTEM message as a centered capsule badge without bubbles, ticks, or action menus', () => {
+    const systemMsg: Message = {
+      ...baseMessage,
+      id: 'sys-msg-1',
+      type: 'SYSTEM',
+      content: 'Alex đã thêm Bob vào nhóm.',
+    }
+
+    render(<MessageBubble message={systemMsg} isOutgoing={false} />)
+
+    const systemBadge = screen.getByTestId('system-message')
+    expect(systemBadge).toBeInTheDocument()
+    expect(systemBadge).toHaveTextContent('Alex đã thêm Bob vào nhóm.')
+    expect(screen.queryByTestId('message-bubble-sys-msg-1')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Đã đọc')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Đã gửi')).not.toBeInTheDocument()
+    expect(screen.queryByTitle('Tùy chọn khác')).not.toBeInTheDocument()
+  })
+
+  it('highlights matching search keyword in message content with mark tag', () => {
+    render(
+      <MessageBubble
+        message={baseMessage}
+        isOutgoing={true}
+        searchKeyword="chào"
+      />
+    )
+
+    const highlight = screen.getByTestId('search-highlight')
+    expect(highlight).toBeInTheDocument()
+    expect(highlight).toHaveTextContent('chào')
+    expect(highlight.tagName.toLowerCase()).toBe('mark')
+  })
+
+  it('renders normal text without mark tag when searchKeyword is empty or does not match', () => {
+    const { rerender } = render(
+      <MessageBubble
+        message={baseMessage}
+        isOutgoing={true}
+        searchKeyword=""
+      />
+    )
+    expect(screen.queryByTestId('search-highlight')).not.toBeInTheDocument()
+
+    rerender(
+      <MessageBubble
+        message={baseMessage}
+        isOutgoing={true}
+        searchKeyword="không khớp"
+      />
+    )
+    expect(screen.queryByTestId('search-highlight')).not.toBeInTheDocument()
+  })
+  describe('safe file links', () => {
+    it('does not open or fetch a javascript: file URL when downloading', async () => {
+      const user = userEvent.setup()
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      const evilMsg: Message = {
+        ...baseMessage,
+        id: 'msg-evil',
+        type: 'FILE',
+        fileUrl: 'javascript:alert(1)',
+        content: 'evil.txt',
+      }
+
+      render(<MessageBubble message={evilMsg} isOutgoing={false} />)
+      await user.click(screen.getByRole('button', { name: 'Tải tệp xuống' }))
+
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(openSpy).not.toHaveBeenCalled()
+      openSpy.mockRestore()
+      fetchSpy.mockRestore()
+    })
+
+    it('opens http(s) image URL in a new tab when no lightbox handler is given', async () => {
+      const user = userEvent.setup()
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+      const okMsg: Message = {
+        ...baseMessage,
+        id: 'msg-ok',
+        type: 'IMAGE',
+        fileUrl: 'https://example.com/ok.png',
+        content: '',
+      }
+
+      render(<MessageBubble message={okMsg} isOutgoing={false} />)
+      await user.click(screen.getByTestId('image-attachment-msg-ok'))
+      expect(openSpy).toHaveBeenCalledWith('https://example.com/ok.png', '_blank', 'noopener,noreferrer')
+
+      openSpy.mockClear()
+      const evilImg = { ...okMsg, id: 'msg-evil-img', fileUrl: 'data:text/html,<script>1</script>' }
+      render(<MessageBubble message={evilImg} isOutgoing={false} />)
+      await user.click(screen.getByTestId('image-attachment-msg-evil-img'))
+      expect(openSpy).not.toHaveBeenCalled()
+      openSpy.mockRestore()
+    })
   })
 })
 

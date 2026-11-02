@@ -1,15 +1,22 @@
 import { useEffect } from 'react'
+import { toast } from 'sonner'
 import { socketClient } from '@/services/socket.client'
 import { useSocketStore } from '@/stores/socket.store'
 import { useAuthStore } from '@/stores/auth.store'
+import { postAuthBroadcast } from '@/lib/auth-broadcast'
+import { playNotificationSound } from '@/lib/notification-sound'
 import { useConversationStore } from '@/features/conversations/stores/conversation.store'
 import { useMessagesStore } from '@/features/chat/stores/messages.store'
-import type { Conversation, LastMessage } from '@/features/conversations/types/conversation.types'
+import { useFriendsStore } from '@/features/friends/stores/friends.store'
+import type { FriendUser } from '@/features/friends/types/friends.types'
+import { conversationApi } from '@/features/conversations/services/conversation.api'
+import type { BlockStatus, Conversation, LastMessage } from '@/features/conversations/types/conversation.types'
 import type { Message } from '@/features/chat/types/message.types'
 
 interface UserStatusEventPayload {
   userId: string
-  status: 'ONLINE' | 'OFFLINE'
+  status?: 'ONLINE' | 'OFFLINE'
+  isOnline?: boolean
   lastSeen?: string
 }
 
@@ -30,6 +37,12 @@ interface UserTypingPayload {
   displayName: string
   avatarUrl?: string | null
   isTyping: boolean
+}
+
+interface UserBlockEventPayload {
+  blockerId: string
+  blockedId: string
+  conversationId: string | null
 }
 
 interface MessageReadPayload {
@@ -64,17 +77,70 @@ export function useSocketInit() {
       setStatus('connected')
     }
 
-    const handleDisconnect = () => {
+    const handleDisconnect = (reason?: string) => {
       setStatus('disconnected')
+      // Server chủ động ngắt (vd phiên bị đăng xuất từ xa - FR-27): xác minh phiên ngay thay vì chờ API call kế tiếp
+      if (reason === 'io server disconnect' && useAuthStore.getState().isAuthenticated) {
+        void useAuthStore
+          .getState()
+          .checkAuth()
+          .then(() => {
+            if (!useAuthStore.getState().isAuthenticated) {
+              toast.error('Phiên đăng nhập đã kết thúc trên thiết bị này')
+            }
+          })
+      }
     }
 
-    const handleConnectError = (error: Error) => {
+    let isRefreshingSocket = false
+
+    const handleConnectError = async (error: Error) => {
+      const isAuthError =
+        error.message?.includes('Unauthorized') ||
+        error.message?.includes('token') ||
+        error.message?.includes('Token') ||
+        error.message?.includes('jwt')
+
+      if (isAuthError) {
+        if (!isRefreshingSocket) {
+          isRefreshingSocket = true
+          try {
+            // Thử refresh token trong nền bằng HttpOnly cookie
+            await useAuthStore.getState().checkAuth()
+            const freshToken = useAuthStore.getState().token
+            if (freshToken) {
+              socketClient.updateToken(freshToken)
+              socket.connect()
+              return
+            }
+          } catch {
+            useAuthStore.getState().resetAuth()
+          } finally {
+            isRefreshingSocket = false
+          }
+        }
+        return
+      }
+
       setStatus('error', error.message || 'Lỗi kết nối máy chủ thời gian thực')
     }
 
+    const handleForceLogout = (payload?: { reason?: string }) => {
+      console.warn('Nhận lệnh cưỡng chế đăng xuất từ máy chủ:', payload?.reason)
+      socketClient.disconnect()
+      reset()
+      useAuthStore.getState().resetAuth()
+      postAuthBroadcast({ type: 'AUTH_LOGOUT' })
+      if (typeof window !== 'undefined' && window.location && window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
+    }
+
     const handleUserStatus = (payload: UserStatusEventPayload) => {
-      if (payload && payload.userId && payload.status) {
-        updateUserStatus(payload.userId, payload.status, payload.lastSeen)
+      if (payload && payload.userId) {
+        const status: 'ONLINE' | 'OFFLINE' =
+          payload.status || (payload.isOnline ? 'ONLINE' : 'OFFLINE')
+        updateUserStatus(payload.userId, status, payload.lastSeen)
       }
     }
 
@@ -113,6 +179,26 @@ export function useSocketInit() {
         },
         isSelf
       )
+
+      // 3. Phát âm thanh thông báo nếu hội thoại không bị tắt tiếng (FR-32, BR-31)
+      if (!isSelf && typeof window !== 'undefined') {
+        const conversation = useConversationStore
+          .getState()
+          .conversations.find((c) => c.id === payload.conversationId)
+
+        let isMuted = conversation?.isMuted
+        if (typeof isMuted !== 'boolean') {
+          try {
+            isMuted = localStorage.getItem(`rechat_muted_${payload.conversationId}`) === 'true'
+          } catch {
+            isMuted = false
+          }
+        }
+
+        if (!isMuted) {
+          playNotificationSound()
+        }
+      }
     }
 
     const handleUserTyping = (payload: UserTypingPayload) => {
@@ -136,10 +222,91 @@ export function useSocketInit() {
         .setLastReadMessageId(payload.conversationId, payload.lastReadMessageId)
     }
 
+    const handleGroupMembershipChanged = (payload: { conversationId: string; action: string }) => {
+      if (!payload || !payload.conversationId) return
+      if (payload.action === 'REMOVED' || payload.action === 'LEFT') {
+        useConversationStore.getState().removeConversation(payload.conversationId)
+      } else if (payload.action === 'ADDED') {
+        conversationApi
+          .getConversationById(payload.conversationId)
+          .then((conv) => {
+            if (conv) {
+              useConversationStore.getState().addOrUpdateConversation(conv)
+            }
+          })
+          .catch(() => {})
+      }
+    }
+
+    const handleConversationCustomized = (payload: {
+      conversationId: string
+      changes?: { name?: string; avatarUrl?: string; quickEmoji?: string }
+      name?: string
+      avatarUrl?: string
+      quickEmoji?: string
+    }) => {
+      if (!payload || !payload.conversationId) return
+      const changes = payload.changes || {}
+      const name = payload.name ?? changes.name
+      const avatarUrl = payload.avatarUrl ?? changes.avatarUrl
+      const quickEmoji = payload.quickEmoji ?? changes.quickEmoji
+      useConversationStore.getState().updateConversation(payload.conversationId, {
+        ...(name !== undefined ? { name } : {}),
+        ...(avatarUrl !== undefined ? { avatarUrl } : {}),
+        ...(quickEmoji !== undefined ? { quickEmoji } : {}),
+      })
+    }
+
+    const handleFriendAccepted = (payload: { friend?: FriendUser }) => {
+      if (payload?.friend) {
+        useFriendsStore.getState().handleFriendAdded(payload.friend)
+      } else {
+        useFriendsStore.getState().fetchFriends()
+      }
+      useFriendsStore.getState().fetchReceivedRequestsCount()
+    }
+
+    const handleFriendRemoved = (payload: { friendId: string }) => {
+      if (payload?.friendId) {
+        useFriendsStore.getState().handleFriendRemoved(payload.friendId)
+      }
+    }
+
+    // Chặn / bỏ chặn realtime: cả hai phía cùng khóa/mở khóa composer (BR-38)
+    const applyBlockEvent = (payload: UserBlockEventPayload, blocked: boolean) => {
+      const myId = useAuthStore.getState().user?.id
+      if (!payload || !myId) return
+      const iAmBlocker = payload.blockerId === myId
+      const otherId = iAmBlocker ? payload.blockedId : payload.blockerId
+      const status: BlockStatus = !blocked ? 'NONE' : iAmBlocker ? 'BLOCKED_BY_ME' : 'BLOCKED_ME'
+
+      const store = useConversationStore.getState()
+      const target = payload.conversationId
+        ? store.conversations.find((c) => c.id === payload.conversationId)
+        : store.conversations.find(
+            (c) =>
+              c.type === 'DIRECT' &&
+              (c.partnerId === otherId || c.members?.some((m) => m.user?.id === otherId))
+          )
+      if (!target) return
+      store.updateConversation(target.id, {
+        blockStatus: status,
+        ...(blocked ? { isOnline: false } : {}),
+      })
+    }
+    const handleUserBlocked = (payload: UserBlockEventPayload) => applyBlockEvent(payload, true)
+    const handleUserUnblocked = (payload: UserBlockEventPayload) => applyBlockEvent(payload, false)
+
+    const handleFriendRequestsChanged = () => {
+      useFriendsStore.getState().fetchReceivedRequestsCount()
+    }
+
     // Đăng ký listeners
     socket.on('connect', handleConnect)
     socket.on('disconnect', handleDisconnect)
     socket.on('connect_error', handleConnectError)
+    socket.on('FORCE_LOGOUT', handleForceLogout)
+    socket.on('auth_error', handleForceLogout)
     socket.on('user_status', handleUserStatus)
     socket.on('userPresence', handleUserStatus)
     socket.on('conversationCreated', handleConversationCreated)
@@ -147,6 +314,15 @@ export function useSocketInit() {
     socket.on('newMessage', handleNewMessage)
     socket.on('userTyping', handleUserTyping)
     socket.on('messageRead', handleMessageRead)
+    socket.on('groupMembershipChanged', handleGroupMembershipChanged)
+    socket.on('conversationCustomized', handleConversationCustomized)
+    socket.on('friendRequestAccepted', handleFriendAccepted)
+    socket.on('friendRemoved', handleFriendRemoved)
+    socket.on('userBlocked', handleUserBlocked)
+    socket.on('userUnblocked', handleUserUnblocked)
+    socket.on('friendRequestReceived', handleFriendRequestsChanged)
+    socket.on('friendRequestCancelled', handleFriendRequestsChanged)
+    socket.on('friendRequestRejected', handleFriendRequestsChanged)
 
     // Cập nhật trạng thái nếu socket đã kết nối trước đó
     if (socket.connected) {
@@ -158,6 +334,8 @@ export function useSocketInit() {
       socket.off('connect', handleConnect)
       socket.off('disconnect', handleDisconnect)
       socket.off('connect_error', handleConnectError)
+      socket.off('FORCE_LOGOUT', handleForceLogout)
+      socket.off('auth_error', handleForceLogout)
       socket.off('user_status', handleUserStatus)
       socket.off('userPresence', handleUserStatus)
       socket.off('conversationCreated', handleConversationCreated)
@@ -165,6 +343,15 @@ export function useSocketInit() {
       socket.off('newMessage', handleNewMessage)
       socket.off('userTyping', handleUserTyping)
       socket.off('messageRead', handleMessageRead)
+      socket.off('groupMembershipChanged', handleGroupMembershipChanged)
+      socket.off('conversationCustomized', handleConversationCustomized)
+      socket.off('friendRequestAccepted', handleFriendAccepted)
+      socket.off('friendRemoved', handleFriendRemoved)
+      socket.off('userBlocked', handleUserBlocked)
+      socket.off('userUnblocked', handleUserUnblocked)
+      socket.off('friendRequestReceived', handleFriendRequestsChanged)
+      socket.off('friendRequestCancelled', handleFriendRequestsChanged)
+      socket.off('friendRequestRejected', handleFriendRequestsChanged)
     }
   }, [token, isAuthenticated, setStatus, updateUserStatus, reset])
 }
@@ -184,5 +371,6 @@ export function useSocket() {
     isConnected,
     onlineUsers,
     isUserOnline,
+    socket: socketClient.getSocket(),
   }
 }

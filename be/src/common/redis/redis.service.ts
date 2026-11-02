@@ -80,6 +80,18 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
         return this.client.expire(key, seconds);
     }
 
+    /**
+     * Tăng bộ đếm nguyên tử (INCR). Đặt TTL ở lần tăng đầu tiên nếu được truyền.
+     * Dùng cho bộ đếm lượt thử OTP: request song song không thể đọc cùng một giá trị cũ.
+     */
+    async incr(key: string, ttlSecondsOnCreate?: number): Promise<number> {
+        const value = await this.client.incr(key);
+        if (value === 1 && ttlSecondsOnCreate && ttlSecondsOnCreate > 0) {
+            await this.client.expire(key, ttlSecondsOnCreate);
+        }
+        return value;
+    }
+
     // Hash operations (Session Management)
     async hset(key: string, field: string, value: string): Promise<number>;
     async hset(key: string, object: Record<string, any>): Promise<number>;

@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { Toaster } from 'sonner'
 import { useAuthStore } from '@/stores/auth.store'
 import { ProtectedRoute } from '@/components/common/ProtectedRoute'
+import { PublicRoute } from '@/components/common/PublicRoute'
 import { LoginPage } from '@/features/auth/pages/LoginPage'
 import { RegisterPage } from '@/features/auth/pages/RegisterPage'
 import { VerifyOtpPage } from '@/features/auth/pages/VerifyOtpPage'
@@ -13,14 +14,16 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { ChatLayout } from '@/features/conversations/components/ChatLayout'
 import { WelcomeEmptyCanvas } from '@/components/layout/WelcomeEmptyCanvas'
 import { ActiveChatCanvas } from '@/features/chat/components/ActiveChatCanvas'
+import { FriendsPage } from '@/features/friends/pages/FriendsPage'
+import { SettingsPage } from '@/features/settings/pages/SettingsPage'
 
 export function App() {
-  const { initializeAuth } = useAuthStore()
+  const { checkAuth } = useAuthStore()
 
   useEffect(() => {
-    // Tự động kiểm tra phiên đăng nhập và khôi phục UserProfile từ token
-    initializeAuth()
-  }, [initializeAuth])
+    // Tự động kiểm tra HttpOnly cookie và khôi phục Access Token In-Memory
+    checkAuth()
+  }, [checkAuth])
 
   return (
     <BrowserRouter>
@@ -30,12 +33,12 @@ export function App() {
       {/* Main Application Routes */}
       <Routes>
         {/* Public Authentication Routes */}
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/register" element={<RegisterPage />} />
-        <Route path="/verify-otp" element={<VerifyOtpPage />} />
-        <Route path="/verify-2fa" element={<Verify2FAPage />} />
-        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-        <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
+        <Route path="/register" element={<PublicRoute><RegisterPage /></PublicRoute>} />
+        <Route path="/verify-otp" element={<PublicRoute><VerifyOtpPage /></PublicRoute>} />
+        <Route path="/verify-2fa" element={<PublicRoute><Verify2FAPage /></PublicRoute>} />
+        <Route path="/forgot-password" element={<PublicRoute><ForgotPasswordPage /></PublicRoute>} />
+        <Route path="/reset-password" element={<PublicRoute><ResetPasswordPage /></PublicRoute>} />
 
         {/* Protected Application Routes with Telegram AppLayout */}
         <Route
@@ -49,22 +52,8 @@ export function App() {
             <Route index element={<WelcomeEmptyCanvas />} />
             <Route path=":conversationId" element={<ActiveChatCanvas />} />
           </Route>
-          <Route
-            path="/friends"
-            element={
-              <div className="flex h-full w-full items-center justify-center p-6 text-ink-secondary">
-                <p className="text-lg font-medium">Danh sách Bạn bè (Friends)</p>
-              </div>
-            }
-          />
-          <Route
-            path="/settings"
-            element={
-              <div className="flex h-full w-full items-center justify-center p-6 text-ink-secondary">
-                <p className="text-lg font-medium">Cài đặt Tài khoản (Settings)</p>
-              </div>
-            }
-          />
+          <Route path="/friends" element={<FriendsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
         </Route>
 
         {/* Default Fallback Redirect */}

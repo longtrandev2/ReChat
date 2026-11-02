@@ -8,6 +8,7 @@ import { Eye, EyeOff, Loader2 } from 'lucide-react'
 import { AuthLayout } from '@/components/common/AuthLayout'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { mfaTokenSession } from '../mfa-token-session'
 import { loginSchema, type LoginFormData } from '@/features/auth/schemas/auth.schema'
 import { authApi } from '@/features/auth/services/auth.api'
 import { useAuthStore } from '@/stores/auth.store'
@@ -36,7 +37,8 @@ export function LoginPage() {
       // Trường hợp 1: Tài khoản kích hoạt 2FA
       if ('requires2FA' in res && res.requires2FA) {
         toast.info('Tài khoản yêu cầu mã xác thực 2 lớp (2FA)')
-        navigate(`/verify-2fa?mfaToken=${encodeURIComponent(res.mfaToken)}`)
+        mfaTokenSession.save(res.mfaToken)
+        navigate('/verify-2fa', { state: { mfaToken: res.mfaToken } })
         return
       }
 

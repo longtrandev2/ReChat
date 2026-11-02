@@ -8,6 +8,19 @@ import {
     REFRESH_TOKEN_GRACE_PERIOD_SECONDS,
     REFRESH_TOKEN_TTL_SECONDS,
 } from './constants/auth-cookie.constants.js';
+import { getJwtSecret } from '../../common/config/jwt-secret.js';
+import {
+    deviceMinIssuedAtKey,
+    isIssuedBeforeMarker,
+    userMinIssuedAtKey,
+} from '../../common/auth/access-token-revocation.js';
+
+/** deviceId -> familyId: cho phép thu hồi đúng chuỗi refresh token của một thiết bị */
+const deviceFamilyKey = (userId: string, deviceId: string) => `auth:device_family:${userId}:${deviceId}`;
+/** Tập deviceId từng được cấp refresh token (độc lập với danh sách session hiển thị trên UI) */
+const userTokenDevicesKey = (userId: string) => `auth:user_token_devices:${userId}`;
+/** deviceId dùng chung khi không xác định được thiết bị: không được hủy chéo family của nhau */
+const SHARED_FALLBACK_DEVICE_ID = 'default-device';
 
 export interface TokenUserPayload {
     id: string;
@@ -87,13 +100,15 @@ export class TokenManagerService {
         const expiresAt = now + REFRESH_TOKEN_TTL_SECONDS * 1000;
 
         // 1. Ký Access Token ngắn hạn (15 phút) kèm JWT ID (jti) phục vụ blacklist khi logout
-        const jwtSecret = this.configService.get<string>('JWT_SECRET') || 'secretKeyChatApp123';
+        const jwtSecret = getJwtSecret(this.configService);
         const accessToken = await this.jwtService.signAsync(
             {
                 sub: user.id,
                 username: user.username,
                 role: user.role,
                 jti,
+                did: deviceId, // Device ID: phục vụ đăng xuất từ xa theo từng thiết bị
+                iatMs: now, // Thời điểm cấp theo ms: so sánh chính xác với mốc thu hồi (iat chỉ có độ phân giải giây)
             },
             {
                 secret: jwtSecret,
@@ -125,6 +140,7 @@ export class TokenManagerService {
         await this.redisService.sadd(familyKey, tokenId);
         await this.redisService.expire(familyKey, REFRESH_TOKEN_TTL_SECONDS);
         await this.redisService.sadd(userSessionsKey, deviceId);
+        await this.bindFamilyToDevice(user.id, deviceId, familyId, Boolean(existingFamilyId));
 
         return {
             accessToken,
@@ -191,9 +207,24 @@ export class TokenManagerService {
         if (graceData) {
             try {
                 const cachedPair = JSON.parse(graceData) as GeneratedTokenPair;
+                // Khóa ràng buộc thiết bị trong thời gian ân hạn: Ngăn chặn thiết bị khác lợi dụng token vừa xoay
+                if (
+                    deviceId &&
+                    cachedPair.deviceId &&
+                    cachedPair.deviceId !== 'default-device' &&
+                    deviceId !== cachedPair.deviceId
+                ) {
+                    this.logger.warn(
+                        `[SECURITY WARNING] Grace period device mismatch: ${deviceId} vs ${cachedPair.deviceId} (User: ${cachedPair.userId})`,
+                    );
+                    throw new UnauthorizedException('Phiên đăng nhập không thuộc thiết bị này');
+                }
                 this.logger.debug(`[GracePeriod] Trả về token mới từ ân hạn cho tab song song: ${tokenId}`);
                 return cachedPair;
             } catch (e) {
+                if (e instanceof UnauthorizedException) {
+                    throw e;
+                }
                 this.logger.warn(`Lỗi parse grace data cho token ${tokenId}: ${e}`);
             }
         }
@@ -232,6 +263,9 @@ export class TokenManagerService {
             throw new UnauthorizedException('Phiên đăng nhập không thuộc thiết bị này');
         }
 
+        // 3b. Family đã bị thu hồi (reset/đổi mật khẩu, đăng xuất từ xa) hoặc bị thay thế bởi lần đăng nhập mới
+        await this.assertFamilyStillActive(record);
+
         // 4. Tạo cặp token mới kế thừa Token Family
         const effectiveDeviceId = deviceId || record.deviceId;
         const newPair = await this.generateTokenPair(
@@ -243,6 +277,9 @@ export class TokenManagerService {
             effectiveDeviceId,
             record.familyId,
         );
+
+        // 4b. Kiểm tra lại sau khi ghi token mới: chặn race "refresh song song với thu hồi" làm sống lại family
+        await this.assertFamilyStillActive(record);
 
         // 4. Vô hiệu hóa token cũ:
         // - Xóa key active refresh token
@@ -271,6 +308,102 @@ export class TokenManagerService {
     }
 
     /**
+     * Gắn Token Family với thiết bị. Khi thiết bị đăng nhập lại (family mới), family cũ của chính thiết bị đó
+     * bị hủy để không còn refresh token "mồ côi" sống tiếp 30 ngày ngoài tầm kiểm soát.
+     */
+    private async bindFamilyToDevice(
+        userId: string,
+        deviceId: string,
+        familyId: string,
+        isRotation: boolean,
+    ): Promise<void> {
+        const key = deviceFamilyKey(userId, deviceId);
+        const boundFamilyId = await this.redisService.get(key);
+
+        if (isRotation) {
+            // Xoay vòng không được ghi đè family khác (vd: thiết bị vừa đăng nhập lại song song) -> family cũ
+            // sẽ bị assertFamilyStillActive() từ chối; chỉ gắn khi chưa có (token cấp trước khi có chỉ mục) hoặc trùng
+            if (boundFamilyId && boundFamilyId !== familyId) {
+                return;
+            }
+        } else if (deviceId !== SHARED_FALLBACK_DEVICE_ID && boundFamilyId && boundFamilyId !== familyId) {
+            await this.revokeFamily(boundFamilyId);
+        }
+
+        await this.redisService.set(key, familyId, REFRESH_TOKEN_TTL_SECONDS);
+        await this.redisService.sadd(userTokenDevicesKey(userId), deviceId);
+        await this.redisService.expire(userTokenDevicesKey(userId), REFRESH_TOKEN_TTL_SECONDS);
+    }
+
+    /**
+     * Đăng xuất hoàn toàn một thiết bị (BR-27):
+     * - Hủy Token Family của thiết bị => không thể refresh nữa
+     * - Ghi mốc device_min_issued_at => Access Token (HTTP & WebSocket) đang dùng bị từ chối ngay
+     */
+    async revokeDevice(userId: string, deviceId: string): Promise<void> {
+        const key = deviceFamilyKey(userId, deviceId);
+        const familyId = await this.redisService.get(key);
+        if (familyId) {
+            await this.revokeFamily(familyId);
+        }
+
+        await this.redisService.del(key);
+        await this.redisService.srem(userTokenDevicesKey(userId), deviceId);
+        // Mốc theo ms, sống bằng Refresh Token (30 ngày) vì /auth/refresh cũng đối chiếu mốc này
+        await this.redisService.set(
+            deviceMinIssuedAtKey(userId, deviceId),
+            String(Date.now()),
+            REFRESH_TOKEN_TTL_SECONDS,
+        );
+    }
+
+    /**
+     * Đăng xuất mọi thiết bị của user, tùy chọn giữ lại thiết bị hiện tại (dùng khi đổi / đặt lại mật khẩu).
+     * @returns danh sách deviceId đã bị thu hồi
+     */
+    async revokeAllDevices(userId: string, exceptDeviceId?: string): Promise<string[]> {
+        // Gộp cả tập thiết bị cũ (auth:user_sessions) để không bỏ sót token cấp trước khi có chỉ mục thiết bị
+        const [indexedDevices, legacyDevices] = await Promise.all([
+            this.redisService.smembers(userTokenDevicesKey(userId)),
+            this.redisService.smembers(`auth:user_sessions:${userId}`),
+        ]);
+        const targets = [...new Set([...indexedDevices, ...legacyDevices])].filter((id) => id !== exceptDeviceId);
+
+        for (const deviceId of targets) {
+            await this.revokeDevice(userId, deviceId);
+        }
+
+        return targets;
+    }
+
+    /**
+     * Từ chối refresh nếu family đã bị thu hồi gián tiếp:
+     * - Token được cấp trước mốc thu hồi của user (reset mật khẩu) hoặc của thiết bị (đăng xuất / đổi mật khẩu)
+     * - Thiết bị đã gắn sang family khác (đăng nhập lại) => family này đã bị thay thế
+     * Khi vi phạm: hủy toàn bộ family (kể cả token vừa cấp trong race) và trả 401.
+     */
+    private async assertFamilyStillActive(record: RefreshTokenMetadata): Promise<void> {
+        const [userMarker, deviceMarker, boundFamilyId] = await Promise.all([
+            this.redisService.get(userMinIssuedAtKey(record.userId)),
+            this.redisService.get(deviceMinIssuedAtKey(record.userId, record.deviceId)),
+            this.redisService.get(deviceFamilyKey(record.userId, record.deviceId)),
+        ]);
+
+        const isRevokedByMarker =
+            isIssuedBeforeMarker(record.createdAt, userMarker) || isIssuedBeforeMarker(record.createdAt, deviceMarker);
+        const isSuperseded =
+            record.deviceId !== SHARED_FALLBACK_DEVICE_ID && Boolean(boundFamilyId) && boundFamilyId !== record.familyId;
+
+        if (isRevokedByMarker || isSuperseded) {
+            this.logger.warn(
+                `[Revocation] Từ chối refresh family ${record.familyId} của thiết bị ${record.deviceId} (User: ${record.userId})`,
+            );
+            await this.revokeFamily(record.familyId);
+            throw new UnauthorizedException('Phiên đăng nhập đã bị thu hồi. Vui lòng đăng nhập lại.');
+        }
+    }
+
+    /**
      * Hủy diệt toàn bộ Token Family (Dùng khi phát hiện hành vi Token Theft / Hacker tái sử dụng token lậu)
      */
     async revokeFamily(familyId: string): Promise<void> {
@@ -280,6 +413,8 @@ export class TokenManagerService {
         if (tokenIds.length > 0) {
             const keysToDelete = tokenIds.map((id) => `auth:refresh:${id}`);
             await this.redisService.del(...keysToDelete);
+            // Xóa luôn cache grace (cặp token mới đã phát trong thời gian ân hạn) để không "hồi sinh" family đã bị thu hồi
+            await this.redisService.del(...tokenIds.map((id) => `auth:grace:${id}`));
         }
 
         await this.redisService.del(familyKey);

@@ -27,6 +27,7 @@ describe('AuthController', () => {
             forgotPassword: vi.fn(),
             resetPassword: vi.fn(),
             refreshTokens: vi.fn(),
+            changePassword: vi.fn(),
             logout: vi.fn().mockResolvedValue({ message: 'Đăng xuất thành công' }),
         };
 
@@ -90,7 +91,39 @@ describe('AuthController', () => {
 
             const result = await controller.verifyEmail(dto);
             expect(result).toEqual(mockResponse);
-            expect(mockAuthService.verifyEmail).toHaveBeenCalledWith(dto);
+            expect(mockAuthService.verifyEmail).toHaveBeenCalledWith(dto, undefined, undefined, undefined);
+        });
+
+        it('should set the refresh cookie and strip refreshToken from the body', async () => {
+            const dto = { email: 'alice@example.com', otp: '123456' };
+            mockAuthService.verifyEmail.mockResolvedValue({
+                message: 'ok',
+                accessToken: 'jwt',
+                refreshToken: 'rt.secret',
+                user: { id: 'user-1' },
+            });
+            const mockReq = { ip: '10.0.0.1', headers: { 'user-agent': 'Chrome' } } as any;
+            const mockRes = { cookie: vi.fn() } as any;
+
+            const result = await controller.verifyEmail(dto, mockReq, mockRes, 'dev-web');
+
+            expect(mockAuthService.verifyEmail).toHaveBeenCalledWith(dto, '10.0.0.1', 'Chrome', 'dev-web');
+            expect(mockRes.cookie).toHaveBeenCalledWith(REFRESH_TOKEN_COOKIE_NAME, 'rt.secret', expect.any(Object));
+            expect(result).not.toHaveProperty('refreshToken');
+        });
+    });
+
+    describe('changePassword', () => {
+        it('should delegate to authService.changePassword with the current device id', async () => {
+            const user = { id: 'user-1' } as User;
+            const dto = { currentPassword: 'Old@1234', newPassword: 'New@12345', confirmPassword: 'New@12345' };
+            const mockResponse = { message: 'Đổi mật khẩu thành công', revokedSessions: 1 };
+            mockAuthService.changePassword.mockResolvedValue(mockResponse);
+
+            const result = await controller.changePassword(user, dto, 'dev-1');
+
+            expect(result).toEqual(mockResponse);
+            expect(mockAuthService.changePassword).toHaveBeenCalledWith(user, dto, 'dev-1');
         });
     });
 
@@ -347,7 +380,7 @@ describe('AuthController', () => {
 
             const result = await controller.refresh(mockReq, mockRes, 'dev-1');
 
-            expect(mockAuthService.refreshTokens).toHaveBeenCalledWith('old-token.secret', 'dev-1');
+            expect(mockAuthService.refreshTokens).toHaveBeenCalledWith('old-token.secret', 'dev-1', undefined, undefined);
             expect(mockRes.cookie).toHaveBeenCalledWith(
                 REFRESH_TOKEN_COOKIE_NAME,
                 'new-token.new-secret',

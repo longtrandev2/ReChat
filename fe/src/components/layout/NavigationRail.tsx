@@ -7,8 +7,8 @@ import { toast } from 'sonner'
 import { Avatar, AvatarFallback, AvatarImage, PresenceDot } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { useAuthStore } from '@/stores/auth.store'
+import { useFriendsStore } from '@/features/friends/stores/friends.store'
 import { useSocket } from '@/hooks/useSocket'
-import { authApi } from '@/features/auth/services/auth.api'
 import { cn } from '@/lib/utils'
 
 interface NavItem {
@@ -29,6 +29,7 @@ export function NavigationRail() {
   const navigate = useNavigate()
   const { user, logout: logoutStore } = useAuthStore()
   const { isConnected } = useSocket()
+  const receivedRequestsCount = useFriendsStore((s) => s.receivedRequestsCount)
 
   // State quản lý theme sáng / tối đồng bộ với AuthLayout
   const [isDark, setIsDark] = useState(() => {
@@ -61,11 +62,10 @@ export function NavigationRail() {
   const handleLogout = async () => {
     try {
       setIsLoggingOut(true)
-      await authApi.logout()
+      await logoutStore()
     } catch {
       // Vẫn tiếp tục dọn dẹp state ở client dù API logout gặp sự cố
     } finally {
-      logoutStore()
       setIsLogoutDialogOpen(false)
       setIsLoggingOut(false)
       toast.success('Đã đăng xuất tài khoản')
@@ -76,7 +76,7 @@ export function NavigationRail() {
   return (
     <aside
       aria-label="Thanh điều hướng chính"
-      className="w-16 h-full flex flex-col items-center justify-between py-4 bg-surface dark:bg-surface-dark border-r border-border dark:border-border-dark select-none shrink-0 transition-colors duration-200"
+      className="w-full h-14 md:w-16 md:h-full flex flex-row md:flex-col items-center justify-between px-3 md:px-0 py-0 md:py-4 bg-surface dark:bg-surface-dark border-t md:border-t-0 md:border-r border-border dark:border-border-dark select-none shrink-0 transition-colors duration-200"
     >
       {/* 1. Header: Avatar người dùng hiện tại */}
       <div className="relative group">
@@ -97,7 +97,7 @@ export function NavigationRail() {
       </div>
 
       {/* 2. Menu Tabs: Đoạn chat / Bạn bè / Cài đặt */}
-      <nav className="flex flex-col items-center gap-3 w-full px-2" aria-label="Menu chức năng">
+      <nav className="flex flex-row md:flex-col items-center gap-3 md:w-full md:px-2" aria-label="Menu chức năng">
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon
           const isActive =
@@ -122,7 +122,7 @@ export function NavigationRail() {
               {/* Modern active / hover indicator pill */}
               <span
                 className={cn(
-                  'absolute -left-2 top-1/2 -translate-y-1/2 w-1 rounded-r-full bg-brand transition-all duration-200 pointer-events-none',
+                  'hidden md:block absolute -left-2 top-1/2 -translate-y-1/2 w-1 rounded-r-full bg-brand transition-all duration-200 pointer-events-none',
                   isActive
                     ? 'h-6 opacity-100'
                     : 'h-0 opacity-0 group-hover:h-3 group-hover:opacity-60'
@@ -130,13 +130,21 @@ export function NavigationRail() {
                 aria-hidden="true"
               />
               <Icon className="w-5 h-5 transition-transform duration-150 group-hover:scale-110" />
+              {item.id === 'friends' && receivedRequestsCount > 0 && (
+                <span
+                  className="absolute -top-1 -right-1 min-w-4 h-4 px-1 bg-coral text-white rounded-full text-[10px] font-bold flex items-center justify-center shadow-xs animate-in zoom-in-75 duration-150 pointer-events-none"
+                  data-testid="friends-nav-badge"
+                >
+                  {receivedRequestsCount > 99 ? '99+' : receivedRequestsCount}
+                </span>
+              )}
             </Link>
           )
         })}
       </nav>
 
       {/* 3. Footer Tools: Theme Toggle & Logout */}
-      <div className="flex flex-col items-center gap-2 w-full px-2">
+      <div className="flex flex-row md:flex-col items-center gap-2 md:w-full md:px-2">
         {/* Nút chuyển Dark/Light Mode */}
         <button
           type="button"

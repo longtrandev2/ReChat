@@ -106,6 +106,7 @@ describe('UsersService', () => {
     describe('searchUsers', () => {
         it('should search users excluding current user and return without passwords', async () => {
             const mockQb = {
+                select: vi.fn().mockReturnThis(),
                 where: vi.fn().mockReturnThis(),
                 andWhere: vi.fn().mockReturnThis(),
                 orderBy: vi.fn().mockReturnThis(),
@@ -116,6 +117,10 @@ describe('UsersService', () => {
                         username: 'bob',
                         displayName: 'Bob Trần',
                         password: 'hash',
+                        email: 'bob@example.com',
+                        isEmailVerified: true,
+                        twoFactorEnabled: true,
+                        updatedAt: new Date(),
                         avatarUrl: 'avatar.png',
                     },
                 ]),
@@ -128,6 +133,10 @@ describe('UsersService', () => {
             expect(results).toHaveLength(1);
             expect(results[0].username).toBe('bob');
             expect((results[0] as any).password).toBeUndefined();
+            // PII không được lộ ra (chỉ trường công khai)
+            expect(Object.keys(results[0]).sort()).toEqual(
+                ['avatarUrl', 'createdAt', 'displayName', 'id', 'isOnline', 'lastSeen', 'username'],
+            );
             expect(mockQb.where).toHaveBeenCalledWith('user.id != :currentUserId', {
                 currentUserId: 'uuid-1',
             });
@@ -142,14 +151,28 @@ describe('UsersService', () => {
                 username: 'charlie',
                 displayName: 'Charlie',
                 password: 'hash',
+                email: 'charlie@example.com',
+                isEmailVerified: true,
+                twoFactorEnabled: true,
+                updatedAt: new Date(),
                 isOnline: true,
                 lastSeen: null,
             });
 
             const result = await service.getPublicProfile('uuid-target');
+            expect(Object.keys(result).sort()).toEqual(
+                ['avatarUrl', 'createdAt', 'displayName', 'id', 'isOnline', 'lastSeen', 'username'],
+            );
+            expect((result as any).email).toBeUndefined();
+            expect((result as any).twoFactorEnabled).toBeUndefined();
             expect(result.id).toBe('uuid-target');
             expect(result.username).toBe('charlie');
             expect((result as any).password).toBeUndefined();
+        });
+
+        it('should throw NotFoundException when user does not exist', async () => {
+            mockUserRepository.findOne.mockResolvedValue(null);
+            await expect(service.getPublicProfile('missing')).rejects.toThrow(NotFoundException);
         });
     });
 });

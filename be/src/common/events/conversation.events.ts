@@ -32,7 +32,7 @@ export class InboxUpdatedEvent {
 export class GroupMemberEvent {
     constructor(
         public readonly conversationId: string,
-        public readonly action: 'ADDED' | 'REMOVED' | 'LEFT',
+        public readonly action: 'ADDED' | 'REMOVED' | 'LEFT' | 'TRANSFER_OWNER' | 'ROLE_UPDATED',
         public readonly actor: {
             id: string;
             displayName: string;
@@ -94,6 +94,22 @@ export class MessageReactionEvent {
         },
         public readonly emoji: string,
         public readonly action: 'ADDED' | 'REMOVED' | 'CHANGED',
+    ) { }
+}
+
+export class ConversationCustomizedEvent {
+    constructor(
+        public readonly conversationId: string,
+        public readonly customizedBy: {
+            id: string;
+            displayName: string;
+        },
+        public readonly changes: {
+            name?: string;
+            avatarUrl?: string;
+            quickEmoji?: string;
+        },
+        public readonly memberIds?: string[],
     ) { }
 }
 

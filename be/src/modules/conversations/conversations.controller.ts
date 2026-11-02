@@ -35,7 +35,11 @@ import {
     GetMediaQueryDto,
     EditMessageDto,
     ReactMessageDto,
+    UpdateQuickEmojiDto,
+    ToggleMuteDto,
+    TogglePinDto,
 } from './dto/index.js';
+import { ConversationActionsService } from './conversation-actions.service.js';
 
 @ApiTags('conversations')
 @ApiBearerAuth('JWT-auth')
@@ -43,7 +47,10 @@ import {
 @Controller('conversations')
 @UseGuards(AuthGuard('jwt'))
 export class ConversationsController {
-    constructor(private readonly conversationsService: ConversationsService) { }
+    constructor(
+        private readonly conversationsService: ConversationsService,
+        private readonly conversationActionsService: ConversationActionsService,
+    ) { }
 
     /**
      * Lấy danh sách Inbox kèm lastMessage & unreadCount (FR-09, BR-10)
@@ -53,7 +60,7 @@ export class ConversationsController {
     @ApiOperation({ summary: 'Lấy danh sách Inbox kèm tin nhắn gần nhất và số tin chưa đọc (FR-09, BR-10)' })
     @ApiResponse({
         status: 200,
-        description: 'Lấy danh sách Inbox thành công (được sắp xếp theo tin nhắn mới nhất)',
+        description: 'Lấy danh sách Inbox thành công (cuộc trò chuyện đã ghim lên đầu theo pinnedAt DESC, sau đó theo tin nhắn mới nhất; ẩn cuộc trò chuyện đã xóa đoạn chat đến khi có tin mới - FR-48)',
         schema: {
             example: [
                 {
@@ -62,6 +69,9 @@ export class ConversationsController {
                     name: 'Nguyễn Văn A',
                     avatarUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=nva',
                     unreadCount: 2,
+                    isPinned: true,
+                    pinnedAt: '2026-10-14T10:05:00.000Z',
+                    blockStatus: 'NONE', // DIRECT: 'NONE' | 'BLOCKED_BY_ME' | 'BLOCKED_ME' (FR-29, BR-38)
                     lastMessage: {
                         id: '7b89f0a2-b91c-4299-8089-a2e6b216f9f0',
                         content: 'Chào bạn, hôm nay có họp không?',
@@ -414,6 +424,29 @@ export class ConversationsController {
     }
 
     /**
+     * Tìm kiếm tin nhắn theo từ khóa trong cuộc trò chuyện (FR-31, BR-30)
+     * GET /api/v1/conversations/:id/messages/search?q={keyword}
+     */
+    @Get(':id/messages/search')
+    @ApiOperation({ summary: 'Tìm kiếm tin nhắn trong cuộc trò chuyện (FR-31, BR-30)' })
+    @ApiParam({ name: 'id', description: 'UUID của cuộc hội thoại', format: 'uuid', example: 'e4b5a2e1-884d-4b71-a477-0c7f0db49211' })
+    @ApiResponse({
+        status: 200,
+        description: 'Tìm kiếm tin nhắn thành công',
+    })
+    @ApiResponse({
+        status: 403,
+        description: 'Người dùng không phải thành viên của cuộc hội thoại',
+    })
+    async searchMessages(
+        @CurrentUser() user: User,
+        @Param('id', ParseUUIDPipe) conversationId: string,
+        @Query('q') query: string,
+    ) {
+        return this.conversationsService.searchMessages(user.id, conversationId, query);
+    }
+
+    /**
      * Lấy lịch sử tin nhắn (hỗ trợ before={messageId}&limit=30) (FR-13, BR-08)
      * GET /api/v1/conversations/:id/messages
      */
@@ -535,6 +568,88 @@ export class ConversationsController {
         @Param('id', ParseUUIDPipe) conversationId: string,
     ) {
         return this.conversationsService.markAsRead(user.id, conversationId);
+    }
+
+    /**
+     * Tắt/bật thông báo cuộc hội thoại (FR-32, BR-31)
+     * PATCH /api/v1/conversations/:id/mute
+     */
+    @Patch(':id/mute')
+    @ApiOperation({ summary: 'Tắt/bật thông báo cuộc hội thoại (FR-32, BR-31)' })
+    @ApiParam({ name: 'id', description: 'UUID của cuộc hội thoại', format: 'uuid', example: 'e4b5a2e1-884d-4b71-a477-0c7f0db49211' })
+    @ApiResponse({
+        status: 200,
+        description: 'Cập nhật trạng thái thông báo thành công',
+        schema: {
+            example: {
+                conversationId: 'e4b5a2e1-884d-4b71-a477-0c7f0db49211',
+                isMuted: true,
+            },
+        },
+    })
+    @ApiResponse({
+        status: 403,
+        description: 'Người dùng không phải thành viên của cuộc hội thoại',
+    })
+    async toggleMute(
+        @CurrentUser() user: User,
+        @Param('id', ParseUUIDPipe) conversationId: string,
+        @Body() dto: ToggleMuteDto,
+    ) {
+        return this.conversationsService.toggleMute(user.id, conversationId, dto.isMuted);
+    }
+
+    /**
+     * Ghim / bỏ ghim cuộc trò chuyện trong Inbox của riêng người dùng (FR-48)
+     * PATCH /api/v1/conversations/:id/pin
+     */
+    @Patch(':id/pin')
+    @ApiOperation({ summary: 'Ghim / bỏ ghim cuộc trò chuyện của riêng người dùng, tối đa 5 cuộc (FR-48, BR-08)' })
+    @ApiParam({ name: 'id', description: 'UUID của cuộc hội thoại', format: 'uuid', example: 'e4b5a2e1-884d-4b71-a477-0c7f0db49211' })
+    @ApiResponse({
+        status: 200,
+        description: 'Cập nhật trạng thái ghim thành công',
+        schema: {
+            example: {
+                conversationId: 'e4b5a2e1-884d-4b71-a477-0c7f0db49211',
+                isPinned: true,
+                pinnedAt: '2026-10-14T10:00:00.000Z',
+            },
+        },
+    })
+    @ApiResponse({ status: 400, description: 'Đã ghim tối đa 5 cuộc trò chuyện hoặc body không hợp lệ' })
+    @ApiResponse({ status: 403, description: 'Người dùng không phải thành viên của cuộc hội thoại (BR-08)' })
+    async togglePin(
+        @CurrentUser() user: User,
+        @Param('id', ParseUUIDPipe) conversationId: string,
+        @Body() dto: TogglePinDto,
+    ) {
+        return this.conversationActionsService.setPinned(user.id, conversationId, dto.isPinned);
+    }
+
+    /**
+     * Xóa đoạn chat (chỉ phía người gọi) (FR-48)
+     * DELETE /api/v1/conversations/:id/history
+     */
+    @Delete(':id/history')
+    @ApiOperation({ summary: 'Xóa đoạn chat chỉ cho người dùng hiện tại, thành viên khác không bị ảnh hưởng (FR-48, BR-08)' })
+    @ApiParam({ name: 'id', description: 'UUID của cuộc hội thoại', format: 'uuid', example: 'e4b5a2e1-884d-4b71-a477-0c7f0db49211' })
+    @ApiResponse({
+        status: 200,
+        description: 'Xóa đoạn chat thành công (tin nhắn trước clearedAt bị ẩn với người dùng này)',
+        schema: {
+            example: {
+                conversationId: 'e4b5a2e1-884d-4b71-a477-0c7f0db49211',
+                clearedAt: '2026-10-14T10:00:00.000Z',
+            },
+        },
+    })
+    @ApiResponse({ status: 403, description: 'Người dùng không phải thành viên của cuộc hội thoại (BR-08)' })
+    async clearHistory(
+        @CurrentUser() user: User,
+        @Param('id', ParseUUIDPipe) conversationId: string,
+    ) {
+        return this.conversationActionsService.clearHistory(user.id, conversationId);
     }
 
     /**
@@ -677,6 +792,43 @@ export class ConversationsController {
         @Body() dto: UpdateGroupDto,
     ) {
         return this.conversationsService.updateGroup(user.id, conversationId, dto);
+    }
+
+    /**
+     * Tùy chỉnh biểu tượng cảm xúc mặc định (Quick Emoji) cho cuộc hội thoại (FR-30, BR-29)
+     * Áp dụng cho cả DIRECT và GROUP
+     * PATCH /api/v1/conversations/:id/quick-emoji
+     */
+    @Patch(':id/quick-emoji')
+    @ApiOperation({ summary: 'Tùy chỉnh biểu tượng cảm xúc Quick Emoji cho cuộc trò chuyện (FR-30, BR-29)' })
+    @ApiParam({ name: 'id', description: 'UUID của cuộc hội thoại', format: 'uuid', example: '81f0d361-9c12-4211-b0d5-768a31e138a2' })
+    @ApiResponse({
+        status: 200,
+        description: 'Tùy chỉnh Quick Emoji thành công',
+        schema: {
+            example: {
+                quickEmoji: '❤️',
+            },
+        },
+    })
+    @ApiResponse({
+        status: 400,
+        description: 'Emoji không hợp lệ hoặc để trống',
+    })
+    @ApiResponse({
+        status: 403,
+        description: 'Người dùng không phải thành viên của cuộc hội thoại',
+    })
+    @ApiResponse({
+        status: 404,
+        description: 'Cuộc hội thoại không tồn tại',
+    })
+    async updateQuickEmoji(
+        @CurrentUser() user: User,
+        @Param('id', ParseUUIDPipe) conversationId: string,
+        @Body() dto: UpdateQuickEmojiDto,
+    ) {
+        return this.conversationsService.updateQuickEmoji(user.id, conversationId, dto);
     }
 
     /**

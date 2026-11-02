@@ -1,10 +1,16 @@
-import { useEffect, useCallback, useMemo, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useEffect, useCallback, useMemo, useState, useRef } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { UploadCloud } from 'lucide-react'
 import { ChatHeader } from './ChatHeader'
+import { InChatSearchBar } from './InChatSearchBar'
+import { PinnedMessageBar } from './PinnedMessageBar'
 import { MessageFeed } from './MessageFeed'
-import { MessageComposer } from './MessageComposer'
+import { MessageComposer, type MessageComposerHandle } from './MessageComposer'
 import { ImageLightboxModal } from './ImageLightboxModal'
 import { ChatDetailDrawer } from './ChatDetailDrawer'
+import { BlockedComposerBar } from './BlockedComposerBar'
+import { BlockUserConfirmDialog, ClearHistoryConfirmDialog } from './ConversationConfirmDialogs'
+import { useConversationActions } from '../hooks/useConversationActions'
 import { useConversationStore } from '@/features/conversations/stores/conversation.store'
 import { useMessagesStore } from '../stores/messages.store'
 import { useSocket } from '@/hooks/useSocket'
@@ -13,6 +19,7 @@ import { socketClient } from '@/services/socket.client'
 import { conversationApi } from '@/features/conversations/services/conversation.api'
 import { toast } from 'sonner'
 import type { ConversationMemberUser } from '@/features/conversations/types/conversation.types'
+import type { Message, MessageSender } from '../types/message.types'
 
 /**
  * ActiveChatCanvas: Vùng hiển thị cuộc hội thoại đang hoạt động chuẩn Telegram Web
@@ -22,6 +29,7 @@ import type { ConversationMemberUser } from '@/features/conversations/types/conv
  */
 export function ActiveChatCanvas() {
   const { conversationId } = useParams<{ conversationId: string }>()
+  const navigate = useNavigate()
   const { user } = useAuthStore()
   const { conversations, setActiveConversation } =
     useConversationStore()
@@ -35,8 +43,26 @@ export function ActiveChatCanvas() {
     handleMessageRecalled,
     handleMessageEdited,
     handleReactionUpdated,
+    handleMessagePinned,
+    handleMessageUnpinned,
   } = useMessagesStore()
   const { isUserOnline } = useSocket()
+
+  // Danh sách tin nhắn đã ghim trong cuộc hội thoại
+  const [pinnedMessages, setPinnedMessages] = useState<Message[]>([])
+  const [prevConversationId, setPrevConversationId] = useState(conversationId)
+
+  // Trạng thái mở thanh tìm kiếm tin nhắn trong hội thoại & từ khóa tìm kiếm
+  const [isSearchOpen, setIsSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+
+  // Điều chỉnh state khi conversationId thay đổi chuẩn React (tránh setState trong effect)
+  if (prevConversationId !== conversationId) {
+    setPrevConversationId(conversationId)
+    setPinnedMessages([])
+    setIsSearchOpen(false)
+    setSearchQuery('')
+  }
 
   // Thông tin đối phương trong cuộc trò chuyện trực tiếp (Direct)
   const [partner, setPartner] = useState<ConversationMemberUser | null>(null)
@@ -47,10 +73,57 @@ export function ActiveChatCanvas() {
   // Bảng thông tin chi tiết cuộc trò chuyện (Right Panel Telegram / Messenger)
   const [isDetailOpen, setIsDetailOpen] = useState(false)
 
+  // Drag & drop tệp tin toàn bộ vùng hội thoại (Canvas Drag & Drop)
+  const [isDraggingFile, setIsDraggingFile] = useState(false)
+  const composerRef = useRef<MessageComposerHandle>(null)
+  const dragCounterRef = useRef(0)
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.dataTransfer.types && Array.from(e.dataTransfer.types).includes('Files')) {
+      dragCounterRef.current += 1
+      if (dragCounterRef.current === 1) {
+        setIsDraggingFile(true)
+      }
+    }
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounterRef.current -= 1
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0
+      setIsDraggingFile(false)
+    }
+  }, [])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'copy'
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounterRef.current = 0
+    setIsDraggingFile(false)
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      composerRef.current?.addFiles(e.dataTransfer.files)
+    }
+  }, [])
+
   // Tìm cuộc hội thoại trong Inbox store
   const conversation = useMemo(() => {
     return conversations.find((c) => c.id === conversationId)
   }, [conversations, conversationId])
+
+  const actions = useConversationActions(conversation, partner?.id)
+  const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false)
+  const [isBlockConfirmOpen, setIsBlockConfirmOpen] = useState(false)
+  const blockStatus = conversation?.type === 'DIRECT' ? actions.blockStatus : 'NONE'
 
   const messages = useMemo(() => {
     return conversationId ? messagesByConversation[conversationId] || [] : []
@@ -72,6 +145,8 @@ export function ActiveChatCanvas() {
   // Trạng thái online của đối phương qua socket presence hoặc initial detail
   const isPartnerOnline = useMemo(() => {
     if (!conversation || conversation.type === 'GROUP' || !partner?.id) return false
+    // Hai bên chặn nhau: ẩn trạng thái hoạt động (BR-38)
+    if (conversation.blockStatus && conversation.blockStatus !== 'NONE') return false
     try {
       if (typeof isUserOnline === 'function' && isUserOnline(partner.id)) {
         return true
@@ -93,6 +168,8 @@ export function ActiveChatCanvas() {
       .then((detail) => {
         if (!isMounted || !detail) return
 
+        useConversationStore.getState().addOrUpdateConversation(detail)
+
         if (detail.type === 'DIRECT' && Array.isArray(detail.members)) {
           const otherMember = detail.members.find((m) => m?.user?.id !== user?.id)
           if (otherMember?.user) {
@@ -102,6 +179,17 @@ export function ActiveChatCanvas() {
       })
       .catch(() => {
         // Fallback: nếu lỗi API detail thì vẫn giữ state bình thường
+      })
+
+    conversationApi
+      .getPinnedMessages(conversationId)
+      .then((pins) => {
+        if (isMounted && Array.isArray(pins)) {
+          setPinnedMessages(pins)
+        }
+      })
+      .catch(() => {
+        // Fallback: nếu lỗi API pinned messages
       })
 
     return () => {
@@ -116,9 +204,33 @@ export function ActiveChatCanvas() {
     setActiveConversation(conversationId)
 
     const socket = socketClient.getSocket()
+
+    // Join room ở lần kết nối đầu và mọi lần reconnect (server mất room membership khi rớt kết nối)
+    const joinRoom = () => {
+      socket?.emit('joinConversation', { conversationId })
+      socket?.emit('markAsRead', { conversationId })
+    }
     if (socket && socket.connected) {
-      socket.emit('joinConversation', { conversationId })
-      socket.emit('markAsRead', { conversationId })
+      joinRoom()
+    }
+    if (socket && typeof socket.on === 'function') {
+      socket.on('connect', joinRoom)
+    }
+
+    // Gửi vào hội thoại bị chặn -> 403 CONVERSATION_BLOCKED: chuyển sang trạng thái khóa (BR-38)
+    const onSocketException = (payload?: { errorCode?: string; message?: string }) => {
+      const isBlockedError =
+        payload?.errorCode === 'CONVERSATION_BLOCKED' ||
+        Boolean(payload?.message?.includes('CONVERSATION_BLOCKED'))
+      if (!isBlockedError) return
+      const current = useConversationStore.getState().conversations.find((c) => c.id === conversationId)
+      if (current?.type === 'DIRECT' && (!current.blockStatus || current.blockStatus === 'NONE')) {
+        useConversationStore.getState().updateConversation(conversationId, {
+          blockStatus: 'BLOCKED_ME',
+          isOnline: false,
+        })
+      }
+      toast.error('Không thể gửi tin nhắn: cuộc trò chuyện đã bị chặn')
     }
 
     // Tải 30 tin nhắn mới nhất
@@ -166,10 +278,124 @@ export function ActiveChatCanvas() {
       }
     }
 
+    const onMessagePinned = (payload: {
+      conversationId: string
+      messageId: string
+      message?: Message & { senderName?: string }
+      pinnedBy?: MessageSender
+    }) => {
+      if (payload.conversationId === conversationId) {
+        // Payload realtime chỉ có senderName (không có sender): chuẩn hoá để PinnedMessageBar hiển thị đúng tên (FR-20)
+        if (payload.message && !payload.message.sender) {
+          const inFeed = (
+            useMessagesStore.getState().messagesByConversation[conversationId] || []
+          ).find((m) => m.id === payload.messageId)
+          const name = payload.message.senderName
+          payload.message = {
+            ...inFeed,
+            ...payload.message,
+            sender:
+              inFeed?.sender ??
+              ({ id: '', username: name || '', displayName: name || '', avatarUrl: null } as MessageSender),
+          } as Message & { senderName?: string }
+        }
+        handleMessagePinned(
+          payload.conversationId,
+          payload.messageId,
+          payload.pinnedBy,
+          new Date().toISOString()
+        )
+        setPinnedMessages((prev) => {
+          if (payload.message) {
+            const exists = prev.some((m) => m.id === payload.messageId)
+            if (exists) {
+              return prev.map((m) =>
+                m.id === payload.messageId ? { ...m, ...payload.message, isPinned: true } : m
+              )
+            }
+            return [{ ...payload.message, isPinned: true }, ...prev]
+          }
+          const existingInFeed = (
+            useMessagesStore.getState().messagesByConversation[conversationId] || []
+          ).find((m) => m.id === payload.messageId)
+          if (existingInFeed) {
+            const exists = prev.some((m) => m.id === payload.messageId)
+            if (exists) {
+              return prev.map((m) =>
+                m.id === payload.messageId
+                  ? { ...m, isPinned: true, pinnedBy: payload.pinnedBy }
+                  : m
+              )
+            }
+            return [{ ...existingInFeed, isPinned: true, pinnedBy: payload.pinnedBy }, ...prev]
+          }
+          conversationApi
+            .getPinnedMessages(conversationId)
+            .then((pins) => setPinnedMessages(pins || []))
+            .catch(() => {})
+          return prev
+        })
+      }
+    }
+
+    const onMessageUnpinned = (payload: { conversationId: string; messageId: string }) => {
+      if (payload.conversationId === conversationId) {
+        handleMessageUnpinned(payload.conversationId, payload.messageId)
+        setPinnedMessages((prev) => prev.filter((m) => m.id !== payload.messageId))
+      }
+    }
+
+    const onConversationCustomized = (payload: {
+      conversationId: string
+      changes?: { name?: string; avatarUrl?: string; quickEmoji?: string }
+      name?: string
+      avatarUrl?: string
+      quickEmoji?: string
+    }) => {
+      if (payload.conversationId === conversationId) {
+        const changes = payload.changes || {}
+        const name = payload.name ?? changes.name
+        const avatarUrl = payload.avatarUrl ?? changes.avatarUrl
+        const quickEmoji = payload.quickEmoji ?? changes.quickEmoji
+        useConversationStore.getState().updateConversation(conversationId, {
+          ...(name !== undefined ? { name } : {}),
+          ...(avatarUrl !== undefined ? { avatarUrl } : {}),
+          ...(quickEmoji !== undefined ? { quickEmoji } : {}),
+        })
+      }
+    }
+
+    const onGroupMemberUpdated = (payload: { conversationId: string }) => {
+      if (payload.conversationId === conversationId) {
+        conversationApi
+          .getConversationById(conversationId)
+          .then((detail) => {
+            if (detail) {
+              useConversationStore.getState().addOrUpdateConversation(detail)
+            }
+          })
+          .catch(() => {})
+      }
+    }
+
+    const onGroupMembershipChanged = (payload: { conversationId: string; action: string }) => {
+      if (payload.conversationId === conversationId && (payload.action === 'REMOVED' || payload.action === 'LEFT')) {
+        // LEFT = chính mình rời nhóm (drawer đã toast thành công) -> không toast lần hai
+        if (payload.action === 'REMOVED') toast.error('Bạn không còn là thành viên của nhóm chat này')
+        navigate('/chat')
+      }
+    }
+
     if (socket && typeof socket.on === 'function') {
       socket.on('messageRecalled', onRecalled)
       socket.on('messageEdited', onEdited)
       socket.on('messageReactionUpdated', onReactionUpdated)
+      socket.on('messagePinned', onMessagePinned)
+      socket.on('messageUnpinned', onMessageUnpinned)
+      socket.on('conversationCustomized', onConversationCustomized)
+      socket.on('groupMemberUpdated', onGroupMemberUpdated)
+      socket.on('groupMembershipChanged', onGroupMembershipChanged)
+      socket.on('exception', onSocketException)
     }
 
     return () => {
@@ -178,6 +404,13 @@ export function ActiveChatCanvas() {
           socket.off('messageRecalled', onRecalled)
           socket.off('messageEdited', onEdited)
           socket.off('messageReactionUpdated', onReactionUpdated)
+          socket.off('messagePinned', onMessagePinned)
+          socket.off('messageUnpinned', onMessageUnpinned)
+          socket.off('conversationCustomized', onConversationCustomized)
+          socket.off('groupMemberUpdated', onGroupMemberUpdated)
+          socket.off('groupMembershipChanged', onGroupMembershipChanged)
+          socket.off('exception', onSocketException)
+          socket.off('connect', joinRoom)
         }
         if (socket.connected && typeof socket.emit === 'function') {
           socket.emit('leaveConversation', { conversationId })
@@ -191,6 +424,9 @@ export function ActiveChatCanvas() {
     handleMessageRecalled,
     handleMessageEdited,
     handleReactionUpdated,
+    handleMessagePinned,
+    handleMessageUnpinned,
+    navigate,
     user?.id,
   ])
 
@@ -264,6 +500,71 @@ export function ActiveChatCanvas() {
     },
     [conversationId]
   )
+
+  // Ghim tin nhắn qua API
+  const handlePinMessage = useCallback(
+    async (message: Message) => {
+      if (!conversationId) return
+      try {
+        await conversationApi.pinMessage(conversationId, message.id)
+        handleMessagePinned(conversationId, message.id, {
+          id: user?.id || '',
+          username: user?.username || '',
+          displayName: user?.displayName || '',
+          avatarUrl: user?.avatarUrl || null,
+        })
+        setPinnedMessages((prev) => {
+          if (prev.some((m) => m.id === message.id)) return prev
+          return [{ ...message, isPinned: true }, ...prev]
+        })
+        toast.success('Đã ghim tin nhắn')
+      } catch (err: unknown) {
+        const error = err as { response?: { data?: { message?: string } } }
+        toast.error(error.response?.data?.message || 'Không thể ghim tin nhắn')
+      }
+    },
+    [conversationId, handleMessagePinned, user]
+  )
+
+  // Bỏ ghim tin nhắn qua API
+  const handleUnpinMessage = useCallback(
+    async (message: Message) => {
+      if (!conversationId) return
+      try {
+        await conversationApi.unpinMessage(conversationId, message.id)
+        handleMessageUnpinned(conversationId, message.id)
+        setPinnedMessages((prev) => prev.filter((m) => m.id !== message.id))
+        toast.success('Đã bỏ ghim tin nhắn')
+      } catch (err: unknown) {
+        const error = err as { response?: { data?: { message?: string } } }
+        toast.error(error.response?.data?.message || 'Không thể bỏ ghim tin nhắn')
+      }
+    },
+    [conversationId, handleMessageUnpinned]
+  )
+
+  // Bật/tắt thanh tìm kiếm tin nhắn trong cuộc trò chuyện
+  const handleToggleSearch = useCallback(() => {
+    setIsSearchOpen((prev) => {
+      if (prev) {
+        setSearchQuery('')
+      }
+      return !prev
+    })
+  }, [])
+
+  // Bật/tắt thông báo cuộc trò chuyện qua API
+  const handleToggleMute = useCallback(async () => {
+    if (!conversationId || !conversation) return
+    const next = !conversation.isMuted
+    try {
+      await conversationApi.toggleMute(conversationId, next)
+      useConversationStore.getState().updateConversation(conversationId, { isMuted: next })
+      toast.success(next ? 'Đã tắt thông báo cuộc trò chuyện' : 'Đã bật lại thông báo')
+    } catch {
+      toast.error('Không thể cập nhật trạng thái thông báo')
+    }
+  }, [conversationId, conversation])
 
   // Cuộn tới tin nhắn được reply với hiệu ứng Flash Highlight và tự động tải thêm nếu chưa có trong DOM
   const handleScrollToReply = useCallback(
@@ -348,7 +649,33 @@ export function ActiveChatCanvas() {
     <div
       className="flex-1 flex flex-col h-full bg-gradient-to-b from-[#E8EFF6] via-canvas-light to-[#E1EAF2] dark:from-[#111B27] dark:via-[#0E1621] dark:to-[#0A1017] relative overflow-hidden transition-colors"
       data-testid="active-chat-canvas"
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
     >
+      {/* Overlay kéo thả tệp chuẩn Telegram Web */}
+      {isDraggingFile && (
+        <div
+          className="absolute inset-4 z-50 rounded-2xl border-2 border-dashed border-brand bg-brand/10 dark:bg-brand/20 backdrop-blur-xs flex flex-col items-center justify-center pointer-events-none transition-all duration-200 animate-in fade-in"
+          data-testid="drag-drop-overlay"
+        >
+          <div className="flex flex-col items-center gap-3 p-6 rounded-2xl bg-white/95 dark:bg-[#17212B]/95 shadow-xl border border-border-light dark:border-border-dark">
+            <div className="w-16 h-16 rounded-full bg-brand-soft dark:bg-brand/20 flex items-center justify-center text-brand dark:text-brand-accent animate-bounce">
+              <UploadCloud className="w-8 h-8" />
+            </div>
+            <div className="text-center">
+              <p className="text-base font-semibold text-ink-primary dark:text-ink-primary-dark">
+                Thả tệp vào đây để gửi
+              </p>
+              <p className="text-xs text-ink-secondary dark:text-ink-secondary-dark mt-1">
+                Hỗ trợ ảnh (tối đa 5MB), tài liệu & âm thanh (tối đa 25MB)
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Texture họa tiết nền Telegram sang trọng */}
       <div
         className="absolute inset-0 pointer-events-none opacity-[0.04] dark:opacity-[0.055] bg-[radial-gradient(#2481CC_1.2px,transparent_1.2px)] [background-size:20px_20px]"
@@ -361,7 +688,39 @@ export function ActiveChatCanvas() {
         isOnline={isPartnerOnline}
         typingUserNames={typingNames}
         isInfoOpen={isDetailOpen}
+        isSearchOpen={isSearchOpen}
+        isMuted={conversation.isMuted}
+        onSearchClick={handleToggleSearch}
+        onToggleMute={handleToggleMute}
+        onBackClick={() => navigate('/chat')}
         onInfoClick={() => setIsDetailOpen((prev) => !prev)}
+        isPinned={actions.isPinned}
+        blockStatus={blockStatus}
+        onTogglePin={actions.togglePin}
+        onClearHistory={() => setIsClearConfirmOpen(true)}
+        onBlock={() => setIsBlockConfirmOpen(true)}
+        onUnblock={actions.unblockPartner}
+      />
+
+      {/* Thanh tìm kiếm tin nhắn trong hội thoại */}
+      {isSearchOpen && (
+        <InChatSearchBar
+          conversationId={conversation.id}
+          onJumpToMessage={handleScrollToReply}
+          onQueryChange={setSearchQuery}
+          onClose={() => {
+            setIsSearchOpen(false)
+            setSearchQuery('')
+          }}
+        />
+      )}
+
+      {/* Thanh tin nhắn đã ghim chuẩn Telegram/Messenger */}
+      <PinnedMessageBar
+        pinnedMessages={pinnedMessages}
+        onJumpToMessage={handleScrollToReply}
+        onUnpin={handleUnpinMessage}
+        onOpenPinnedList={() => setIsDetailOpen(true)}
       />
 
       {/* Vùng nội dung chính: Cột luồng chat và Bảng thông tin chi tiết bên phải */}
@@ -376,6 +735,7 @@ export function ActiveChatCanvas() {
             isLoadingOlder={isLoadingMessages}
             lastReadMessageId={lastReadId}
             typingUserNames={typingNames}
+            searchKeyword={isSearchOpen ? searchQuery : ''}
             onLoadMore={handleLoadMore}
             onReact={handleReact}
             onReply={(msg) => useMessagesStore.getState().setReplyingMessage(msg)}
@@ -383,13 +743,25 @@ export function ActiveChatCanvas() {
             onEdit={(msg) => useMessagesStore.getState().setEditingMessage({ id: msg.id, content: msg.content })}
             onScrollToReply={handleScrollToReply}
             onImageClick={(url, alt) => setLightboxImage({ url, alt })}
+            onPin={handlePinMessage}
+            onUnpin={handleUnpinMessage}
           />
 
-          <MessageComposer
-            conversationId={conversation.id}
-            onSendMessage={handleSendMessage}
-            onEditMessage={handleEditMessage}
-          />
+          {blockStatus !== 'NONE' ? (
+            <BlockedComposerBar
+              blockStatus={blockStatus}
+              isUnblocking={actions.isBlocking}
+              onUnblock={() => void actions.unblockPartner()}
+            />
+          ) : (
+            <MessageComposer
+              ref={composerRef}
+              conversationId={conversation.id}
+              quickEmoji={conversation.quickEmoji || '👍'}
+              onSendMessage={handleSendMessage}
+              onEditMessage={handleEditMessage}
+            />
+          )}
         </div>
 
         {/* Bảng chi tiết bên phải (Telegram / Messenger Drawer) */}
@@ -401,9 +773,27 @@ export function ActiveChatCanvas() {
           partner={partner}
           isOnline={isPartnerOnline}
           messages={messages}
+          pinnedMessages={pinnedMessages}
+          onUnpinMessage={handleUnpinMessage}
+          onJumpToMessage={handleScrollToReply}
           onImageClick={(url, alt) => setLightboxImage({ url, alt })}
+          onSearchClick={() => setIsSearchOpen(true)}
         />
       </div>
+
+      <ClearHistoryConfirmDialog
+        open={isClearConfirmOpen}
+        onOpenChange={setIsClearConfirmOpen}
+        onConfirm={actions.clearHistory}
+        isLoading={actions.isClearing}
+      />
+      <BlockUserConfirmDialog
+        open={isBlockConfirmOpen}
+        onOpenChange={setIsBlockConfirmOpen}
+        name={partner?.displayName || conversation.name}
+        onConfirm={actions.blockPartner}
+        isLoading={actions.isBlocking}
+      />
 
       {/* Lightbox modal xem ảnh phóng to toàn màn hình */}
       <ImageLightboxModal

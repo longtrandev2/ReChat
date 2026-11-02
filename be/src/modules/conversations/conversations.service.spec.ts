@@ -15,6 +15,7 @@ import { MessageReaction } from './entities/message-reaction.entity.js';
 import { User } from '../users/entities/user.entity.js';
 import { Friendship, FriendshipStatus } from '../friends/entities/friendship.entity.js';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { DataSource } from 'typeorm';
 
 describe('ConversationsService', () => {
     let service: ConversationsService;
@@ -25,6 +26,7 @@ describe('ConversationsService', () => {
     let mockUserRepo: any;
     let mockFriendshipRepo: any;
     let mockEventEmitter: any;
+    let mockDataSource: any;
 
     const createMockQueryBuilder = (result: any = []) => ({
         innerJoin: vi.fn().mockReturnThis(),
@@ -78,6 +80,19 @@ describe('ConversationsService', () => {
 
         mockFriendshipRepo = {
             findOne: vi.fn(),
+            find: vi.fn().mockResolvedValue([]),
+        };
+
+        // DataSource.transaction chạy callback với manager trả về đúng các repo mock theo entity
+        const repoByEntity = new Map<unknown, any>([
+            [Conversation, mockConversationRepo],
+            [ConversationMember, mockMemberRepo],
+            [Message, mockMessageRepo],
+            [User, mockUserRepo],
+        ]);
+        const mockManager = { getRepository: vi.fn((entity: unknown) => repoByEntity.get(entity)) };
+        mockDataSource = {
+            transaction: vi.fn((cb: (m: unknown) => Promise<unknown>) => cb(mockManager)),
         };
 
         mockEventEmitter = {
@@ -103,6 +118,7 @@ describe('ConversationsService', () => {
                 { provide: getRepositoryToken(User), useValue: mockUserRepo },
                 { provide: getRepositoryToken(Friendship), useValue: mockFriendshipRepo },
                 { provide: EventEmitter2, useValue: mockEventEmitter },
+                { provide: DataSource, useValue: mockDataSource },
             ],
         }).compile();
 
@@ -161,7 +177,10 @@ describe('ConversationsService', () => {
             const result = await service.createOrGetDirect(currentUserId, targetUserId);
 
             expect(result).toBeDefined();
-            expect(mockConversationRepo.create).toHaveBeenCalledWith({ type: ConversationType.DIRECT });
+            expect(mockConversationRepo.create).toHaveBeenCalledWith({
+                type: ConversationType.DIRECT,
+                directKey: [currentUserId, targetUserId].sort().join(':'),
+            });
             expect(mockMemberRepo.save).toHaveBeenCalled();
             expect(mockEventEmitter.emit).toHaveBeenCalledWith(
                 'conversation.created',
@@ -169,6 +188,65 @@ describe('ConversationsService', () => {
                     memberIds: [currentUserId, targetUserId],
                 }),
             );
+        });
+    });
+
+    describe('createOrGetDirect - race & directKey (BR-05)', () => {
+        const currentUserId = 'user-b';
+        const targetUserId = 'user-a';
+
+        beforeEach(() => {
+            mockUserRepo.findOne.mockResolvedValue({ id: targetUserId });
+            mockFriendshipRepo.findOne.mockResolvedValue({ status: FriendshipStatus.ACCEPTED });
+            mockConversationRepo.findOne.mockResolvedValue(null);
+            mockConversationRepo.createQueryBuilder.mockReturnValue(createMockQueryBuilder(null));
+        });
+
+        it('looks up the existing conversation by sorted directKey first', async () => {
+            const existing = { id: 'conv-by-key', type: ConversationType.DIRECT };
+            mockConversationRepo.findOne.mockResolvedValue(existing);
+
+            const result = await service.createOrGetDirect(currentUserId, targetUserId);
+
+            expect(result).toBe(existing);
+            expect(mockConversationRepo.findOne).toHaveBeenCalledWith({ where: { directKey: 'user-a:user-b' } });
+            expect(mockConversationRepo.createQueryBuilder).not.toHaveBeenCalled();
+            expect(mockDataSource.transaction).not.toHaveBeenCalled();
+        });
+
+        it('falls back to the member-based lookup for legacy rows without directKey', async () => {
+            const legacy = { id: 'conv-legacy', type: ConversationType.DIRECT };
+            mockConversationRepo.createQueryBuilder.mockReturnValue(createMockQueryBuilder(legacy));
+
+            const result = await service.createOrGetDirect(currentUserId, targetUserId);
+
+            expect(result).toBe(legacy);
+            expect(mockDataSource.transaction).not.toHaveBeenCalled();
+        });
+
+        it('creates conversation + members inside one transaction and emits event after it', async () => {
+            await service.createOrGetDirect(currentUserId, targetUserId);
+
+            expect(mockDataSource.transaction).toHaveBeenCalledTimes(1);
+            expect(mockMemberRepo.save).toHaveBeenCalledWith(expect.arrayContaining([expect.anything(), expect.anything()]));
+        });
+
+        it('returns the winner conversation when a concurrent request hits the unique directKey (duplicate key)', async () => {
+            const winner = { id: 'conv-winner', type: ConversationType.DIRECT };
+            mockConversationRepo.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(winner);
+            mockDataSource.transaction.mockRejectedValueOnce(
+                Object.assign(new Error('dup'), { code: 'ER_DUP_ENTRY', errno: 1062 }),
+            );
+
+            const result = await service.createOrGetDirect(currentUserId, targetUserId);
+
+            expect(result).toBe(winner);
+            expect(mockEventEmitter.emit).not.toHaveBeenCalledWith('conversation.created', expect.anything());
+        });
+
+        it('rethrows non duplicate-key errors', async () => {
+            mockDataSource.transaction.mockRejectedValueOnce(new Error('connection lost'));
+            await expect(service.createOrGetDirect(currentUserId, targetUserId)).rejects.toThrow('connection lost');
         });
     });
 
@@ -207,6 +285,46 @@ describe('ConversationsService', () => {
                     memberIds: [ownerId, ...memberIds],
                 }),
             );
+        });
+
+        it('runs group + members + system message in ONE transaction', async () => {
+            mockUserRepo.find.mockResolvedValue([{ id: 'user-2' }]);
+
+            await service.createGroup(ownerId, { name: 'Tx Group', memberIds: ['user-2'] });
+
+            expect(mockDataSource.transaction).toHaveBeenCalledTimes(1);
+            expect(mockMessageRepo.save).toHaveBeenCalledWith(
+                expect.objectContaining({ type: MessageType.SYSTEM }),
+            );
+        });
+
+        it('leaves no orphan and emits no realtime event when the transaction fails midway', async () => {
+            mockUserRepo.find.mockResolvedValue([{ id: 'user-2' }]);
+            mockDataSource.transaction.mockRejectedValueOnce(new Error('member insert failed'));
+
+            await expect(
+                service.createGroup(ownerId, { name: 'Broken', memberIds: ['user-2'] }),
+            ).rejects.toThrow('member insert failed');
+            expect(mockEventEmitter.emit).not.toHaveBeenCalled();
+        });
+
+        it('does not publish the system message before the transaction commits', async () => {
+            mockUserRepo.find.mockResolvedValue([{ id: 'user-2' }]);
+            let emittedInsideTx = false;
+            mockDataSource.transaction.mockImplementationOnce(async (cb: any) => {
+                const manager = {
+                    getRepository: (e: unknown) =>
+                        ({ [Conversation.name]: mockConversationRepo, [ConversationMember.name]: mockMemberRepo, [Message.name]: mockMessageRepo, [User.name]: mockUserRepo })[(e as any).name],
+                };
+                const out = await cb(manager);
+                emittedInsideTx = mockEventEmitter.emit.mock.calls.length > 0;
+                return out;
+            });
+
+            await service.createGroup(ownerId, { name: 'Late Emit', memberIds: ['user-2'] });
+
+            expect(emittedInsideTx).toBe(false);
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith('message.created', expect.anything());
         });
     });
 
@@ -324,6 +442,19 @@ describe('ConversationsService', () => {
             expect(mockMemberRepo.save).toHaveBeenCalledWith(remainingMember);
         });
 
+        it('should announce the new owner with a SYSTEM message when ownership is auto-transferred (BR-37, FR-46)', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: conversationId, type: ConversationType.GROUP });
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'm-owner', role: ConversationRole.OWNER });
+            mockMemberRepo.find.mockResolvedValue([
+                { id: 'm-bob', role: ConversationRole.MEMBER, user: { id: 'user-bob', displayName: 'Bob Builder' } },
+            ]);
+
+            await service.leaveGroup(currentUserId, conversationId);
+
+            const contents = mockMessageRepo.create.mock.calls.map((c: any[]) => c[0].content);
+            expect(contents).toContain('Bob Builder là Trưởng nhóm mới.');
+        });
+
         it('should disband group when OWNER leaves and no members are left (BR-12)', async () => {
             mockConversationRepo.findOne.mockResolvedValue({ id: conversationId, type: ConversationType.GROUP });
             mockMemberRepo.findOne.mockResolvedValue({ id: 'm-owner', role: ConversationRole.OWNER });
@@ -332,6 +463,11 @@ describe('ConversationsService', () => {
             const result = await service.leaveGroup(currentUserId, conversationId);
             expect(result.message).toContain('giải tán nhóm thành công');
             expect(mockConversationRepo.delete).toHaveBeenCalledWith(conversationId);
+            // Gateway cần event này để đẩy socket của người rời khỏi room conv_ đã giải tán (BR-08)
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'group.member_event',
+                expect.objectContaining({ conversationId, action: 'LEFT', targetUserIds: [currentUserId] }),
+            );
         });
     });
 
@@ -594,6 +730,55 @@ describe('ConversationsService', () => {
             expect(conv.name).toBe('Updated Name');
             expect(conv.avatarUrl).toBe('new-avatar');
             expect(mockConversationRepo.save).toHaveBeenCalledWith(conv);
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'conversation.customized',
+                expect.any(Object),
+            );
+        });
+    });
+
+    // ==========================================
+    // 9b. updateQuickEmoji (FR-30, BR-29)
+    // ==========================================
+    describe('updateQuickEmoji', () => {
+        it('should throw NotFoundException if conversation not found', async () => {
+            mockConversationRepo.findOne.mockResolvedValue(null);
+            await expect(service.updateQuickEmoji('user-1', 'conv-1', { emoji: '❤️' }))
+                .rejects.toThrow(NotFoundException);
+        });
+
+        it('should throw ForbiddenException if user is not a member', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: 'conv-1' });
+            mockMemberRepo.findOne.mockResolvedValue(null);
+
+            await expect(service.updateQuickEmoji('user-1', 'conv-1', { emoji: '❤️' }))
+                .rejects.toThrow(ForbiddenException);
+        });
+
+        it('should throw BadRequestException if emoji is empty or blank', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: 'conv-1' });
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'm-1' });
+
+            await expect(service.updateQuickEmoji('user-1', 'conv-1', { emoji: '   ' }))
+                .rejects.toThrow(BadRequestException);
+        });
+
+        it('should update quickEmoji and emit conversation.customized', async () => {
+            const conv = { id: 'conv-1', quickEmoji: '👍' };
+            mockConversationRepo.findOne.mockResolvedValue(conv);
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'm-1' });
+
+            const result = await service.updateQuickEmoji('user-1', 'conv-1', { emoji: '🔥' });
+            expect(conv.quickEmoji).toBe('🔥');
+            expect(mockConversationRepo.save).toHaveBeenCalledWith(conv);
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'conversation.customized',
+                expect.objectContaining({
+                    conversationId: 'conv-1',
+                    changes: { quickEmoji: '🔥' },
+                }),
+            );
+            expect(result).toEqual({ quickEmoji: '🔥' });
         });
     });
 
@@ -1211,7 +1396,8 @@ describe('ConversationsService', () => {
 
             expect(result.isRecalled).toBe(true);
             expect(result.content).toBe('[Tin nhắn đã bị thu hồi]');
-            expect(result.fileUrl).toBeUndefined();
+            // null (không phải undefined) để TypeORM thực sự xóa fileUrl trong DB
+            expect(result.fileUrl).toBeNull();
             expect(mockEventEmitter.emit).toHaveBeenCalledWith(
                 'message.recalled',
                 expect.objectContaining({
@@ -1677,6 +1863,427 @@ describe('ConversationsService', () => {
             });
         });
     });
+
+    describe('searchMessages (FR-31, BR-30)', () => {
+        it('should return empty array if keyword is empty or whitespace', async () => {
+            const result = await service.searchMessages('u1', 'c1', '   ');
+            expect(result).toEqual([]);
+        });
+
+        it('should throw NotFoundException if conversation does not exist', async () => {
+            mockConversationRepo.findOne.mockResolvedValue(null);
+            await expect(service.searchMessages('u1', 'c1', 'hello')).rejects.toThrow(NotFoundException);
+        });
+
+        it('should throw ForbiddenException if user is not a member', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: 'c1' });
+            mockMemberRepo.findOne.mockResolvedValue(null);
+            await expect(service.searchMessages('u1', 'c1', 'hello')).rejects.toThrow(ForbiddenException);
+        });
+
+        it('should search messages matching keyword, excluding recalled messages', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: 'c1' });
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'm1' });
+            const mockMessages = [{ id: 'msg-1', content: 'hello world', isRecalled: false }];
+            mockMessageRepo.createQueryBuilder.mockReturnValue(createMockQueryBuilder(mockMessages));
+
+            const result = await service.searchMessages('u1', 'c1', 'hello');
+            expect(result).toEqual(mockMessages);
+        });
+    });
+
+    describe('toggleMute (FR-32, BR-31)', () => {
+        it('should throw NotFoundException if conversation does not exist', async () => {
+            mockConversationRepo.findOne.mockResolvedValue(null);
+            await expect(service.toggleMute('u1', 'c1', true)).rejects.toThrow(NotFoundException);
+        });
+
+        it('should throw ForbiddenException if user is not a member', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: 'c1' });
+            mockMemberRepo.findOne.mockResolvedValue(null);
+            await expect(service.toggleMute('u1', 'c1', true)).rejects.toThrow(ForbiddenException);
+        });
+
+        it('should update member isMuted and save', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: 'c1' });
+            const member = { id: 'm1', isMuted: false };
+            mockMemberRepo.findOne.mockResolvedValue(member);
+            mockMemberRepo.save.mockResolvedValue({ ...member, isMuted: true });
+
+            const result = await service.toggleMute('u1', 'c1', true);
+            expect(member.isMuted).toBe(true);
+            expect(mockMemberRepo.save).toHaveBeenCalledWith(member);
+            expect(result).toEqual({ conversationId: 'c1', isMuted: true });
+        });
+    });
+
+    // ==========================================
+    // Bổ sung: chặn, SYSTEM, edit window, FR-48 (clearedAt / pin / blockStatus)
+    // ==========================================
+    describe('BR-28 blocking enforcement in createMessage', () => {
+        const senderId = 'sender-1';
+        const partnerId = 'partner-1';
+        const conversationId = 'conv-direct-1';
+        const dto = { conversationId, content: 'hi', type: MessageType.TEXT };
+
+        const arrangeDirect = (blocker: 'sender' | 'partner' | null) => {
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'mem-1' });
+            mockConversationRepo.findOne.mockResolvedValue({ id: conversationId, type: ConversationType.DIRECT });
+            mockMemberRepo.find.mockResolvedValue([{ user: { id: senderId } }, { user: { id: partnerId } }]);
+            mockFriendshipRepo.find.mockResolvedValue(
+                blocker === null
+                    ? []
+                    : [
+                        {
+                            requester: { id: blocker === 'sender' ? senderId : partnerId },
+                            addressee: { id: blocker === 'sender' ? partnerId : senderId },
+                        },
+                    ],
+            );
+        };
+
+        it('rejects with CONVERSATION_BLOCKED + blocker message when the sender blocked the partner', async () => {
+            arrangeDirect('sender');
+
+            const error: any = await service.createMessage(senderId, dto).catch((e) => e);
+
+            expect(error).toBeInstanceOf(ForbiddenException);
+            expect(error.getResponse()).toEqual({
+                errorCode: 'CONVERSATION_BLOCKED',
+                message: 'Bạn đã chặn người dùng này',
+            });
+            expect(mockMessageRepo.save).not.toHaveBeenCalled();
+        });
+
+        it('rejects with CONVERSATION_BLOCKED + blocked message when the partner blocked the sender', async () => {
+            arrangeDirect('partner');
+
+            const error: any = await service.createMessage(senderId, dto).catch((e) => e);
+
+            expect(error).toBeInstanceOf(ForbiddenException);
+            expect(error.getResponse()).toEqual({
+                errorCode: 'CONVERSATION_BLOCKED',
+                message: 'Bạn không thể gửi tin nhắn cho người này',
+            });
+            expect(mockMessageRepo.save).not.toHaveBeenCalled();
+        });
+
+        it('does not run the block check for GROUP conversations', async () => {
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'mem-1' });
+            mockConversationRepo.findOne.mockResolvedValue({ id: conversationId, type: ConversationType.GROUP });
+            mockMessageRepo.save.mockResolvedValue({ id: 'm1', createdAt: new Date() });
+            mockMessageRepo.findOneOrFail.mockResolvedValue({ id: 'm1', sender: { id: senderId } });
+
+            await service.createMessage(senderId, dto);
+
+            expect(mockFriendshipRepo.find).not.toHaveBeenCalled();
+        });
+
+        it('allows sending in DIRECT when nobody is blocked', async () => {
+            arrangeDirect(null);
+            mockMessageRepo.save.mockResolvedValue({ id: 'm1', createdAt: new Date() });
+            mockMessageRepo.findOneOrFail.mockResolvedValue({ id: 'm1', sender: { id: senderId } });
+
+            await expect(service.createMessage(senderId, dto)).resolves.toBeDefined();
+            expect(mockMessageRepo.save).toHaveBeenCalled();
+        });
+    });
+
+    describe('BR-28 presence hiding & blockStatus', () => {
+        const me = 'user-me';
+        const partner = 'user-partner';
+
+        it('getInbox: forces isOnline=false and exposes blockStatus BLOCKED_BY_ME for blocked partner', async () => {
+            mockConversationRepo.createQueryBuilder.mockReturnValue(
+                createMockQueryBuilder([
+                    {
+                        id: 'conv-d',
+                        type: ConversationType.DIRECT,
+                        lastMessageId: null,
+                        members: [{ user: { id: me } }, { user: { id: partner, isOnline: true } }],
+                    },
+                ]),
+            );
+            mockFriendshipRepo.find.mockResolvedValue([{ requester: { id: me }, addressee: { id: partner } }]);
+
+            const [item] = await service.getInbox(me);
+
+            expect(item.blockStatus).toBe('BLOCKED_BY_ME');
+            expect(item.isOnline).toBe(false);
+        });
+
+        it('getInbox: BLOCKED_ME when the partner blocked the caller, still hides presence', async () => {
+            mockConversationRepo.createQueryBuilder.mockReturnValue(
+                createMockQueryBuilder([
+                    {
+                        id: 'conv-d',
+                        type: ConversationType.DIRECT,
+                        lastMessageId: null,
+                        members: [{ user: { id: me } }, { user: { id: partner, isOnline: true } }],
+                    },
+                ]),
+            );
+            mockFriendshipRepo.find.mockResolvedValue([{ requester: { id: partner }, addressee: { id: me } }]);
+
+            const [item] = await service.getInbox(me);
+
+            expect(item.blockStatus).toBe('BLOCKED_ME');
+            expect(item.isOnline).toBe(false);
+        });
+
+        it('getInbox: NONE keeps real presence; GROUP items have no blockStatus', async () => {
+            mockConversationRepo.createQueryBuilder.mockReturnValue(
+                createMockQueryBuilder([
+                    {
+                        id: 'conv-d',
+                        type: ConversationType.DIRECT,
+                        lastMessageId: null,
+                        members: [{ user: { id: me } }, { user: { id: partner, isOnline: true } }],
+                    },
+                    { id: 'conv-g', type: ConversationType.GROUP, lastMessageId: null, members: [{ user: { id: me } }] },
+                ]),
+            );
+
+            const inbox = await service.getInbox(me);
+
+            expect(inbox[0].blockStatus).toBe('NONE');
+            expect(inbox[0].isOnline).toBe(true);
+            expect(inbox[1].blockStatus).toBeUndefined();
+        });
+
+        it('getConversationDetail: hides partner presence and sets blockStatus when blocked', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({
+                id: 'conv-d',
+                type: ConversationType.DIRECT,
+                members: [
+                    { id: 'm1', role: ConversationRole.MEMBER, unreadCount: 0, user: { id: me, isOnline: true, lastSeen: new Date() } },
+                    { id: 'm2', role: ConversationRole.MEMBER, unreadCount: 0, user: { id: partner, isOnline: true, lastSeen: new Date() } },
+                ],
+            });
+            mockFriendshipRepo.find.mockResolvedValue([{ requester: { id: partner }, addressee: { id: me } }]);
+
+            const detail = await service.getConversationDetail(me, 'conv-d');
+
+            expect(detail.blockStatus).toBe('BLOCKED_ME');
+            const partnerUser = detail.members.find((m: any) => m.user.id === partner).user;
+            expect(partnerUser.isOnline).toBe(false);
+            expect(partnerUser.lastSeen).toBeNull();
+            // Presence của chính mình không bị ảnh hưởng
+            expect(detail.members.find((m: any) => m.user.id === me).user.isOnline).toBe(true);
+        });
+
+        it('getConversationActiveStatus: DIRECT with blocked partner is never active', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({
+                id: 'conv-d',
+                type: ConversationType.DIRECT,
+                members: [{ user: { id: me, isOnline: true } }, { user: { id: partner, isOnline: true } }],
+            });
+            mockFriendshipRepo.find.mockResolvedValue([{ requester: { id: me }, addressee: { id: partner } }]);
+
+            const result = await service.getConversationActiveStatus(me, 'conv-d');
+
+            expect(result.isActive).toBe(false);
+            expect(result.activeMemberCount).toBe(0);
+        });
+    });
+
+    describe('BR-36 SYSTEM message protection', () => {
+        const userId = 'user-1';
+        const conversationId = 'conv-1';
+        const messageId = 'sys-msg-1';
+        const systemMsg = {
+            id: messageId,
+            type: MessageType.SYSTEM,
+            sender: { id: userId },
+            isRecalled: false,
+            content: 'A đã tạo nhóm.',
+            createdAt: new Date(),
+        };
+
+        beforeEach(() => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: conversationId });
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'mem-1', user: { id: userId } });
+            mockMessageRepo.findOne.mockResolvedValue(systemMsg);
+        });
+
+        it('createMessage rejects type SYSTEM from clients with 400', async () => {
+            await expect(
+                service.createMessage(userId, { conversationId, content: 'fake', type: MessageType.SYSTEM }),
+            ).rejects.toThrow(BadRequestException);
+            expect(mockMessageRepo.save).not.toHaveBeenCalled();
+        });
+
+        it('createMessage rejects replying to a SYSTEM message', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: conversationId, type: ConversationType.GROUP });
+            await expect(
+                service.createMessage(userId, { conversationId, content: 'reply', type: MessageType.TEXT, replyToId: messageId }),
+            ).rejects.toThrow(BadRequestException);
+        });
+
+        it('reactMessage rejects SYSTEM message', async () => {
+            await expect(service.reactMessage(userId, conversationId, messageId, '👍')).rejects.toThrow(BadRequestException);
+            expect(mockReactionRepo.save).not.toHaveBeenCalled();
+        });
+
+        it('editMessage rejects SYSTEM message', async () => {
+            await expect(service.editMessage(userId, conversationId, messageId, 'changed')).rejects.toThrow(BadRequestException);
+            expect(mockMessageRepo.save).not.toHaveBeenCalled();
+        });
+
+        it('recallMessage rejects SYSTEM message', async () => {
+            await expect(service.recallMessage(userId, conversationId, messageId)).rejects.toThrow(BadRequestException);
+            expect(mockMessageRepo.save).not.toHaveBeenCalled();
+        });
+
+        it('pinMessage rejects SYSTEM message', async () => {
+            await expect(service.pinMessage(userId, conversationId, messageId)).rejects.toThrow(BadRequestException);
+            expect(mockMessageRepo.save).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('BR-M5-05 edit window (UTC compare, no modulo hack)', () => {
+        const userId = 'user-1';
+        const conversationId = 'conv-1';
+        const messageId = 'msg-1';
+
+        const arrange = (createdAt: Date) => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: conversationId });
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'mem-1' });
+            mockMemberRepo.find.mockResolvedValue([]);
+            mockMessageRepo.findOne.mockResolvedValue({
+                id: messageId,
+                type: MessageType.TEXT,
+                sender: { id: userId },
+                isRecalled: false,
+                content: 'old',
+                createdAt,
+            });
+        };
+
+        it('rejects a message sent 1h05m ago (previously passed because of % 1h)', async () => {
+            arrange(new Date(Date.now() - 65 * 60 * 1000));
+            await expect(service.editMessage(userId, conversationId, messageId, 'new')).rejects.toThrow(BadRequestException);
+        });
+
+        it('rejects a message sent 2h10m ago', async () => {
+            arrange(new Date(Date.now() - 130 * 60 * 1000));
+            await expect(service.editMessage(userId, conversationId, messageId, 'new')).rejects.toThrow(BadRequestException);
+        });
+
+        it('accepts a message sent 14 minutes ago', async () => {
+            arrange(new Date(Date.now() - 14 * 60 * 1000));
+            await expect(service.editMessage(userId, conversationId, messageId, 'new')).resolves.toBeDefined();
+        });
+
+        it('accepts a message whose createdAt is slightly in the future (clock skew)', async () => {
+            arrange(new Date(Date.now() + 30 * 1000));
+            await expect(service.editMessage(userId, conversationId, messageId, 'new')).resolves.toBeDefined();
+        });
+    });
+
+    describe('FR-48 clearedAt filtering & inbox pin/clear', () => {
+        const me = 'user-me';
+        const clearedAt = new Date('2026-10-10T10:00:00.000Z');
+
+        it('getMessages adds createdAt > clearedAt filter when the member cleared history', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: 'c1' });
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'm1', clearedAt });
+            const qb = createMockQueryBuilder([]);
+            mockMessageRepo.createQueryBuilder.mockReturnValue(qb);
+
+            await service.getMessages(me, 'c1', {});
+
+            expect(qb.andWhere).toHaveBeenCalledWith('m.createdAt > :clearedAt', { clearedAt });
+        });
+
+        it('getMessages does not filter when history was never cleared', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: 'c1' });
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'm1', clearedAt: null });
+            const qb = createMockQueryBuilder([]);
+            mockMessageRepo.createQueryBuilder.mockReturnValue(qb);
+
+            await service.getMessages(me, 'c1', {});
+
+            expect(qb.andWhere).not.toHaveBeenCalledWith('m.createdAt > :clearedAt', expect.anything());
+        });
+
+        it('getMediaMessages and searchMessages respect clearedAt', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: 'c1' });
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'm1', clearedAt });
+            const qb = createMockQueryBuilder([]);
+            mockMessageRepo.createQueryBuilder.mockReturnValue(qb);
+
+            await service.getMediaMessages(me, 'c1', {});
+            await service.searchMessages(me, 'c1', 'hello');
+
+            expect(qb.andWhere.mock.calls.filter((c: any[]) => c[0] === 'm.createdAt > :clearedAt')).toHaveLength(2);
+        });
+
+        it('getPinnedMessages respects clearedAt (createdAt > clearedAt)', async () => {
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'm1', clearedAt });
+            mockMessageRepo.find.mockResolvedValue([]);
+
+            await service.getPinnedMessages(me, 'c1');
+
+            const where = mockMessageRepo.find.mock.calls[0][0].where;
+            expect(where.createdAt).toBeDefined();
+        });
+
+        it('searchMessages caps results at 50, newest first', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: 'c1' });
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'm1' });
+            const qb = createMockQueryBuilder([]);
+            mockMessageRepo.createQueryBuilder.mockReturnValue(qb);
+
+            await service.searchMessages(me, 'c1', 'hello');
+
+            expect(qb.take).toHaveBeenCalledWith(50);
+            expect(qb.orderBy).toHaveBeenCalledWith('m.createdAt', 'DESC');
+        });
+
+        const directConv = (id: string, lastMessageId: string | null, members: any[]) => ({
+            id,
+            type: ConversationType.DIRECT,
+            lastMessageId,
+            members: [...members, { user: { id: `${id}-partner` } }],
+        });
+
+        it('getInbox hides a cleared conversation until a newer message arrives, and shows it afterwards', async () => {
+            mockConversationRepo.createQueryBuilder.mockReturnValue(
+                createMockQueryBuilder([
+                    directConv('conv-cleared', 'msg-old', [{ user: { id: me }, clearedAt }]),
+                    directConv('conv-revived', 'msg-new', [{ user: { id: me }, clearedAt }]),
+                    directConv('conv-cleared-empty', null, [{ user: { id: me }, clearedAt }]),
+                ]),
+            );
+            mockMessageRepo.find.mockResolvedValue([
+                { id: 'msg-old', content: 'old', type: MessageType.TEXT, createdAt: new Date('2026-10-09T00:00:00.000Z'), sender: { id: 'x' } },
+                { id: 'msg-new', content: 'new', type: MessageType.TEXT, createdAt: new Date('2026-10-11T00:00:00.000Z'), sender: { id: 'x' } },
+            ]);
+
+            const inbox = await service.getInbox(me);
+
+            expect(inbox.map((i) => i.id)).toEqual(['conv-revived']);
+            expect(inbox[0].lastMessage.content).toBe('new');
+        });
+
+        it('getInbox exposes isPinned/pinnedAt and orders pinned first by pinnedAt DESC, then the original order', async () => {
+            const older = new Date('2026-10-01T00:00:00.000Z');
+            const newer = new Date('2026-10-05T00:00:00.000Z');
+            mockConversationRepo.createQueryBuilder.mockReturnValue(
+                createMockQueryBuilder([
+                    directConv('conv-a', null, [{ user: { id: me }, isPinned: false }]),
+                    directConv('conv-b', null, [{ user: { id: me }, isPinned: true, pinnedAt: older }]),
+                    directConv('conv-c', null, [{ user: { id: me }, isPinned: false }]),
+                    directConv('conv-d', null, [{ user: { id: me }, isPinned: true, pinnedAt: newer }]),
+                ]),
+            );
+
+            const inbox = await service.getInbox(me);
+
+            expect(inbox.map((i) => i.id)).toEqual(['conv-d', 'conv-b', 'conv-a', 'conv-c']);
+            expect(inbox[0]).toMatchObject({ isPinned: true, pinnedAt: newer });
+            expect(inbox[2]).toMatchObject({ isPinned: false, pinnedAt: null });
+        });
+    });
 });
-
-

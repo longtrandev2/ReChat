@@ -27,12 +27,23 @@ export class MediaService {
         '.sh',
         '.php',
         '.js',
+        '.ts',
         '.mjs',
         '.py',
         '.dll',
         '.bin',
         '.msi',
         '.vbs',
+        '.ps1',
+        '.scr',
+        '.com',
+        '.pif',
+        '.app',
+        '.dmg',
+        '.pkg',
+        '.iso',
+        '.html',
+        '.htm',
     ];
 
     private readonly ALLOWED_IMAGE_MIMES = [
@@ -45,14 +56,36 @@ export class MediaService {
     private readonly ALLOWED_IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
 
     private readonly ALLOWED_FILE_EXTS = [
+        // Documents & text
         '.pdf',
         '.doc',
         '.docx',
         '.xls',
         '.xlsx',
+        '.ppt',
+        '.pptx',
+        '.csv',
+        '.txt',
+        '.md',
+        '.rtf',
+        // Safe Data / Config
+        '.json',
+        '.xml',
+        '.yaml',
+        '.yml',
+        '.log',
+        // Compressed Archives
         '.zip',
         '.rar',
-        '.txt',
+        '.7z',
+        '.tar',
+        '.gz',
+        // Audio
+        '.mp3',
+        '.wav',
+        '.m4a',
+        '.ogg',
+        '.aac',
     ];
 
     private readonly MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB

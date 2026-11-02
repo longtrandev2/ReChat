@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { AllExceptionsFilter } from './all-exceptions.filter.js';
-import { ArgumentsHost, BadRequestException, HttpStatus } from '@nestjs/common';
+import { ArgumentsHost, BadRequestException, HttpStatus, UnauthorizedException } from '@nestjs/common';
 
 describe('AllExceptionsFilter', () => {
     const filter = new AllExceptionsFilter();
@@ -31,6 +31,27 @@ describe('AllExceptionsFilter', () => {
         );
     });
 
+    it('should forward a machine-readable errorCode when the exception provides one', () => {
+        const jsonMock = vi.fn();
+        const statusMock = vi.fn().mockReturnValue({ json: jsonMock });
+        const mockHost = {
+            switchToHttp: () => ({
+                getResponse: () => ({ status: statusMock }),
+                getRequest: () => ({ url: '/api/v1/auth/change-password' }),
+            }),
+        } as unknown as ArgumentsHost;
+
+        filter.catch(
+            new UnauthorizedException({ errorCode: 'INVALID_CURRENT_PASSWORD', message: 'Sai mật khẩu' }),
+            mockHost,
+        );
+
+        expect(statusMock).toHaveBeenCalledWith(401);
+        expect(jsonMock).toHaveBeenCalledWith(
+            expect.objectContaining({ errorCode: 'INVALID_CURRENT_PASSWORD', message: 'Sai mật khẩu' }),
+        );
+    });
+
     it('should format standard Error as 500 Internal Server Error', () => {
         const jsonMock = vi.fn();
         const statusMock = vi.fn().mockReturnValue({ json: jsonMock });
@@ -51,9 +72,11 @@ describe('AllExceptionsFilter', () => {
             expect.objectContaining({
                 success: false,
                 statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
-                message: 'Database crash',
+                message: 'Internal server error',
                 path: '/api/v1/unknown',
             }),
         );
+        // Không lộ thông điệp lỗi thật ra response
+        expect(JSON.stringify(jsonMock.mock.calls[0][0])).not.toContain('Database crash');
     });
 });

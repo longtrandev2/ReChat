@@ -206,10 +206,32 @@ describe('TokenManagerService', () => {
                 return null;
             });
 
-            const result = await service.rotateRefreshToken('old-token-id.any-secret');
+            const result = await service.rotateRefreshToken('old-token-id.any-secret', 'tab-1');
             expect(result).toEqual(cachedPair);
             // Must NOT call signAsync again
             expect(mockJwtService.signAsync).not.toHaveBeenCalled();
+        });
+
+        it('should throw UnauthorizedException if deviceId does not match during 30s Grace Period', async () => {
+            const cachedPair = {
+                accessToken: 'grace-access-token',
+                refreshToken: 'new-token-id.secret',
+                familyId: 'family-1',
+                deviceId: 'device-original',
+                jti: 'jti-1',
+                userId: 'user-uuid-1',
+            };
+
+            mockRedisService.get.mockImplementation(async (key: string) => {
+                if (key === 'auth:grace:old-token-id') {
+                    return JSON.stringify(cachedPair);
+                }
+                return null;
+            });
+
+            await expect(
+                service.rotateRefreshToken('old-token-id.any-secret', 'device-attacker'),
+            ).rejects.toThrow(UnauthorizedException);
         });
 
         it('should successfully rotate token, record in grace period, and record in invalidated tracker', async () => {
@@ -257,6 +279,86 @@ describe('TokenManagerService', () => {
                 'family-uuid',
                 REFRESH_TOKEN_TTL_SECONDS,
             );
+        });
+
+        describe('revocation checks on refresh (H1 / M2 / M3)', () => {
+            const secret = 'old-secret-123';
+            const createdAt = 1_800_000_000_000;
+            const record = {
+                tokenId: 'old-token-id',
+                familyId: 'family-uuid',
+                userId: 'user-1',
+                username: 'alice',
+                role: 'USER',
+                deviceId: 'desktop-chrome',
+                tokenHash: createHash('sha256').update(secret).digest('hex'),
+                createdAt,
+                expiresAt: createdAt + 10000,
+            };
+
+            const mockKeys = (extra: Record<string, string>) =>
+                mockRedisService.get.mockImplementation(async (key: string) => {
+                    if (key === 'auth:refresh:old-token-id') return JSON.stringify(record);
+                    return extra[key] ?? null;
+                });
+
+            const expectRejectedAndFamilyRevoked = async () => {
+                mockRedisService.smembers.mockResolvedValue(['old-token-id']);
+                await expect(
+                    service.rotateRefreshToken(`old-token-id.${secret}`, 'desktop-chrome'),
+                ).rejects.toThrow(UnauthorizedException);
+                expect(mockRedisService.del).toHaveBeenCalledWith('auth:family:family-uuid');
+            };
+
+            it('rejects a token issued before the user revocation marker (password reset)', async () => {
+                mockKeys({ 'auth:user_min_issued_at:user-1': String(createdAt + 1) });
+                await expectRejectedAndFamilyRevoked();
+                expect(mockJwtService.signAsync).not.toHaveBeenCalled();
+            });
+
+            it('rejects a token issued before the device revocation marker (remote logout / change password)', async () => {
+                mockKeys({ 'auth:device_min_issued_at:user-1:desktop-chrome': String(createdAt + 1) });
+                await expectRejectedAndFamilyRevoked();
+            });
+
+            it('rejects a family superseded by a newer login on the same device', async () => {
+                mockKeys({ 'auth:device_family:user-1:desktop-chrome': 'newer-family' });
+                await expectRejectedAndFamilyRevoked();
+            });
+
+            it('re-checks after issuing the new pair so a revoke racing the refresh cannot revive the family (M2)', async () => {
+                let markerVisible = false;
+                mockRedisService.get.mockImplementation(async (key: string) => {
+                    if (key === 'auth:refresh:old-token-id') return JSON.stringify(record);
+                    if (key === 'auth:device_min_issued_at:user-1:desktop-chrome') {
+                        return markerVisible ? String(createdAt + 1) : null;
+                    }
+                    return null;
+                });
+                // Revoke xảy ra đúng lúc token mới đang được ký
+                mockJwtService.signAsync.mockImplementation(async () => {
+                    markerVisible = true;
+                    return 'mock-access-token-jwt';
+                });
+
+                await expectRejectedAndFamilyRevoked();
+                expect(mockRedisService.set).not.toHaveBeenCalledWith(
+                    'auth:grace:old-token-id',
+                    expect.any(String),
+                    expect.any(Number),
+                );
+            });
+
+            it('allows a token issued after the markers (re-login after revocation)', async () => {
+                mockKeys({
+                    'auth:user_min_issued_at:user-1': String(createdAt - 5000),
+                    'auth:device_min_issued_at:user-1:desktop-chrome': String(createdAt - 1),
+                    'auth:device_family:user-1:desktop-chrome': 'family-uuid',
+                });
+
+                const result = await service.rotateRefreshToken(`old-token-id.${secret}`, 'desktop-chrome');
+                expect(result.familyId).toBe('family-uuid');
+            });
         });
 
         it('should throw UnauthorizedException if deviceId does not match record deviceId (Device Binding mismatch)', async () => {
@@ -319,6 +421,108 @@ describe('TokenManagerService', () => {
         });
     });
 
+    describe('device-bound revocation (remote logout / password change)', () => {
+        it('should include the device id (did) in the access token payload', async () => {
+            await service.generateTokenPair(mockUser, 'chrome-desktop');
+
+            expect(mockJwtService.signAsync).toHaveBeenCalledWith(
+                expect.objectContaining({ sub: 'user-uuid-1', did: 'chrome-desktop' }),
+                expect.any(Object),
+            );
+        });
+
+        it('should bind the new family to the device and revoke the device previous family on re-login', async () => {
+            mockRedisService.get.mockImplementation(async (key: string) =>
+                key === 'auth:device_family:user-uuid-1:chrome-desktop' ? 'old-family' : null,
+            );
+            mockRedisService.smembers.mockResolvedValue(['old-token-1']);
+
+            const result = await service.generateTokenPair(mockUser, 'chrome-desktop');
+
+            expect(mockRedisService.del).toHaveBeenCalledWith('auth:refresh:old-token-1');
+            expect(mockRedisService.del).toHaveBeenCalledWith('auth:family:old-family');
+            expect(mockRedisService.set).toHaveBeenCalledWith(
+                'auth:device_family:user-uuid-1:chrome-desktop',
+                result.familyId,
+                2592000,
+            );
+            expect(mockRedisService.sadd).toHaveBeenCalledWith('auth:user_token_devices:user-uuid-1', 'chrome-desktop');
+        });
+
+        it('should NOT revoke the family during rotation of the same family', async () => {
+            await service.generateTokenPair(mockUser, 'chrome-desktop', 'family-keep');
+
+            expect(mockRedisService.del).not.toHaveBeenCalledWith('auth:family:family-keep');
+            expect(mockRedisService.set).toHaveBeenCalledWith(
+                'auth:device_family:user-uuid-1:chrome-desktop',
+                'family-keep',
+                2592000,
+            );
+        });
+
+        it('rotation must NOT overwrite a device key that already points to another family (M3)', async () => {
+            mockRedisService.get.mockImplementation(async (key: string) =>
+                key === 'auth:device_family:user-uuid-1:chrome-desktop' ? 'newer-family' : null,
+            );
+
+            await service.generateTokenPair(mockUser, 'chrome-desktop', 'older-family');
+
+            expect(mockRedisService.set).not.toHaveBeenCalledWith(
+                'auth:device_family:user-uuid-1:chrome-desktop',
+                expect.any(String),
+                expect.any(Number),
+            );
+            expect(mockRedisService.del).not.toHaveBeenCalledWith('auth:family:newer-family');
+        });
+
+        it('should add a millisecond issued-at claim (iatMs) to the access token (M1)', async () => {
+            const before = Date.now();
+            await service.generateTokenPair(mockUser, 'chrome-desktop');
+
+            const payload = mockJwtService.signAsync.mock.calls[0][0];
+            expect(payload.iatMs).toBeGreaterThanOrEqual(before);
+            expect(payload.iatMs).toBeLessThanOrEqual(Date.now());
+        });
+
+        it('revokeDevice should kill the family and set a device min-issued-at marker', async () => {
+            mockRedisService.get.mockResolvedValue('family-x');
+            mockRedisService.smembers.mockResolvedValue(['t1', 't2']);
+
+            await service.revokeDevice('user-uuid-1', 'phone');
+
+            expect(mockRedisService.del).toHaveBeenCalledWith('auth:refresh:t1', 'auth:refresh:t2');
+            expect(mockRedisService.del).toHaveBeenCalledWith('auth:family:family-x');
+            expect(mockRedisService.del).toHaveBeenCalledWith('auth:device_family:user-uuid-1:phone');
+            expect(mockRedisService.srem).toHaveBeenCalledWith('auth:user_token_devices:user-uuid-1', 'phone');
+            // Mốc ms, sống 30 ngày vì /auth/refresh cũng đối chiếu
+            expect(mockRedisService.set).toHaveBeenCalledWith(
+                'auth:device_min_issued_at:user-uuid-1:phone',
+                expect.stringMatching(/^\d{13}$/),
+                REFRESH_TOKEN_TTL_SECONDS,
+            );
+        });
+
+        it('revokeAllDevices should revoke every device except the excluded one', async () => {
+            mockRedisService.smembers.mockImplementation(async (key: string) => {
+                if (key === 'auth:user_token_devices:user-uuid-1') return ['laptop', 'phone'];
+                // Thiết bị đăng nhập trước khi có chỉ mục chỉ nằm trong tập session cũ
+                if (key === 'auth:user_sessions:user-uuid-1') return ['phone', 'tablet'];
+                return [];
+            });
+            mockRedisService.get.mockResolvedValue(null);
+
+            const revoked = await service.revokeAllDevices('user-uuid-1', 'laptop');
+
+            expect(revoked).toEqual(['phone', 'tablet']);
+            expect(mockRedisService.set).toHaveBeenCalledWith(
+                'auth:device_min_issued_at:user-uuid-1:tablet', expect.any(String), REFRESH_TOKEN_TTL_SECONDS,
+            );
+            expect(mockRedisService.set).not.toHaveBeenCalledWith(
+                'auth:device_min_issued_at:user-uuid-1:laptop', expect.any(String), expect.any(Number),
+            );
+        });
+    });
+
     describe('revokeToken & revokeFamily', () => {
         it('should revoke individual token and remove from family', async () => {
             await service.revokeToken('token-1', 'family-1');
@@ -337,6 +541,14 @@ describe('TokenManagerService', () => {
                 'auth:refresh:token-b',
             );
             expect(mockRedisService.del).toHaveBeenCalledWith('auth:family:family-1');
+        });
+
+        it('should also delete grace cache entries of the family tokens', async () => {
+            mockRedisService.smembers.mockResolvedValue(['token-a', 'token-b']);
+
+            await service.revokeFamily('family-1');
+
+            expect(mockRedisService.del).toHaveBeenCalledWith('auth:grace:token-a', 'auth:grace:token-b');
         });
     });
 });

@@ -1,11 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
-import { MessageComposer } from './MessageComposer'
+import { MessageComposer, type MessageComposerHandle } from './MessageComposer'
 import { socketClient } from '@/services/socket.client'
 import { mediaApi } from '../services/media.api'
 import { useMessagesStore } from '../stores/messages.store'
 
+import { toast } from 'sonner'
 import type { Socket } from 'socket.io-client'
+
+vi.mock('sonner', () => ({
+  toast: {
+    error: vi.fn(),
+    warning: vi.fn(),
+    success: vi.fn(),
+    info: vi.fn(),
+  },
+}))
 
 vi.mock('@/services/socket.client', () => ({
   socketClient: {
@@ -34,24 +44,85 @@ describe('MessageComposer Component Tests', () => {
     vi.useRealTimers()
   })
 
-  it('renders input field with Send button initially disabled', () => {
+  it('renders input field with Quick Emoji button initially enabled when empty', () => {
     render(<MessageComposer conversationId="conv-1" onSendMessage={vi.fn()} />)
 
     const textarea = screen.getByLabelText('Nội dung tin nhắn')
-    const sendButton = screen.getByRole('button', { name: 'Gửi tin nhắn' })
+    const quickEmojiBtn = screen.getByRole('button', {
+      name: 'Gửi biểu tượng cảm xúc nhanh (👍)',
+    })
 
     expect(textarea).toBeInTheDocument()
-    expect(sendButton).toBeDisabled()
+    expect(quickEmojiBtn).toBeInTheDocument()
+    expect(quickEmojiBtn).not.toBeDisabled()
   })
 
-  it('enables send button when user types valid text', () => {
+  it('sends default quick emoji when clicking quick emoji button', async () => {
+    const onSend = vi.fn()
+    render(<MessageComposer conversationId="conv-1" onSendMessage={onSend} />)
+
+    const quickEmojiBtn = screen.getByRole('button', {
+      name: 'Gửi biểu tượng cảm xúc nhanh (👍)',
+    })
+    await act(async () => {
+      fireEvent.click(quickEmojiBtn)
+    })
+
+    expect(onSend).toHaveBeenCalledWith('👍')
+  })
+
+  it('supports custom quickEmoji prop (e.g. 🔥)', async () => {
+    const onSend = vi.fn()
+    render(
+      <MessageComposer
+        conversationId="conv-1"
+        quickEmoji="🔥"
+        onSendMessage={onSend}
+      />
+    )
+
+    const customEmojiBtn = screen.getByRole('button', {
+      name: 'Gửi biểu tượng cảm xúc nhanh (🔥)',
+    })
+    expect(customEmojiBtn).toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(customEmojiBtn)
+    })
+
+    expect(onSend).toHaveBeenCalledWith('🔥')
+  })
+
+  it('morphs quick emoji button into send button when user types text', () => {
     render(<MessageComposer conversationId="conv-1" onSendMessage={vi.fn()} />)
+
+    expect(
+      screen.getByRole('button', {
+        name: 'Gửi biểu tượng cảm xúc nhanh (👍)',
+      })
+    ).toBeInTheDocument()
 
     const textarea = screen.getByLabelText('Nội dung tin nhắn')
     fireEvent.change(textarea, { target: { value: 'Chào bạn' } })
 
     const sendButton = screen.getByRole('button', { name: 'Gửi tin nhắn' })
+    expect(sendButton).toBeInTheDocument()
     expect(sendButton).not.toBeDisabled()
+  })
+
+  it('opens emoji picker popover when clicking the smile button', async () => {
+    render(<MessageComposer conversationId="conv-1" onSendMessage={vi.fn()} />)
+
+    const smileBtn = screen.getByRole('button', {
+      name: 'Chọn biểu tượng cảm xúc',
+    })
+    expect(smileBtn).toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(smileBtn)
+    })
+
+    expect(smileBtn).toHaveAttribute('aria-expanded', 'true')
   })
 
   it('calls onSendMessage and clears input when clicking send', async () => {
@@ -288,6 +359,16 @@ describe('MessageComposer Component Tests', () => {
     expect(screen.queryByText('Đang chỉnh sửa:')).not.toBeInTheDocument()
   })
 
+  it('cancels edit mode when pressing Escape in the textarea (FR-39)', () => {
+    useMessagesStore.getState().setEditingMessage({ id: 'msg-edit-1', content: 'Nội dung ban đầu' })
+    render(<MessageComposer conversationId="conv-1" onSendMessage={vi.fn()} />)
+
+    fireEvent.keyDown(screen.getByLabelText('Nội dung tin nhắn'), { key: 'Escape' })
+
+    expect(useMessagesStore.getState().editingMessage).toBeNull()
+    expect(screen.getByLabelText('Nội dung tin nhắn')).toHaveValue('')
+  })
+
   it('displays reply banner and sends message with replyToId', async () => {
     const onSend = vi.fn()
     const mockReplyingMsg = {
@@ -357,6 +438,67 @@ describe('MessageComposer Component Tests', () => {
 
     expect(useMessagesStore.getState().replyingMessage).toBeNull()
     expect(screen.queryByTestId('reply-banner')).not.toBeInTheDocument()
+  })
+
+  it('has accept attribute including markdown, pdf, office, archives, audio and images', () => {
+    render(<MessageComposer conversationId="conv-1" onSendMessage={vi.fn()} />)
+    const fileInput = screen.getByTestId('file-upload-input')
+    const accept = fileInput.getAttribute('accept')
+    expect(accept).toContain('image/*')
+    expect(accept).toContain('.md')
+    expect(accept).toContain('.pdf')
+    expect(accept).toContain('.mp3')
+    expect(accept).toContain('.7z')
+  })
+
+  it('rejects blacklisted executable file and shows error toast', async () => {
+    render(<MessageComposer conversationId="conv-1" onSendMessage={vi.fn()} />)
+    const fileInput = screen.getByTestId('file-upload-input')
+    const exeFile = new File(['binary'], 'virus.exe', { type: 'application/x-msdownload' })
+
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [exeFile] } })
+    })
+
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining('bị cấm vì lý do an toàn bảo mật'),
+      expect.objectContaining({ id: 'file-invalid-virus.exe' })
+    )
+    expect(screen.queryByTestId('attachment-preview-strip')).not.toBeInTheDocument()
+  })
+
+  it('handles adding files via ref handle and deduplicates toast with id', async () => {
+    const ref = { current: null as MessageComposerHandle | null }
+
+    render(
+      <MessageComposer
+        ref={ref}
+        conversationId="conv-1"
+        onSendMessage={vi.fn()}
+      />
+    )
+
+    expect(screen.queryByTestId('attachment-preview-strip')).not.toBeInTheDocument()
+
+    // Test ref.current.addFiles with valid markdown file
+    const mdFile = new File(['# Title'], 'doc.md', { type: 'text/markdown' })
+    await act(async () => {
+      ref.current?.addFiles([mdFile])
+    })
+
+    expect(screen.getByTestId('attachment-preview-strip')).toBeInTheDocument()
+    expect(screen.getByText('doc.md')).toBeInTheDocument()
+
+    // Test ref.current.addFiles with blacklisted file
+    const exeFile = new File(['code'], 'malware.exe', { type: 'application/x-msdownload' })
+    await act(async () => {
+      ref.current?.addFiles([exeFile])
+    })
+
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining('bị cấm vì lý do an toàn bảo mật'),
+      expect.objectContaining({ id: 'file-invalid-malware.exe' })
+    )
   })
 })
 

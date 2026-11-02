@@ -1,4 +1,5 @@
-import { Users, MoreHorizontal } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { Users, Pin } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage, PresenceDot } from '@/components/ui/avatar'
 import { formatConversationTime } from '../utils/format-time'
 import type { Conversation } from '../types/conversation.types'
@@ -9,7 +10,8 @@ interface ConversationItemProps {
   isActive?: boolean
   isOnline?: boolean
   onClick?: () => void
-  onActionClick?: (e: React.MouseEvent) => void
+  /** Menu hành động (⋯) do component cha cung cấp; render ngoài role=option để tránh lồng phần tử tương tác */
+  actionMenu?: ReactNode
 }
 
 /**
@@ -25,7 +27,7 @@ export function ConversationItem({
   isActive = false,
   isOnline = false,
   onClick,
-  onActionClick,
+  actionMenu,
 }: ConversationItemProps) {
   const isGroup = conversation.type === 'GROUP'
   const hasUnread = conversation.unreadCount > 0
@@ -53,6 +55,14 @@ export function ConversationItem({
       return <span className="font-medium text-brand dark:text-brand-accent">[Hình ảnh]</span>
     }
 
+    if (lastMsg.type === 'SYSTEM') {
+      return (
+        <span className={cn('truncate italic text-ink-secondary dark:text-ink-secondary-dark', hasUnread && 'text-ink-primary dark:text-ink-primary-dark font-medium')}>
+          {lastMsg.content}
+        </span>
+      )
+    }
+
     if (lastMsg.type === 'FILE' || lastMsg.type === 'RAW') {
       return (
         <span className={cn('truncate', hasUnread && 'text-ink-primary dark:text-ink-primary-dark font-medium')}>
@@ -78,6 +88,7 @@ export function ConversationItem({
   )
 
   return (
+    <div className="relative group/item">
     <button
       type="button"
       role="option"
@@ -137,25 +148,14 @@ export function ConversationItem({
           <div className="truncate flex-1 pr-1">{renderSnippet()}</div>
 
           <div className="flex items-center gap-1 shrink-0">
-            {/* Quick Action Button - Appears on Hover */}
-            <span
-              role="button"
-              tabIndex={0}
-              aria-label="Tùy chọn hội thoại"
-              onClick={(e) => {
-                e.stopPropagation()
-                onActionClick?.(e)
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.stopPropagation()
-                  onActionClick?.(e as unknown as React.MouseEvent)
-                }
-              }}
-              className="p-1 rounded-md opacity-0 group-hover:opacity-100 hover:bg-black/10 dark:hover:bg-white/10 hover:text-ink-primary dark:hover:text-white transition-all duration-150 cursor-pointer"
-            >
-              <MoreHorizontal className="w-3.5 h-3.5" />
-            </span>
+            {/* Biểu tượng ghim (FR-48) */}
+            {conversation.isPinned && (
+              <Pin
+                data-testid="pin-indicator"
+                aria-label="Đã ghim"
+                className="w-3.5 h-3.5 text-ink-muted rotate-45 fill-current"
+              />
+            )}
 
             {/* Unread Counter Badge */}
             {hasUnread && (
@@ -170,5 +170,11 @@ export function ConversationItem({
         </div>
       </div>
     </button>
+    {actionMenu && (
+      <div className="absolute right-2 bottom-1.5 z-10 opacity-0 group-hover/item:opacity-100 focus-within:opacity-100 has-[[data-state=open]]:opacity-100 transition-opacity">
+        {actionMenu}
+      </div>
+    )}
+    </div>
   )
 }

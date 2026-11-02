@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConversationsController } from './conversations.controller.js';
 import { ConversationsService } from './conversations.service.js';
+import { ConversationActionsService } from './conversation-actions.service.js';
 import { User } from '../users/entities/user.entity.js';
 import { ConversationRole } from './entities/conversation-member.entity.js';
 import { MessageType } from './entities/message.entity.js';
@@ -9,6 +10,7 @@ import { MessageType } from './entities/message.entity.js';
 describe('ConversationsController', () => {
     let controller: ConversationsController;
     let mockConversationsService: any;
+    let mockActionsService: any;
 
     const mockCurrentUser = {
         id: 'user-current-id',
@@ -26,6 +28,7 @@ describe('ConversationsController', () => {
             markAsRead: vi.fn(),
             getConversationDetail: vi.fn(),
             updateGroup: vi.fn(),
+            updateQuickEmoji: vi.fn(),
             kickMember: vi.fn(),
             transferOwnership: vi.fn(),
             updateMemberRole: vi.fn(),
@@ -37,6 +40,13 @@ describe('ConversationsController', () => {
             recallMessage: vi.fn(),
             editMessage: vi.fn(),
             reactMessage: vi.fn(),
+            searchMessages: vi.fn(),
+            toggleMute: vi.fn(),
+        };
+
+        mockActionsService = {
+            setPinned: vi.fn(),
+            clearHistory: vi.fn(),
         };
 
         const module: TestingModule = await Test.createTestingModule({
@@ -45,6 +55,10 @@ describe('ConversationsController', () => {
                 {
                     provide: ConversationsService,
                     useValue: mockConversationsService,
+                },
+                {
+                    provide: ConversationActionsService,
+                    useValue: mockActionsService,
                 },
             ],
         }).compile();
@@ -157,6 +171,18 @@ describe('ConversationsController', () => {
             const result = await controller.updateGroup(mockCurrentUser, 'conv-1', dto);
             expect(mockConversationsService.updateGroup).toHaveBeenCalledWith(mockCurrentUser.id, 'conv-1', dto);
             expect(result).toEqual(mockUpdated);
+        });
+    });
+
+    describe('updateQuickEmoji', () => {
+        it('should delegate to service.updateQuickEmoji with dto', async () => {
+            const dto = { emoji: '❤️' };
+            const mockResult = { quickEmoji: '❤️' };
+            mockConversationsService.updateQuickEmoji.mockResolvedValue(mockResult);
+
+            const result = await controller.updateQuickEmoji(mockCurrentUser, 'conv-1', dto);
+            expect(mockConversationsService.updateQuickEmoji).toHaveBeenCalledWith(mockCurrentUser.id, 'conv-1', dto);
+            expect(result).toEqual(mockResult);
         });
     });
 
@@ -292,6 +318,61 @@ describe('ConversationsController', () => {
                 'msg-1',
                 dto.emoji,
             );
+            expect(result).toEqual(mockResult);
+        });
+    });
+
+    describe('searchMessages', () => {
+        it('should delegate to service.searchMessages with user id, conversation id, and query', async () => {
+            const mockMessages = [{ id: 'msg-1', content: 'test message' }];
+            mockConversationsService.searchMessages.mockResolvedValue(mockMessages);
+
+            const result = await controller.searchMessages(mockCurrentUser, 'conv-1', 'test');
+            expect(mockConversationsService.searchMessages).toHaveBeenCalledWith(
+                mockCurrentUser.id,
+                'conv-1',
+                'test',
+            );
+            expect(result).toEqual(mockMessages);
+        });
+    });
+
+    describe('toggleMute', () => {
+        it('should delegate to service.toggleMute with user id, conversation id, and isMuted', async () => {
+            const dto = { isMuted: true };
+            const mockResult = { conversationId: 'conv-1', isMuted: true };
+            mockConversationsService.toggleMute.mockResolvedValue(mockResult);
+
+            const result = await controller.toggleMute(mockCurrentUser, 'conv-1', dto);
+            expect(mockConversationsService.toggleMute).toHaveBeenCalledWith(
+                mockCurrentUser.id,
+                'conv-1',
+                true,
+            );
+            expect(result).toEqual(mockResult);
+        });
+    });
+
+    describe('togglePin (FR-48)', () => {
+        it('should delegate to actions service with user id, conversation id and isPinned', async () => {
+            const mockResult = { conversationId: 'conv-1', isPinned: true, pinnedAt: new Date() };
+            mockActionsService.setPinned.mockResolvedValue(mockResult);
+
+            const result = await controller.togglePin(mockCurrentUser, 'conv-1', { isPinned: true });
+
+            expect(mockActionsService.setPinned).toHaveBeenCalledWith(mockCurrentUser.id, 'conv-1', true);
+            expect(result).toEqual(mockResult);
+        });
+    });
+
+    describe('clearHistory (FR-48)', () => {
+        it('should delegate to actions service with user id and conversation id', async () => {
+            const mockResult = { conversationId: 'conv-1', clearedAt: new Date() };
+            mockActionsService.clearHistory.mockResolvedValue(mockResult);
+
+            const result = await controller.clearHistory(mockCurrentUser, 'conv-1');
+
+            expect(mockActionsService.clearHistory).toHaveBeenCalledWith(mockCurrentUser.id, 'conv-1');
             expect(result).toEqual(mockResult);
         });
     });

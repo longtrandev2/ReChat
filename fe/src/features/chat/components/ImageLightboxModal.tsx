@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { X, Download, ExternalLink } from 'lucide-react'
 import { toast } from 'sonner'
+import { isSafeHttpUrl, openSafeUrl } from '@/lib/safe-url'
 
 interface ImageLightboxModalProps {
   isOpen: boolean
@@ -31,6 +32,10 @@ export function ImageLightboxModal({
 
   const handleDownload = async (e: React.MouseEvent) => {
     e.stopPropagation()
+    if (!isSafeHttpUrl(imageUrl)) {
+      toast.error('Liên kết ảnh không hợp lệ')
+      return
+    }
     try {
       let downloadUrl = imageUrl
       if (downloadUrl.includes('/upload/') && !downloadUrl.includes('/fl_attachment')) {
@@ -53,7 +58,7 @@ export function ImageLightboxModal({
       if (fallbackUrl.includes('/upload/') && !fallbackUrl.includes('/fl_attachment')) {
         fallbackUrl = fallbackUrl.replace('/upload/', '/upload/fl_attachment/')
       }
-      window.open(fallbackUrl, '_blank')
+      openSafeUrl(fallbackUrl)
     }
   }
 
@@ -86,7 +91,7 @@ export function ImageLightboxModal({
 
           {/* Nút mở tab mới */}
           <a
-            href={imageUrl}
+            href={isSafeHttpUrl(imageUrl) ? imageUrl : undefined}
             target="_blank"
             rel="noopener noreferrer"
             title="Mở ảnh gốc trong tab mới"

@@ -1,15 +1,43 @@
-import { Search, MoreVertical, Users, ArrowLeft } from 'lucide-react'
+import {
+  Search,
+  MoreVertical,
+  Users,
+  ArrowLeft,
+  Bell,
+  BellOff,
+  Info,
+  Pin,
+  PinOff,
+  Trash2,
+  Ban,
+  ShieldCheck,
+} from 'lucide-react'
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { Avatar, AvatarFallback, AvatarImage, PresenceDot } from '@/components/ui/avatar'
-import type { Conversation } from '@/features/conversations/types/conversation.types'
+import type { BlockStatus, Conversation } from '@/features/conversations/types/conversation.types'
+
+const ITEM_CLASS =
+  'flex items-center gap-2 px-2.5 py-2 rounded-lg text-ink-primary dark:text-ink-primary-dark hover:bg-surface-hover dark:hover:bg-white/5 data-[highlighted]:bg-surface-hover dark:data-[highlighted]:bg-white/5 cursor-pointer focus:outline-hidden font-medium'
+const DANGER_ITEM_CLASS =
+  'flex items-center gap-2 px-2.5 py-2 rounded-lg text-coral dark:text-rose-400 hover:bg-coral-soft/50 dark:hover:bg-rose-950/30 data-[highlighted]:bg-coral-soft/50 cursor-pointer focus:outline-hidden font-medium'
 
 interface ChatHeaderProps {
   conversation: Conversation
   isOnline?: boolean
   typingUserNames?: string[]
   isInfoOpen?: boolean
+  isSearchOpen?: boolean
+  isMuted?: boolean
   onSearchClick?: () => void
+  onToggleMute?: () => void
   onInfoClick?: () => void
   onBackClick?: () => void
+  isPinned?: boolean
+  blockStatus?: BlockStatus
+  onTogglePin?: () => void
+  onClearHistory?: () => void
+  onBlock?: () => void
+  onUnblock?: () => void
 }
 
 /**
@@ -24,11 +52,23 @@ export function ChatHeader({
   isOnline = false,
   typingUserNames = [],
   isInfoOpen = false,
+  isSearchOpen = false,
+  isMuted = false,
   onSearchClick,
+  onToggleMute,
   onInfoClick,
   onBackClick,
+  isPinned = false,
+  blockStatus = 'NONE',
+  onTogglePin,
+  onClearHistory,
+  onBlock,
+  onUnblock,
 }: ChatHeaderProps) {
   const isGroup = conversation.type === 'GROUP'
+  // Khi bị chặn (hai chiều) không hiển thị trạng thái hoạt động của đối phương (BR-38)
+  const isBlocked = !isGroup && blockStatus !== 'NONE'
+  const showOnline = isOnline && !isBlocked
 
   const handleBack = () => {
     if (onBackClick) {
@@ -77,7 +117,7 @@ export function ChatHeader({
 
     return (
       <span className="text-xs text-ink-secondary dark:text-ink-secondary-dark font-normal flex items-center">
-        {isOnline ? (
+        {showOnline ? (
           <span className="text-presence-online font-medium flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-presence-online animate-pulse inline-block" />
             Đang trực tuyến
@@ -126,7 +166,7 @@ export function ChatHeader({
                 {isGroup ? <Users className="w-5 h-5" /> : initials}
               </AvatarFallback>
             </Avatar>
-            {!isGroup && <PresenceDot isOnline={isOnline} />}
+            {!isGroup && <PresenceDot isOnline={showOnline} />}
           </div>
 
           <div className="flex flex-col min-w-0 justify-center text-left">
@@ -144,23 +184,109 @@ export function ChatHeader({
           aria-label="Tìm kiếm trong cuộc trò chuyện"
           title="Tìm kiếm tin nhắn"
           onClick={onSearchClick}
-          className="p-2 rounded-xl hover:bg-surface-hover dark:hover:bg-surface-dark-secondary hover:text-ink-primary dark:hover:text-ink-primary-dark transition-all active:scale-95"
-        >
-          <Search className="w-5 h-5" />
-        </button>
-        <button
-          type="button"
-          aria-label="Thông tin hội thoại"
-          title="Thông tin chi tiết"
-          onClick={onInfoClick}
           className={`p-2 rounded-xl transition-all active:scale-95 ${
-            isInfoOpen
+            isSearchOpen
               ? 'bg-brand/10 text-brand dark:bg-white/10 dark:text-brand-accent'
               : 'hover:bg-surface-hover dark:hover:bg-surface-dark-secondary hover:text-ink-primary dark:hover:text-ink-primary-dark'
           }`}
+          data-testid="chat-header-search-btn"
         >
-          <MoreVertical className="w-5 h-5" />
+          <Search className="w-5 h-5" />
         </button>
+
+        <button
+          type="button"
+          aria-label={isMuted ? 'Bật thông báo' : 'Tắt thông báo'}
+          title={isMuted ? 'Bật thông báo' : 'Tắt thông báo'}
+          onClick={onToggleMute}
+          className={`p-2 rounded-xl transition-all active:scale-95 ${
+            isMuted
+              ? 'text-coral hover:bg-coral/10'
+              : 'hover:bg-surface-hover dark:hover:bg-surface-dark-secondary hover:text-ink-primary dark:hover:text-ink-primary-dark'
+          }`}
+          data-testid="chat-header-mute-btn"
+        >
+          {isMuted ? <BellOff className="w-5 h-5" /> : <Bell className="w-5 h-5" />}
+        </button>
+
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger asChild>
+            <button
+              type="button"
+              aria-label="Tùy chọn hội thoại"
+              title="Tùy chọn"
+              className={`p-2 rounded-xl transition-all active:scale-95 ${
+                isInfoOpen
+                  ? 'bg-brand/10 text-brand dark:bg-white/10 dark:text-brand-accent'
+                  : 'hover:bg-surface-hover dark:hover:bg-surface-dark-secondary hover:text-ink-primary dark:hover:text-ink-primary-dark'
+              }`}
+              data-testid="chat-header-menu-btn"
+            >
+              <MoreVertical className="w-5 h-5" />
+            </button>
+          </DropdownMenu.Trigger>
+
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              align="end"
+              sideOffset={6}
+              className="min-w-[200px] bg-white dark:bg-[#1C2733] rounded-xl p-1.5 shadow-xl border border-border/80 dark:border-border-dark text-xs z-50 animate-in fade-in-50 zoom-in-95 duration-150"
+            >
+              <DropdownMenu.Item
+                onSelect={() => onInfoClick?.()}
+                className={ITEM_CLASS}
+                data-testid="chat-menu-info"
+              >
+                <Info className="w-4 h-4 shrink-0" />
+                <span>Xem thông tin</span>
+              </DropdownMenu.Item>
+
+              {onTogglePin && (
+                <DropdownMenu.Item
+                  onSelect={() => onTogglePin()}
+                  className={ITEM_CLASS}
+                  data-testid="chat-menu-pin"
+                >
+                  {isPinned ? <PinOff className="w-4 h-4 shrink-0" /> : <Pin className="w-4 h-4 shrink-0" />}
+                  <span>{isPinned ? 'Bỏ ghim' : 'Ghim cuộc trò chuyện'}</span>
+                </DropdownMenu.Item>
+              )}
+
+              {onClearHistory && (
+                <DropdownMenu.Item
+                  onSelect={() => onClearHistory()}
+                  className={DANGER_ITEM_CLASS}
+                  data-testid="chat-menu-clear"
+                >
+                  <Trash2 className="w-4 h-4 shrink-0" />
+                  <span>Xóa đoạn chat</span>
+                </DropdownMenu.Item>
+              )}
+
+              {!isGroup && blockStatus === 'BLOCKED_BY_ME' && onUnblock && (
+                <DropdownMenu.Item
+                  onSelect={() => onUnblock()}
+                  className={ITEM_CLASS}
+                  data-testid="chat-menu-unblock"
+                >
+                  <ShieldCheck className="w-4 h-4 shrink-0" />
+                  <span>Bỏ chặn</span>
+                </DropdownMenu.Item>
+              )}
+
+              {!isGroup && blockStatus === 'NONE' && onBlock && (
+                <DropdownMenu.Item
+                  onSelect={() => onBlock()}
+                  className={DANGER_ITEM_CLASS}
+                  data-testid="chat-menu-block"
+                >
+                  <Ban className="w-4 h-4 shrink-0" />
+                  <span>Chặn người dùng</span>
+                </DropdownMenu.Item>
+              )}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
       </div>
     </header>
   )

@@ -25,10 +25,18 @@ import {
     RecallMessageDto,
     EditMessageDto,
     ReactMessageDto,
+    CustomizeConversationDto,
 } from '../dto/index.js';
 import { User } from '../../users/entities/user.entity.js';
 import { Friendship, FriendshipStatus } from '../../friends/entities/friendship.entity.js';
 import { OnEvent } from '@nestjs/event-emitter';
+import { RedisService } from '../../../common/redis/redis.service.js';
+import { getAccessTokenRevocationReason } from '../../../common/auth/access-token-revocation.js';
+import { corsOriginCallback } from '../../../common/config/cors-origins.js';
+import { AUTH_SESSIONS_REVOKED, AuthSessionsRevokedEvent } from '../../../common/events/auth-session.events.js';
+
+/** Room riêng của từng thiết bị: cho phép ngắt đúng các socket của thiết bị bị đăng xuất từ xa */
+export const deviceRoom = (userId: string, deviceId: string) => `device_${userId}_${deviceId}`;
 import {
     FriendRequestSentEvent,
     FriendRequestAcceptedEvent,
@@ -43,11 +51,17 @@ import {
     MessageEditedEvent,
     MessageReactionEvent,
     MessageCreatedEvent,
+    ConversationCustomizedEvent,
+    UserBlockedEvent,
+    UserUnblockedEvent,
+    USER_BLOCKED,
+    USER_UNBLOCKED,
 } from '../../../common/events/index.js';
 
 @WebSocketGateway({
     cors: {
-        origin: true,
+        // Chỉ chấp nhận origin trong whitelist CLIENT_URL (không phản chiếu mọi origin kèm credentials)
+        origin: corsOriginCallback,
         credentials: true,
     },
 })
@@ -67,66 +81,102 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         private readonly userRepository: Repository<User>,
         @InjectRepository(Friendship)
         private readonly friendshipRepository: Repository<Friendship>,
+        private readonly redisService: RedisService,
     ) { }
 
-    afterInit(_server: Server) {
+    afterInit(server: Server) {
+        // Xác thực trong middleware handshake: client chỉ nhận 'connect' SAU KHI đã xác thực xong.
+        // Nếu xác thực trong handleConnection (async), client có thể emit joinConversation trước khi
+        // client.data.user được gán => bị từ chối "Missing authenticated session" (race condition).
+        if (typeof server?.use === 'function') {
+            server.use((socket, next) => {
+                this.authenticateSocket(socket)
+                    .then(() => next())
+                    .catch((error: Error) => {
+                        this.logger.warn(`[Handshake] Từ chối kết nối (Socket ${socket.id}): ${error.message}`);
+                        // Client nhận 'connect_error' với message này (FE tự refresh token khi chứa 'Unauthorized')
+                        next(new Error(error.message));
+                    });
+            });
+        }
         this.logger.log('🚀 WebSocket ChatGateway đã được khởi tạo thành công');
     }
 
     /**
-     * Xác thực kết nối WebSocket tại thời điểm Handshake (BR-11)
-     * Client truyền JWT qua client.handshake.auth.token hoặc headers.authorization
+     * Xác thực socket tại thời điểm Handshake (BR-11, BR-27): đọc JWT, kiểm tra chữ ký, kiểm tra thu hồi,
+     * gắn thông tin user + deviceId vào client.data. Ném Error với message dành cho client nếu thất bại.
+     */
+    private async authenticateSocket(client: Socket): Promise<void> {
+        const rawToken =
+            client.handshake.auth?.token ||
+            client.handshake.headers?.authorization ||
+            client.handshake.query?.token;
+
+        if (!rawToken || typeof rawToken !== 'string') {
+            throw new Error('Unauthorized: Missing authentication token');
+        }
+
+        // Chuẩn hóa chuỗi token (loại bỏ tiền tố 'Bearer ' nếu có)
+        const token = rawToken.startsWith('Bearer ') ? rawToken.slice(7).trim() : rawToken.trim();
+
+        let payload: { sub?: string; id?: string; username?: string; did?: string; jti?: string; iat?: number; iatMs?: number };
+        try {
+            payload = await this.jwtService.verifyAsync(token);
+        } catch {
+            throw new Error('Unauthorized: Invalid or expired token');
+        }
+
+        // Từ chối token đã logout / bị đăng xuất từ xa / bị thu hồi do đổi-đặt lại mật khẩu
+        const revokedReason = await getAccessTokenRevocationReason(this.redisService, payload, token);
+        if (revokedReason) {
+            throw new Error('Unauthorized: Invalid or expired token');
+        }
+
+        const userId = (payload.sub || payload.id) as string;
+        const dbUser = await this.userRepository.findOne({
+            where: { id: userId },
+            select: { id: true, username: true, displayName: true, avatarUrl: true },
+        });
+
+        client.data.user = {
+            id: userId,
+            username: payload.username,
+            displayName: dbUser?.displayName || payload.username,
+            avatarUrl: dbUser?.avatarUrl || null,
+        };
+        client.data.deviceId = payload.did;
+    }
+
+    /**
+     * Sau khi handshake thành công: gia nhập room cá nhân / thiết bị và cập nhật presence.
+     * Nếu socket chưa qua middleware (vd: gọi trực tiếp trong unit test) thì tự xác thực tại đây.
      */
     async handleConnection(client: Socket): Promise<void> {
-        try {
-            // 1. Lấy token từ auth object hoặc headers
-            const rawToken =
-                client.handshake.auth?.token ||
-                client.handshake.headers?.authorization ||
-                client.handshake.query?.token;
-
-            if (!rawToken || typeof rawToken !== 'string') {
-                this.logger.warn(`[Handshake] Kết nối bị từ chối (Socket ${client.id}): Thiếu JWT token`);
-                client.emit('exception', {
-                    status: 'error',
-                    message: 'Unauthorized: Missing authentication token',
-                });
+        if (!client.data?.user) {
+            try {
+                await this.authenticateSocket(client);
+            } catch (error) {
+                this.logger.warn(`[Handshake] Xác thực thất bại (Socket ${client.id}): ${(error as Error).message}`);
+                client.emit('exception', { status: 'error', message: (error as Error).message });
                 client.disconnect(true);
                 return;
             }
+        }
 
-            // 2. Chuẩn hóa chuỗi token (loại bỏ tiền tố 'Bearer ' nếu có)
-            const token = rawToken.startsWith('Bearer ')
-                ? rawToken.slice(7).trim()
-                : rawToken.trim();
+        try {
+            const userId: string = client.data.user.id;
 
-            // 3. Giải mã và xác thực chữ ký JWT
-            const payload = await this.jwtService.verifyAsync(token);
-
-            // 4. Lưu thông tin User (kèm displayName, avatarUrl) vào session stateful của Socket (client.data)
-            const userId = payload.sub || payload.id;
-            const dbUser = await this.userRepository.findOne({
-                where: { id: userId },
-                select: { id: true, username: true, displayName: true, avatarUrl: true },
-            });
-
-            client.data.user = {
-                id: userId,
-                username: payload.username,
-                displayName: dbUser?.displayName || payload.username,
-                avatarUrl: dbUser?.avatarUrl || null,
-            };
-
-            // 5. Gia nhập personal room để nhận event broadcast riêng (multi-tab/device)
+            // Gia nhập personal room để nhận event broadcast riêng (multi-tab/device)
             await client.join(`user_${userId}`);
+            // Room theo thiết bị (token mới có claim did) để thu hồi phiên ngắt được socket đang mở
+            if (client.data.deviceId) {
+                await client.join(deviceRoom(userId, client.data.deviceId));
+            }
 
-            // 6. Đăng ký socket vào ConnectionManager (RAM registry)
-            const { isFirstConnection, totalConnections } = this.connectionManager.addConnection(
-                userId,
-                client.id,
-            );
+            // Đăng ký socket vào ConnectionManager (RAM registry)
+            const { isFirstConnection, totalConnections } = this.connectionManager.addConnection(userId, client.id);
 
-            // 7. Nếu là thiết bị/tab đầu tiên kết nối: User chuyển từ Offline sang Online
+            // Thiết bị/tab đầu tiên kết nối: User chuyển từ Offline sang Online
             if (isFirstConnection) {
                 await this.userRepository.update(userId, { isOnline: true });
                 await this.broadcastPresence(userId, true);
@@ -136,13 +186,8 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                 `[Handshake] Kết nối thành công: Socket ${client.id} - User ${client.data.user.username} (${userId}) [Active tabs: ${totalConnections}]`,
             );
         } catch (error) {
-            this.logger.warn(
-                `[Handshake] Xác thực thất bại (Socket ${client.id}): ${(error as Error).message}`,
-            );
-            client.emit('exception', {
-                status: 'error',
-                message: 'Unauthorized: Invalid or expired token',
-            });
+            this.logger.error(`[Handshake] Lỗi khởi tạo phiên socket ${client.id}: ${(error as Error).message}`);
+            client.emit('exception', { status: 'error', message: 'Internal WebSocket server error' });
             client.disconnect(true);
         }
     }
@@ -343,6 +388,9 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             throw new WsException('Unauthorized: Missing authenticated session');
         }
 
+        // Chỉ thành viên mới được phát typing vào hội thoại (BR-08), tránh spam/giả mạo vào room người khác
+        await this.conversationsService.validateMembership(dto.conversationId, user.id);
+
         const roomId = `conv_${dto.conversationId}`;
         // Gửi cho tất cả client trong room TRỪ chính client người gửi (client.to)
         // Kèm avatarUrl và displayName để phía UI hiển thị avatar nhỏ và hiệu ứng typing 3 chấm
@@ -489,6 +537,51 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         };
     }
 
+    /**
+     * Tùy chỉnh thông tin đoạn chat (Quick Emoji, tên, avatar) qua WebSocket (BR-29, BR-32)
+     */
+    @SubscribeMessage('customizeConversation')
+    async handleCustomizeConversation(
+        @ConnectedSocket() client: Socket,
+        @MessageBody() dto: CustomizeConversationDto,
+    ) {
+        const user = client.data?.user;
+        if (!user?.id) {
+            throw new WsException('Unauthorized: Missing authenticated session');
+        }
+
+        if (!dto.conversationId) {
+            throw new BadRequestException('conversationId không được để trống');
+        }
+
+        let updatedGroupResult = null;
+        let updatedQuickEmojiResult = null;
+
+        if (dto.name !== undefined || dto.avatarUrl !== undefined) {
+            updatedGroupResult = await this.conversationsService.updateGroup(
+                user.id,
+                dto.conversationId,
+                { name: dto.name, avatarUrl: dto.avatarUrl },
+            );
+        }
+
+        if (dto.quickEmoji !== undefined) {
+            updatedQuickEmojiResult = await this.conversationsService.updateQuickEmoji(
+                user.id,
+                dto.conversationId,
+                { emoji: dto.quickEmoji },
+            );
+        }
+
+        return {
+            status: 'success',
+            data: {
+                group: updatedGroupResult,
+                quickEmoji: updatedQuickEmojiResult?.quickEmoji,
+            },
+        };
+    }
+
     // =========================================================================
     // REALTIME NOTIFICATION EVENT LISTENERS (In-App Event Bus Mediator)
     // =========================================================================
@@ -496,6 +589,27 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     /**
      * Thông báo lời mời kết bạn mới tới người nhận (user_${addresseeId})
      */
+    /**
+     * Thu hồi phiên (đăng xuất từ xa, đổi / đặt lại mật khẩu): ngắt ngay socket đang mở của thiết bị bị thu hồi.
+     * Kiểm tra token chỉ chạy lúc handshake, nên không ngắt thì thiết bị đó vẫn nhận tin nhắn realtime.
+     * Redis adapter đảm bảo disconnectSockets có hiệu lực trên mọi pod.
+     */
+    @OnEvent(AUTH_SESSIONS_REVOKED)
+    handleSessionsRevoked(event: AuthSessionsRevokedEvent) {
+        if (!this.server) return;
+        const { userId, scope } = event;
+
+        if (scope.type === 'all') {
+            this.server.in(`user_${userId}`).disconnectSockets(true);
+        } else if (scope.type === 'allExcept') {
+            this.server.in(`user_${userId}`).except(deviceRoom(userId, scope.deviceId)).disconnectSockets(true);
+        } else {
+            for (const deviceId of scope.deviceIds) {
+                this.server.in(deviceRoom(userId, deviceId)).disconnectSockets(true);
+            }
+        }
+    }
+
     @OnEvent('friend.request_sent')
     handleFriendRequestSent(event: FriendRequestSentEvent) {
         if (!this.server) return;
@@ -601,6 +715,42 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                 action: event.action,
             });
         }
+
+        // BR-08: người bị xóa / rời nhóm / nhóm giải tán không còn là thành viên -> mọi socket của họ phải rời room
+        // conv_ ngay (sau khi đã nhận thông báo ở trên), nếu không họ vẫn nhận newMessage/typing của nhóm.
+        // socketsLeave chạy xuyên các pod nhờ Redis adapter.
+        if (event.action === 'REMOVED' || event.action === 'LEFT') {
+            for (const targetId of event.targetUserIds) {
+                this.server.in(`user_${targetId}`).socketsLeave(`conv_${event.conversationId}`);
+            }
+        }
+    }
+
+    /**
+     * Chặn người dùng (FR-29, BR-28): báo realtime cho CẢ blocker và blocked qua personal room
+     */
+    @OnEvent(USER_BLOCKED)
+    handleUserBlocked(event: UserBlockedEvent) {
+        this.emitBlockChange('userBlocked', event);
+    }
+
+    /**
+     * Bỏ chặn người dùng (FR-29, BR-28): báo realtime cho CẢ hai phía
+     */
+    @OnEvent(USER_UNBLOCKED)
+    handleUserUnblocked(event: UserUnblockedEvent) {
+        this.emitBlockChange('userUnblocked', event);
+    }
+
+    private emitBlockChange(eventName: 'userBlocked' | 'userUnblocked', event: UserBlockedEvent | UserUnblockedEvent) {
+        if (!this.server) return;
+        const payload = {
+            blockerId: event.blockerId,
+            blockedId: event.blockedId,
+            conversationId: event.conversationId,
+        };
+        this.server.to(`user_${event.blockerId}`).emit(eventName, payload);
+        this.server.to(`user_${event.blockedId}`).emit(eventName, payload);
     }
 
     /**
@@ -622,6 +772,30 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                 conversationId: event.conversationId,
                 messageId: event.messageId,
             });
+        }
+    }
+
+    /**
+     * Broadcast sự kiện tùy chỉnh hội thoại (tên, avatar, quick emoji) tới phòng chat và các user (BR-29, BR-32)
+     */
+    @OnEvent('conversation.customized')
+    handleConversationCustomized(event: ConversationCustomizedEvent) {
+        if (!this.server) return;
+        const roomId = `conv_${event.conversationId}`;
+        const payload = {
+            conversationId: event.conversationId,
+            customizedBy: event.customizedBy,
+            changes: event.changes,
+            quickEmoji: event.changes.quickEmoji,
+            name: event.changes.name,
+            avatarUrl: event.changes.avatarUrl,
+            updatedBy: event.customizedBy,
+        };
+        this.server.to(roomId).emit('conversationCustomized', payload);
+        if (event.memberIds && event.memberIds.length > 0) {
+            for (const memberId of event.memberIds) {
+                this.server.to(`user_${memberId}`).emit('conversationCustomized', payload);
+            }
         }
     }
 

@@ -18,7 +18,9 @@ describe('Media API Service Tests', () => {
     const mockResponse = {
       data: {
         public_id: 'rechat/images/mock_123',
+        publicId: 'rechat/images/mock_123',
         secure_url: 'https://res.cloudinary.com/test/image/upload/mock_123.png',
+        url: 'https://res.cloudinary.com/test/image/upload/mock_123.png',
         format: 'png',
         resource_type: 'image',
       },
@@ -57,7 +59,9 @@ describe('Media API Service Tests', () => {
     const mockResponse = {
       data: {
         public_id: 'rechat/raw/mock_doc',
+        publicId: 'rechat/raw/mock_doc',
         secure_url: 'https://res.cloudinary.com/test/raw/upload/mock_doc.pdf',
+        url: 'https://res.cloudinary.com/test/raw/upload/mock_doc.pdf',
       },
     }
 

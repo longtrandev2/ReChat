@@ -1,15 +1,9 @@
-
+import type { AuthUserProfile } from '../auth-user.mapper.js';
 
 export class AuthResponse {
     accessToken: string;
     refreshToken?: string;
-    user: {
-        id: string;
-        username: string;
-        displayName?: string;
-        avatarUrl?: string;
-        createdAt: Date;
-    };
+    user: AuthUserProfile;
 }
 
 export class LoginChallengeResponse {

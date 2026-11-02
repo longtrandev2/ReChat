@@ -17,6 +17,7 @@ export enum MessageType {
     TEXT = 'TEXT',
     IMAGE = 'IMAGE',
     FILE = 'FILE',
+    SYSTEM = 'SYSTEM',
 }
 
 @Entity('messages')
@@ -47,8 +48,8 @@ export class Message {
     })
     type: MessageType;
 
-    @Column({ nullable: true, length: 500 })
-    fileUrl?: string;
+    @Column({ type: 'varchar', nullable: true, length: 500 })
+    fileUrl?: string | null;
 
     @Column({ nullable: true, type: 'int' })
     fileSize?: number;
