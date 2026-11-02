@@ -309,5 +309,56 @@ export class FriendsController {
     ) {
         return this.friendsService.unfriend(user.id, friendId);
     }
+
+    /**
+     * Lấy danh sách người dùng đã bị chặn (FR-29)
+     * GET /api/v1/friends/blocked
+     */
+    @Get('blocked')
+    @ApiOperation({ summary: 'Lấy danh sách người dùng đã bị chặn (FR-29)' })
+    @ApiResponse({
+        status: 200,
+        description: 'Danh sách người dùng đã chặn thành công',
+    })
+    async getBlockedUsers(@CurrentUser() user: User) {
+        return this.friendsService.getBlockedUsers(user.id);
+    }
+
+    /**
+     * Chặn người dùng (FR-29, BR-28)
+     * POST /api/v1/friends/:friendId/block
+     */
+    @Post(':friendId/block')
+    @ApiOperation({ summary: 'Chặn người dùng (FR-29, BR-28)' })
+    @ApiParam({ name: 'friendId', description: 'UUID của người dùng muốn chặn', format: 'uuid' })
+    @ApiResponse({
+        status: 201,
+        description: 'Chặn người dùng thành công',
+    })
+    async blockUser(
+        @CurrentUser() user: User,
+        @Param('friendId', ParseUUIDPipe) friendId: string,
+    ) {
+        return this.friendsService.blockUser(user.id, friendId);
+    }
+
+    /**
+     * Bỏ chặn người dùng (FR-29, BR-28)
+     * POST /api/v1/friends/:friendId/unblock
+     */
+    @Post(':friendId/unblock')
+    @ApiOperation({ summary: 'Bỏ chặn người dùng (FR-29, BR-28)' })
+    @ApiParam({ name: 'friendId', description: 'UUID của người dùng muốn bỏ chặn', format: 'uuid' })
+    @ApiResponse({
+        status: 201,
+        description: 'Bỏ chặn người dùng thành công',
+    })
+    async unblockUser(
+        @CurrentUser() user: User,
+        @Param('friendId', ParseUUIDPipe) friendId: string,
+    ) {
+        return this.friendsService.unblockUser(user.id, friendId);
+    }
 }
+
 

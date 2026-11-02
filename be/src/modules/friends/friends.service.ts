@@ -65,6 +65,9 @@ export class FriendsService {
                     throw new ConflictException('Người này đã gửi lời mời cho bạn, vui lòng phản hồi lời mời');
                 }
             }
+            if (existing.status === FriendshipStatus.BLOCKED) {
+                throw new BadRequestException('Không thể gửi lời mời kết bạn do người dùng đã bị chặn');
+            }
         }
 
         // 4. Tạo mới và lưu bản ghi lời mời
@@ -312,4 +315,115 @@ export class FriendsService {
 
         return friendships;
     }
+
+    /**
+     * Chặn người dùng (FR-29, BR-28)
+     */
+    async blockUser(currentUserId: string, targetUserId: string) {
+        if (currentUserId === targetUserId) {
+            throw new BadRequestException('Không thể tự chặn chính mình');
+        }
+
+        const targetUser = await this.userRepository.findOne({
+            where: { id: targetUserId },
+        });
+        if (!targetUser) {
+            throw new NotFoundException('Người dùng không tồn tại');
+        }
+
+        const existing = await this.friendshipRepository.findOne({
+            where: [
+                { requester: { id: currentUserId }, addressee: { id: targetUserId } },
+                { requester: { id: targetUserId }, addressee: { id: currentUserId } },
+            ],
+            relations: {
+                requester: true,
+                addressee: true,
+            },
+        });
+
+        if (existing) {
+            existing.requester = { id: currentUserId } as User;
+            existing.addressee = targetUser;
+            existing.status = FriendshipStatus.BLOCKED;
+            await this.friendshipRepository.save(existing);
+        } else {
+            const blockedFriendship = this.friendshipRepository.create({
+                requester: { id: currentUserId } as User,
+                addressee: targetUser,
+                status: FriendshipStatus.BLOCKED,
+            });
+            await this.friendshipRepository.save(blockedFriendship);
+        }
+
+        this.eventEmitter.emit(
+            'friend.removed',
+            new FriendRemovedEvent(currentUserId, targetUserId),
+        );
+
+        return { message: 'Đã chặn người dùng thành công' };
+    }
+
+    /**
+     * Bỏ chặn người dùng (FR-29, BR-28)
+     */
+    async unblockUser(currentUserId: string, targetUserId: string) {
+        if (currentUserId === targetUserId) {
+            throw new BadRequestException('Không thể tự bỏ chặn chính mình');
+        }
+
+        const blockedFriendship = await this.friendshipRepository.findOne({
+            where: {
+                requester: { id: currentUserId },
+                addressee: { id: targetUserId },
+                status: FriendshipStatus.BLOCKED,
+            },
+        });
+
+        if (!blockedFriendship) {
+            throw new NotFoundException('Người dùng này không nằm trong danh sách chặn của bạn');
+        }
+
+        await this.friendshipRepository.delete(blockedFriendship.id);
+
+        return { message: 'Đã bỏ chặn người dùng thành công' };
+    }
+
+    /**
+     * Lấy danh sách người dùng đã bị chặn bởi currentUserId (FR-29)
+     */
+    async getBlockedUsers(currentUserId: string) {
+        const friendships = await this.friendshipRepository.find({
+            where: {
+                requester: { id: currentUserId },
+                status: FriendshipStatus.BLOCKED,
+            },
+            relations: {
+                addressee: true,
+            },
+            order: {
+                updatedAt: 'DESC',
+            },
+            select: {
+                id: true,
+                createdAt: true,
+                updatedAt: true,
+                addressee: {
+                    id: true,
+                    username: true,
+                    displayName: true,
+                    avatarUrl: true,
+                },
+            },
+        });
+
+        return friendships.map((f) => ({
+            id: f.addressee.id,
+            username: f.addressee.username,
+            displayName: f.addressee.displayName || f.addressee.username,
+            avatarUrl: f.addressee.avatarUrl,
+            blockedAt: f.updatedAt || f.createdAt,
+        }));
+    }
 }
+

@@ -585,4 +585,143 @@ describe('FriendsService', () => {
             );
         });
     });
+
+    // ==========================================
+    // 9. blockUser
+    // ==========================================
+    describe('blockUser', () => {
+        const currentUserId = 'user-me';
+        const targetUserId = 'user-them';
+
+        it('should throw BadRequestException when trying to block oneself', async () => {
+            await expect(service.blockUser(currentUserId, currentUserId)).rejects.toThrow(
+                BadRequestException,
+            );
+        });
+
+        it('should throw NotFoundException when target user does not exist', async () => {
+            mockUserRepo.findOne.mockResolvedValue(null);
+
+            await expect(service.blockUser(currentUserId, targetUserId)).rejects.toThrow(
+                NotFoundException,
+            );
+        });
+
+        it('should update existing friendship to BLOCKED with requester as current user', async () => {
+            const mockTarget = { id: targetUserId, username: 'target' };
+            mockUserRepo.findOne.mockResolvedValue(mockTarget);
+            const existing = {
+                id: 'f-1',
+                requester: { id: targetUserId },
+                addressee: { id: currentUserId },
+                status: FriendshipStatus.ACCEPTED,
+            };
+            mockFriendshipRepo.findOne.mockResolvedValue(existing);
+            mockFriendshipRepo.save.mockResolvedValue({
+                ...existing,
+                status: FriendshipStatus.BLOCKED,
+            });
+
+            const result = await service.blockUser(currentUserId, targetUserId);
+
+            expect(result).toEqual({ message: 'Đã chặn người dùng thành công' });
+            expect(mockFriendshipRepo.save).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    status: FriendshipStatus.BLOCKED,
+                    requester: { id: currentUserId },
+                }),
+            );
+        });
+
+        it('should create new BLOCKED friendship if no previous friendship existed', async () => {
+            const mockTarget = { id: targetUserId, username: 'target' };
+            mockUserRepo.findOne.mockResolvedValue(mockTarget);
+            mockFriendshipRepo.findOne.mockResolvedValue(null);
+            mockFriendshipRepo.create.mockReturnValue({
+                requester: { id: currentUserId },
+                addressee: mockTarget,
+                status: FriendshipStatus.BLOCKED,
+            });
+            mockFriendshipRepo.save.mockResolvedValue({ id: 'f-new' });
+
+            const result = await service.blockUser(currentUserId, targetUserId);
+
+            expect(result).toEqual({ message: 'Đã chặn người dùng thành công' });
+            expect(mockFriendshipRepo.create).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    status: FriendshipStatus.BLOCKED,
+                }),
+            );
+        });
+    });
+
+    // ==========================================
+    // 10. unblockUser
+    // ==========================================
+    describe('unblockUser', () => {
+        const currentUserId = 'user-me';
+        const targetUserId = 'user-them';
+
+        it('should throw BadRequestException when trying to unblock oneself', async () => {
+            await expect(service.unblockUser(currentUserId, currentUserId)).rejects.toThrow(
+                BadRequestException,
+            );
+        });
+
+        it('should throw NotFoundException if not in blocked list', async () => {
+            mockFriendshipRepo.findOne.mockResolvedValue(null);
+
+            await expect(service.unblockUser(currentUserId, targetUserId)).rejects.toThrow(
+                NotFoundException,
+            );
+        });
+
+        it('should delete friendship and return success message when unblocking', async () => {
+            const blocked = { id: 'f-blocked', status: FriendshipStatus.BLOCKED };
+            mockFriendshipRepo.findOne.mockResolvedValue(blocked);
+            mockFriendshipRepo.delete.mockResolvedValue({ affected: 1 });
+
+            const result = await service.unblockUser(currentUserId, targetUserId);
+
+            expect(mockFriendshipRepo.delete).toHaveBeenCalledWith(blocked.id);
+            expect(result).toEqual({ message: 'Đã bỏ chặn người dùng thành công' });
+        });
+    });
+
+    // ==========================================
+    // 11. getBlockedUsers
+    // ==========================================
+    describe('getBlockedUsers', () => {
+        const currentUserId = 'user-me';
+
+        it('should return list of blocked users mapped properly', async () => {
+            const mockFriendships = [
+                {
+                    id: 'f-b1',
+                    createdAt: new Date('2026-10-01'),
+                    updatedAt: new Date('2026-10-02'),
+                    addressee: {
+                        id: 'blocked-1',
+                        username: 'blockeduser',
+                        displayName: 'Blocked Person',
+                        avatarUrl: 'https://avatar.png',
+                    },
+                },
+            ];
+            mockFriendshipRepo.find.mockResolvedValue(mockFriendships);
+
+            const result = await service.getBlockedUsers(currentUserId);
+
+            expect(result).toEqual([
+                {
+                    id: 'blocked-1',
+                    username: 'blockeduser',
+                    displayName: 'Blocked Person',
+                    avatarUrl: 'https://avatar.png',
+                    blockedAt: mockFriendships[0].updatedAt,
+                },
+            ]);
+        });
+    });
 });
+

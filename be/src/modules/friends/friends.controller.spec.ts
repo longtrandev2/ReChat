@@ -24,6 +24,9 @@ describe('FriendsController', () => {
             cancelFriendRequest: vi.fn(),
             getFriendList: vi.fn(),
             unfriend: vi.fn(),
+            getBlockedUsers: vi.fn(),
+            blockUser: vi.fn(),
+            unblockUser: vi.fn(),
         };
 
         const module: TestingModule = await Test.createTestingModule({
@@ -224,4 +227,54 @@ describe('FriendsController', () => {
             expect(result).toEqual(mockResponse);
         });
     });
+
+    // ==========================================
+    // 9. getBlockedUsers
+    // ==========================================
+    describe('getBlockedUsers', () => {
+        it('should delegate to friendsService.getBlockedUsers and return blocked list', async () => {
+            const mockBlocked = [
+                { id: 'user-b', username: 'bob', displayName: 'Bob', avatarUrl: null, blockedAt: new Date() },
+            ];
+            mockFriendsService.getBlockedUsers.mockResolvedValue(mockBlocked);
+
+            const result = await controller.getBlockedUsers(mockCurrentUser);
+
+            expect(mockFriendsService.getBlockedUsers).toHaveBeenCalledWith(mockCurrentUser.id);
+            expect(result).toEqual(mockBlocked);
+        });
+    });
+
+    // ==========================================
+    // 10. blockUser
+    // ==========================================
+    describe('blockUser', () => {
+        it('should delegate to friendsService.blockUser and return success message', async () => {
+            const targetId = 'target-uuid';
+            const mockResponse = { message: 'Đã chặn người dùng thành công' };
+            mockFriendsService.blockUser.mockResolvedValue(mockResponse);
+
+            const result = await controller.blockUser(mockCurrentUser, targetId);
+
+            expect(mockFriendsService.blockUser).toHaveBeenCalledWith(mockCurrentUser.id, targetId);
+            expect(result).toEqual(mockResponse);
+        });
+    });
+
+    // ==========================================
+    // 11. unblockUser
+    // ==========================================
+    describe('unblockUser', () => {
+        it('should delegate to friendsService.unblockUser and return success message', async () => {
+            const targetId = 'target-uuid';
+            const mockResponse = { message: 'Đã bỏ chặn người dùng thành công' };
+            mockFriendsService.unblockUser.mockResolvedValue(mockResponse);
+
+            const result = await controller.unblockUser(mockCurrentUser, targetId);
+
+            expect(mockFriendsService.unblockUser).toHaveBeenCalledWith(mockCurrentUser.id, targetId);
+            expect(result).toEqual(mockResponse);
+        });
+    });
 });
+
