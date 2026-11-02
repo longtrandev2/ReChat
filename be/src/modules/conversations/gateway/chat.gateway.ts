@@ -84,75 +84,99 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         private readonly redisService: RedisService,
     ) { }
 
-    afterInit(_server: Server) {
+    afterInit(server: Server) {
+        // Xác thực trong middleware handshake: client chỉ nhận 'connect' SAU KHI đã xác thực xong.
+        // Nếu xác thực trong handleConnection (async), client có thể emit joinConversation trước khi
+        // client.data.user được gán => bị từ chối "Missing authenticated session" (race condition).
+        if (typeof server?.use === 'function') {
+            server.use((socket, next) => {
+                this.authenticateSocket(socket)
+                    .then(() => next())
+                    .catch((error: Error) => {
+                        this.logger.warn(`[Handshake] Từ chối kết nối (Socket ${socket.id}): ${error.message}`);
+                        // Client nhận 'connect_error' với message này (FE tự refresh token khi chứa 'Unauthorized')
+                        next(new Error(error.message));
+                    });
+            });
+        }
         this.logger.log('🚀 WebSocket ChatGateway đã được khởi tạo thành công');
     }
 
     /**
-     * Xác thực kết nối WebSocket tại thời điểm Handshake (BR-11)
-     * Client truyền JWT qua client.handshake.auth.token hoặc headers.authorization
+     * Xác thực socket tại thời điểm Handshake (BR-11, BR-27): đọc JWT, kiểm tra chữ ký, kiểm tra thu hồi,
+     * gắn thông tin user + deviceId vào client.data. Ném Error với message dành cho client nếu thất bại.
+     */
+    private async authenticateSocket(client: Socket): Promise<void> {
+        const rawToken =
+            client.handshake.auth?.token ||
+            client.handshake.headers?.authorization ||
+            client.handshake.query?.token;
+
+        if (!rawToken || typeof rawToken !== 'string') {
+            throw new Error('Unauthorized: Missing authentication token');
+        }
+
+        // Chuẩn hóa chuỗi token (loại bỏ tiền tố 'Bearer ' nếu có)
+        const token = rawToken.startsWith('Bearer ') ? rawToken.slice(7).trim() : rawToken.trim();
+
+        let payload: { sub?: string; id?: string; username?: string; did?: string; jti?: string; iat?: number; iatMs?: number };
+        try {
+            payload = await this.jwtService.verifyAsync(token);
+        } catch {
+            throw new Error('Unauthorized: Invalid or expired token');
+        }
+
+        // Từ chối token đã logout / bị đăng xuất từ xa / bị thu hồi do đổi-đặt lại mật khẩu
+        const revokedReason = await getAccessTokenRevocationReason(this.redisService, payload, token);
+        if (revokedReason) {
+            throw new Error('Unauthorized: Invalid or expired token');
+        }
+
+        const userId = (payload.sub || payload.id) as string;
+        const dbUser = await this.userRepository.findOne({
+            where: { id: userId },
+            select: { id: true, username: true, displayName: true, avatarUrl: true },
+        });
+
+        client.data.user = {
+            id: userId,
+            username: payload.username,
+            displayName: dbUser?.displayName || payload.username,
+            avatarUrl: dbUser?.avatarUrl || null,
+        };
+        client.data.deviceId = payload.did;
+    }
+
+    /**
+     * Sau khi handshake thành công: gia nhập room cá nhân / thiết bị và cập nhật presence.
+     * Nếu socket chưa qua middleware (vd: gọi trực tiếp trong unit test) thì tự xác thực tại đây.
      */
     async handleConnection(client: Socket): Promise<void> {
-        try {
-            // 1. Lấy token từ auth object hoặc headers
-            const rawToken =
-                client.handshake.auth?.token ||
-                client.handshake.headers?.authorization ||
-                client.handshake.query?.token;
-
-            if (!rawToken || typeof rawToken !== 'string') {
-                this.logger.warn(`[Handshake] Kết nối bị từ chối (Socket ${client.id}): Thiếu JWT token`);
-                client.emit('exception', {
-                    status: 'error',
-                    message: 'Unauthorized: Missing authentication token',
-                });
+        if (!client.data?.user) {
+            try {
+                await this.authenticateSocket(client);
+            } catch (error) {
+                this.logger.warn(`[Handshake] Xác thực thất bại (Socket ${client.id}): ${(error as Error).message}`);
+                client.emit('exception', { status: 'error', message: (error as Error).message });
                 client.disconnect(true);
                 return;
             }
+        }
 
-            // 2. Chuẩn hóa chuỗi token (loại bỏ tiền tố 'Bearer ' nếu có)
-            const token = rawToken.startsWith('Bearer ')
-                ? rawToken.slice(7).trim()
-                : rawToken.trim();
+        try {
+            const userId: string = client.data.user.id;
 
-            // 3. Giải mã và xác thực chữ ký JWT
-            const payload = await this.jwtService.verifyAsync(token);
-
-            // 3b. Từ chối token đã logout / bị đăng xuất từ xa / bị thu hồi do đổi-đặt lại mật khẩu
-            const revokedReason = await getAccessTokenRevocationReason(this.redisService, payload, token);
-            if (revokedReason) {
-                throw new Error(revokedReason);
-            }
-
-            // 4. Lưu thông tin User (kèm displayName, avatarUrl) vào session stateful của Socket (client.data)
-            const userId = payload.sub || payload.id;
-            const dbUser = await this.userRepository.findOne({
-                where: { id: userId },
-                select: { id: true, username: true, displayName: true, avatarUrl: true },
-            });
-
-            client.data.user = {
-                id: userId,
-                username: payload.username,
-                displayName: dbUser?.displayName || payload.username,
-                avatarUrl: dbUser?.avatarUrl || null,
-            };
-            client.data.deviceId = payload.did;
-
-            // 5. Gia nhập personal room để nhận event broadcast riêng (multi-tab/device)
+            // Gia nhập personal room để nhận event broadcast riêng (multi-tab/device)
             await client.join(`user_${userId}`);
-            // 5b. Room theo thiết bị (token mới có claim did) để thu hồi phiên ngắt được socket đang mở
-            if (payload.did) {
-                await client.join(deviceRoom(userId, payload.did));
+            // Room theo thiết bị (token mới có claim did) để thu hồi phiên ngắt được socket đang mở
+            if (client.data.deviceId) {
+                await client.join(deviceRoom(userId, client.data.deviceId));
             }
 
-            // 6. Đăng ký socket vào ConnectionManager (RAM registry)
-            const { isFirstConnection, totalConnections } = this.connectionManager.addConnection(
-                userId,
-                client.id,
-            );
+            // Đăng ký socket vào ConnectionManager (RAM registry)
+            const { isFirstConnection, totalConnections } = this.connectionManager.addConnection(userId, client.id);
 
-            // 7. Nếu là thiết bị/tab đầu tiên kết nối: User chuyển từ Offline sang Online
+            // Thiết bị/tab đầu tiên kết nối: User chuyển từ Offline sang Online
             if (isFirstConnection) {
                 await this.userRepository.update(userId, { isOnline: true });
                 await this.broadcastPresence(userId, true);
@@ -162,13 +186,8 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                 `[Handshake] Kết nối thành công: Socket ${client.id} - User ${client.data.user.username} (${userId}) [Active tabs: ${totalConnections}]`,
             );
         } catch (error) {
-            this.logger.warn(
-                `[Handshake] Xác thực thất bại (Socket ${client.id}): ${(error as Error).message}`,
-            );
-            client.emit('exception', {
-                status: 'error',
-                message: 'Unauthorized: Invalid or expired token',
-            });
+            this.logger.error(`[Handshake] Lỗi khởi tạo phiên socket ${client.id}: ${(error as Error).message}`);
+            client.emit('exception', { status: 'error', message: 'Internal WebSocket server error' });
             client.disconnect(true);
         }
     }

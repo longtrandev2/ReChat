@@ -208,6 +208,24 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
             expect(mockConnectionManager.addConnection).not.toHaveBeenCalled();
         });
 
+        it('registers a handshake middleware that authenticates BEFORE the client receives connect (race fix)', async () => {
+            const server = { use: vi.fn() };
+            gateway.afterInit(server as any);
+            const middleware = server.use.mock.calls[0][0];
+
+            const rejected = vi.fn();
+            await new Promise<void>((resolve) => middleware(createMockSocket() as Socket, (err?: Error) => { rejected(err); resolve(); }));
+            expect(rejected.mock.calls[0][0]?.message).toBe('Unauthorized: Missing authentication token');
+
+            mockJwtService.verifyAsync.mockResolvedValue({ sub: 'user-uuid-1', username: 'john_doe', did: 'laptop-1' });
+            const client = createMockSocket({ token: 'Bearer valid.jwt.token' }) as Socket;
+            const accepted = vi.fn();
+            await new Promise<void>((resolve) => middleware(client, (err?: Error) => { accepted(err); resolve(); }));
+            expect(accepted).toHaveBeenCalledWith(undefined);
+            expect(client.data.user).toEqual(expect.objectContaining({ id: 'user-uuid-1' }));
+            expect(client.data.deviceId).toBe('laptop-1');
+        });
+
         it('should reject a blacklisted (logged out) token by JTI', async () => {
             const client = createMockSocket({ token: 'Bearer revoked.jwt.token' }) as Socket;
             mockJwtService.verifyAsync.mockResolvedValue({ sub: 'user-uuid-1', username: 'john_doe', jti: 'jti-revoked' });
