@@ -32,7 +32,7 @@ export class InboxUpdatedEvent {
 export class GroupMemberEvent {
     constructor(
         public readonly conversationId: string,
-        public readonly action: 'ADDED' | 'REMOVED' | 'LEFT',
+        public readonly action: 'ADDED' | 'REMOVED' | 'LEFT' | 'TRANSFER_OWNER' | 'ROLE_UPDATED',
         public readonly actor: {
             id: string;
             displayName: string;

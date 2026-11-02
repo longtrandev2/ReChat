@@ -12,11 +12,11 @@ export class UpdateGroupDto {
     name?: string;
 
     @ApiPropertyOptional({
-        description: 'Đường dẫn ảnh đại diện mới của nhóm chat (tối đa 255 ký tự)',
+        description: 'Đường dẫn ảnh đại diện mới của nhóm chat (tối đa 500 ký tự)',
         example: 'https://images.unsplash.com/photo-1522071820081-009f0129c71c',
     })
     @IsOptional()
     @IsString({ message: 'avatarUrl phải là chuỗi ký tự' })
-    @MaxLength(255, { message: 'avatarUrl không được vượt quá 255 ký tự' })
+    @MaxLength(500, { message: 'avatarUrl không được vượt quá 500 ký tự' })
     avatarUrl?: string;
 }

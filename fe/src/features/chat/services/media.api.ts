@@ -1,8 +1,14 @@
 import { apiClient } from '@/services/api.client'
 
 export interface UploadMediaResponse {
-  public_id: string
-  secure_url: string
+  url?: string
+  secure_url?: string
+  publicId?: string
+  public_id?: string
+  originalName?: string
+  mimeType?: string
+  size?: number
+  type?: string
   format?: string
   resource_type?: string
 }
@@ -38,6 +44,16 @@ export const mediaApi = {
       },
     })
 
-    return res.data
+    const raw = (res.data || {}) as unknown as Record<string, unknown>
+    const finalUrl = (raw.url as string) || (raw.secure_url as string) || ''
+    const finalPublicId = (raw.publicId as string) || (raw.public_id as string) || ''
+
+    return {
+      ...raw,
+      url: finalUrl,
+      secure_url: finalUrl,
+      publicId: finalPublicId,
+      public_id: finalPublicId,
+    } as UploadMediaResponse
   },
 }

@@ -69,4 +69,31 @@ describe('ChatLayout Component Tests', () => {
     expect(screen.getByTestId('location-display')).toHaveTextContent('/chat/conv-test-101')
     expect(screen.getByText('Active Chat Child')).toBeInTheDocument()
   })
+
+  it('opens CreateGroupModal when clicking the new chat button in sidebar', async () => {
+    useConversationStore.setState({
+      conversations: [],
+      activeConversationId: null,
+      searchQuery: '',
+      filterTab: 'all',
+      isLoading: false,
+      error: null,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <Routes>
+          <Route path="/chat" element={<ChatLayout />}>
+            <Route index element={<div>Welcome Canvas Child</div>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    )
+
+    const openBtn = screen.getByTestId('open-create-group-modal-btn')
+    await user.click(openBtn)
+
+    expect(screen.getByText('Tạo nhóm chat mới')).toBeInTheDocument()
+    expect(screen.getByTestId('create-group-modal-content')).toBeInTheDocument()
+  })
 })

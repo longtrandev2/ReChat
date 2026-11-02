@@ -33,8 +33,10 @@ export default {
           DEFAULT: '#FFFFFF',
           light: '#FFFFFF',
           'light-2': '#F4F4F5',
+          hover: '#F4F4F5',
           dark: '#17212B', // Telegram Dark surface
           'dark-2': '#242F3D',
+          'dark-secondary': '#242F3D',
         },
         border: {
           DEFAULT: '#E4E4E7',

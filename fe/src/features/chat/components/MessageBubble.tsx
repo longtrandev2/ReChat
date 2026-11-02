@@ -194,6 +194,19 @@ export function MessageBubble({
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const [canEdit, setCanEdit] = useState(false)
 
+  if (message.type === 'SYSTEM') {
+    return (
+      <div
+        className="flex justify-center my-2.5 w-full select-none"
+        data-testid="system-message"
+      >
+        <span className="px-3.5 py-1 rounded-full bg-black/[0.04] dark:bg-white/[0.08] text-[11px] font-medium text-ink-secondary dark:text-ink-secondary-dark text-center max-w-[85%] leading-relaxed shadow-xs">
+          {message.content}
+        </span>
+      </div>
+    )
+  }
+
   const timeString = (() => {
     try {
       const d = new Date(message.createdAt)

@@ -6,6 +6,7 @@ import { ChatDetailDrawer } from './ChatDetailDrawer'
 import { conversationApi } from '@/features/conversations/services/conversation.api'
 import { friendsApi } from '@/features/friends/services/friends.api'
 import { messagesApi } from '../services/messages.api'
+import { mediaApi } from '../services/media.api'
 import { useAuthStore } from '@/stores/auth.store'
 import type { UserProfile } from '@/types/auth.types'
 import type { Conversation } from '@/features/conversations/types/conversation.types'
@@ -35,6 +36,12 @@ vi.mock('@/features/friends/services/friends.api', () => ({
 vi.mock('../services/messages.api', () => ({
   messagesApi: {
     getMessages: vi.fn(),
+  },
+}))
+
+vi.mock('../services/media.api', () => ({
+  mediaApi: {
+    uploadMedia: vi.fn(),
   },
 }))
 
@@ -587,5 +594,43 @@ describe('ChatDetailDrawer Component Tests', () => {
     const closeBtn = screen.getByRole('button', { name: 'Đóng bảng thông tin' })
     fireEvent.click(closeBtn)
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('handles uploading new group avatar with mediaApi and conversationApi', async () => {
+    const onConversationUpdated = vi.fn()
+    vi.mocked(mediaApi.uploadMedia).mockResolvedValueOnce({
+      url: 'https://res.cloudinary.com/test/image/upload/new_group_avatar.png',
+      secure_url: 'https://res.cloudinary.com/test/image/upload/new_group_avatar.png',
+      publicId: 'rechat/images/new_group_avatar',
+    })
+    vi.mocked(conversationApi.updateGroup).mockResolvedValueOnce({
+      ...groupConv,
+      avatarUrl: 'https://res.cloudinary.com/test/image/upload/new_group_avatar.png',
+    })
+
+    render(
+      <MemoryRouter>
+        <ChatDetailDrawer
+          isOpen={true}
+          onClose={vi.fn()}
+          conversation={groupConv}
+          onConversationUpdated={onConversationUpdated}
+        />
+      </MemoryRouter>
+    )
+
+    const fileInput = screen.getByTestId('avatar-file-input')
+    const file = new File(['avatar content'], 'avatar.png', { type: 'image/png' })
+    fireEvent.change(fileInput, { target: { files: [file] } })
+
+    await waitFor(() => {
+      expect(mediaApi.uploadMedia).toHaveBeenCalledWith(file)
+      expect(conversationApi.updateGroup).toHaveBeenCalledWith(groupConv.id, {
+        avatarUrl: 'https://res.cloudinary.com/test/image/upload/new_group_avatar.png',
+      })
+      expect(onConversationUpdated).toHaveBeenCalledWith({
+        avatarUrl: 'https://res.cloudinary.com/test/image/upload/new_group_avatar.png',
+      })
+    })
   })
 })

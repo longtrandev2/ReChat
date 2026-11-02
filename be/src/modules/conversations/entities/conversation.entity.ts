@@ -30,7 +30,7 @@ export class Conversation {
     @Column({ nullable: true, length: 50 })
     name?: string;
 
-    @Column({ nullable: true, length: 255 })
+    @Column({ nullable: true, length: 500 })
     avatarUrl?: string;
 
     @Column({ nullable: true, length: 32, default: '👍' })

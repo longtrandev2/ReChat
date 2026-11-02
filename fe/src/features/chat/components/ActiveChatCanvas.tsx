@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useMemo, useState, useRef } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { UploadCloud } from 'lucide-react'
 import { ChatHeader } from './ChatHeader'
 import { PinnedMessageBar } from './PinnedMessageBar'
@@ -25,6 +25,7 @@ import type { Message, MessageSender } from '../types/message.types'
  */
 export function ActiveChatCanvas() {
   const { conversationId } = useParams<{ conversationId: string }>()
+  const navigate = useNavigate()
   const { user } = useAuthStore()
   const { conversations, setActiveConversation } =
     useConversationStore()
@@ -45,6 +46,13 @@ export function ActiveChatCanvas() {
 
   // Danh sách tin nhắn đã ghim trong cuộc hội thoại
   const [pinnedMessages, setPinnedMessages] = useState<Message[]>([])
+  const [prevConversationId, setPrevConversationId] = useState(conversationId)
+
+  // Điều chỉnh state khi conversationId thay đổi chuẩn React (tránh setState trong effect)
+  if (prevConversationId !== conversationId) {
+    setPrevConversationId(conversationId)
+    setPinnedMessages([])
+  }
 
   // Thông tin đối phương trong cuộc trò chuyện trực tiếp (Direct)
   const [partner, setPartner] = useState<ConversationMemberUser | null>(null)
@@ -160,12 +168,7 @@ export function ActiveChatCanvas() {
       .getPinnedMessages(conversationId)
       .then((pins) => {
         if (isMounted && Array.isArray(pins)) {
-          setPinnedMessages((prev) => {
-            if (prev.length === 0) return pins
-            const prevIds = new Set(prev.map((m) => m.id))
-            const remaining = pins.filter((p) => !prevIds.has(p.id))
-            return [...prev, ...remaining]
-          })
+          setPinnedMessages(pins)
         }
       })
       .catch(() => {
@@ -320,6 +323,13 @@ export function ActiveChatCanvas() {
       }
     }
 
+    const onGroupMembershipChanged = (payload: { conversationId: string; action: string }) => {
+      if (payload.conversationId === conversationId && (payload.action === 'REMOVED' || payload.action === 'LEFT')) {
+        toast.error('Bạn không còn là thành viên của nhóm chat này')
+        navigate('/chat')
+      }
+    }
+
     if (socket && typeof socket.on === 'function') {
       socket.on('messageRecalled', onRecalled)
       socket.on('messageEdited', onEdited)
@@ -328,6 +338,7 @@ export function ActiveChatCanvas() {
       socket.on('messageUnpinned', onMessageUnpinned)
       socket.on('conversationCustomized', onConversationCustomized)
       socket.on('groupMemberUpdated', onGroupMemberUpdated)
+      socket.on('groupMembershipChanged', onGroupMembershipChanged)
     }
 
     return () => {
@@ -340,6 +351,7 @@ export function ActiveChatCanvas() {
           socket.off('messageUnpinned', onMessageUnpinned)
           socket.off('conversationCustomized', onConversationCustomized)
           socket.off('groupMemberUpdated', onGroupMemberUpdated)
+          socket.off('groupMembershipChanged', onGroupMembershipChanged)
         }
         if (socket.connected && typeof socket.emit === 'function') {
           socket.emit('leaveConversation', { conversationId })
@@ -355,6 +367,7 @@ export function ActiveChatCanvas() {
     handleReactionUpdated,
     handleMessagePinned,
     handleMessageUnpinned,
+    navigate,
     user?.id,
   ])
 

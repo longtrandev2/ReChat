@@ -35,6 +35,7 @@ import {
     MessageEditedEvent,
     MessageReactionEvent,
     ConversationCustomizedEvent,
+    MessageCreatedEvent,
 } from '../../common/events/index.js';
 
 @Injectable()
@@ -60,6 +61,91 @@ export class ConversationsService {
 
         private readonly eventEmitter: EventEmitter2,
     ) { }
+
+    /**
+     * Tạo tin nhắn hệ thống (SYSTEM Message) ghi lại các sự kiện nhóm/hội thoại (chuẩn Messenger)
+     */
+    private async createSystemMessage(
+        conversationId: string,
+        actorId: string,
+        content: string,
+    ): Promise<Message> {
+        const actor = await this.userRepository.findOne({
+            where: { id: actorId },
+            select: { id: true, username: true, displayName: true, avatarUrl: true },
+        });
+
+        const message = this.messageRepository.create({
+            conversation: { id: conversationId } as Conversation,
+            sender: (actor || { id: actorId }) as User,
+            content: content.trim(),
+            type: MessageType.SYSTEM,
+        });
+        const savedMessage = await this.messageRepository.save(message);
+
+        const msgId = savedMessage?.id || 'msg-system-uuid';
+        const msgCreatedAt = savedMessage?.createdAt || new Date();
+
+        await this.conversationRepository.update(conversationId, {
+            lastMessageId: msgId,
+            lastMessageAt: msgCreatedAt,
+        });
+
+        const members = await this.memberRepository.find({
+            where: { conversation: { id: conversationId } },
+            relations: { user: true },
+        });
+        const memberIds = (members || []).map((m) => m.user?.id || (m as any).userId).filter(Boolean);
+
+        const senderObj = {
+            id: actor?.id || actorId,
+            username: actor?.username || 'system',
+            displayName: actor?.displayName || actor?.username || 'Người dùng',
+            avatarUrl: actor?.avatarUrl || null,
+        };
+
+        const payload = {
+            id: msgId,
+            conversationId,
+            content: content.trim(),
+            type: MessageType.SYSTEM,
+            fileUrl: null,
+            fileSize: null,
+            replyToId: null,
+            replyTo: null,
+            reactions: [],
+            isRecalled: false,
+            isEdited: false,
+            editedAt: null,
+            isPinned: false,
+            createdAt: msgCreatedAt,
+            sender: senderObj,
+        };
+
+        this.eventEmitter.emit(
+            'message.created',
+            new MessageCreatedEvent(conversationId, payload),
+        );
+
+        this.eventEmitter.emit(
+            'inbox.updated',
+            new InboxUpdatedEvent(
+                conversationId,
+                memberIds,
+                {
+                    id: msgId,
+                    content: content.trim(),
+                    type: MessageType.SYSTEM,
+                    fileUrl: null,
+                    senderName: senderObj.displayName,
+                    createdAt: msgCreatedAt,
+                },
+                actorId,
+            ),
+        );
+
+        return savedMessage;
+    }
 
     /**
      * Tạo hoặc lấy cuộc hội thoại 1-1 (DIRECT) giữa 2 người bạn (BR-05, FR-10)
@@ -183,6 +269,13 @@ export class ConversationsService {
 
         await this.memberRepository.save([ownerMember, ...otherMembers]);
 
+        const owner = await this.userRepository.findOne({
+            where: { id: ownerId },
+            select: { id: true, displayName: true, username: true },
+        });
+        const ownerName = owner?.displayName || owner?.username || 'Người dùng';
+        await this.createSystemMessage(savedGroup.id, ownerId, `${ownerName} đã tạo nhóm.`);
+
         // Phát domain event để FE của tất cả thành viên trong nhóm lập tức thấy nhóm mới trong Inbox
         this.eventEmitter.emit(
             'conversation.created',
@@ -270,13 +363,25 @@ export class ConversationsService {
 
         const savedMembers = await this.memberRepository.save(newMembers);
 
+        const actor = await this.userRepository.findOne({
+            where: { id: currentUserId },
+            select: { id: true, displayName: true, username: true },
+        });
+        const actorName = actor?.displayName || actor?.username || 'Người dùng';
+        const targetUsers = await this.userRepository.find({
+            where: { id: In(newMemberIds) },
+            select: { id: true, displayName: true, username: true },
+        });
+        const targetNames = targetUsers.map((u) => u.displayName || u.username).join(', ');
+        await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã thêm ${targetNames} vào nhóm.`);
+
         // Phát domain event để FE cập nhật danh sách thành viên và thông báo vào room
         this.eventEmitter.emit(
             'group.member_event',
             new GroupMemberEvent(
                 conversationId,
                 'ADDED',
-                { id: currentUserId, displayName: currentUserId },
+                { id: currentUserId, displayName: actorName },
                 newMemberIds,
                 savedMembers,
             ),
@@ -322,6 +427,12 @@ export class ConversationsService {
 
         const isOwner = currentMember.role === ConversationRole.OWNER;
 
+        const actor = await this.userRepository.findOne({
+            where: { id: currentUserId },
+            select: { id: true, displayName: true, username: true },
+        });
+        const actorName = actor?.displayName || actor?.username || 'Người dùng';
+
         // 3. Xóa tư cách thành viên của currentUserId
         await this.memberRepository.delete(currentMember.id);
 
@@ -329,6 +440,7 @@ export class ConversationsService {
         if (isOwner) {
             const remainingMembers = await this.memberRepository.find({
                 where: { conversation: { id: conversationId } },
+                relations: { user: true },
                 order: { joinedAt: 'ASC' },
             });
 
@@ -338,12 +450,17 @@ export class ConversationsService {
                 nextOwner.role = ConversationRole.OWNER;
                 await this.memberRepository.save(nextOwner);
 
+                await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã rời khỏi nhóm.`);
+                const nextOwnerId = nextOwner.user?.id || (nextOwner as any).userId || currentUserId;
+                const nextOwnerName = nextOwner.user?.displayName || nextOwner.user?.username || 'Người dùng';
+                await this.createSystemMessage(conversationId, nextOwnerId, `${nextOwnerName} là Trưởng nhóm mới.`);
+
                 this.eventEmitter.emit(
                     'group.member_event',
                     new GroupMemberEvent(
                         conversationId,
                         'LEFT',
-                        { id: currentUserId, displayName: currentUserId },
+                        { id: currentUserId, displayName: actorName },
                         [currentUserId],
                     ),
                 );
@@ -356,12 +473,14 @@ export class ConversationsService {
             return { message: 'Đã rời nhóm và giải tán nhóm thành công' };
         }
 
+        await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã rời khỏi nhóm.`);
+
         this.eventEmitter.emit(
             'group.member_event',
             new GroupMemberEvent(
                 conversationId,
                 'LEFT',
-                { id: currentUserId, displayName: currentUserId },
+                { id: currentUserId, displayName: actorName },
                 [currentUserId],
             ),
         );
@@ -761,15 +880,35 @@ export class ConversationsService {
 
         const saved = await this.conversationRepository.save(conversation);
 
+        const actor = await this.userRepository.findOne({
+            where: { id: currentUserId },
+            select: { id: true, displayName: true, username: true },
+        });
+        const actorName = actor?.displayName || actor?.username || 'Người dùng';
+
+        if (dto.name !== undefined) {
+            await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã đổi tên nhóm thành "${conversation.name}".`);
+        }
+        if (dto.avatarUrl !== undefined) {
+            await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã thay đổi ảnh nhóm.`);
+        }
+
+        const allMembers = (await this.memberRepository.find({
+            where: { conversation: { id: conversationId } },
+            relations: { user: true },
+        })) || [];
+        const memberIds = allMembers.map((m) => m.user?.id || (m as any).userId).filter(Boolean);
+
         this.eventEmitter.emit(
             'conversation.customized',
             new ConversationCustomizedEvent(
                 conversationId,
                 {
                     id: currentUserId,
-                    displayName: currentUserId,
+                    displayName: actorName,
                 },
                 changes,
+                memberIds,
             ),
         );
 
@@ -812,15 +951,30 @@ export class ConversationsService {
         conversation.quickEmoji = emoji;
         await this.conversationRepository.save(conversation);
 
+        const actor = await this.userRepository.findOne({
+            where: { id: currentUserId },
+            select: { id: true, displayName: true, username: true },
+        });
+        const actorName = actor?.displayName || actor?.username || 'Người dùng';
+
+        await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã đổi biểu tượng cảm xúc nhanh thành ${emoji}.`);
+
+        const allMembers = (await this.memberRepository.find({
+            where: { conversation: { id: conversationId } },
+            relations: { user: true },
+        })) || [];
+        const memberIds = allMembers.map((m) => m.user?.id || (m as any).userId).filter(Boolean);
+
         this.eventEmitter.emit(
             'conversation.customized',
             new ConversationCustomizedEvent(
                 conversationId,
                 {
                     id: currentUserId,
-                    displayName: currentUserId,
+                    displayName: actorName,
                 },
                 { quickEmoji: emoji },
+                memberIds,
             ),
         );
 
@@ -874,6 +1028,7 @@ export class ConversationsService {
                 conversation: { id: conversationId },
                 user: { id: targetUserId },
             },
+            relations: { user: true },
         });
 
         if (!targetMember) {
@@ -888,14 +1043,23 @@ export class ConversationsService {
             throw new ForbiddenException('Phó nhóm không có quyền xóa Phó nhóm khác');
         }
 
+        const actor = await this.userRepository.findOne({
+            where: { id: currentUserId },
+            select: { id: true, displayName: true, username: true },
+        });
+        const actorName = actor?.displayName || actor?.username || 'Người dùng';
+        const targetName = targetMember.user?.displayName || targetMember.user?.username || 'thành viên';
+
         await this.memberRepository.delete(targetMember.id);
+
+        await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã xóa ${targetName} khỏi nhóm.`);
 
         this.eventEmitter.emit(
             'group.member_event',
             new GroupMemberEvent(
                 conversationId,
                 'REMOVED',
-                { id: currentUserId, displayName: currentUserId },
+                { id: currentUserId, displayName: actorName },
                 [targetUserId],
             ),
         );
@@ -930,6 +1094,7 @@ export class ConversationsService {
                 conversation: { id: conversationId },
                 user: { id: currentUserId },
             },
+            relations: { user: true },
         });
 
         if (!currentMember || currentMember.role !== ConversationRole.OWNER) {
@@ -945,6 +1110,7 @@ export class ConversationsService {
                 conversation: { id: conversationId },
                 user: { id: dto.newOwnerId },
             },
+            relations: { user: true },
         });
 
         if (!newOwnerMember) {
@@ -955,6 +1121,20 @@ export class ConversationsService {
         currentMember.role = ConversationRole.ADMIN;
 
         await this.memberRepository.save([newOwnerMember, currentMember]);
+
+        const actorName = currentMember.user?.displayName || currentMember.user?.username || 'Trưởng nhóm';
+        const newOwnerName = newOwnerMember.user?.displayName || newOwnerMember.user?.username || 'thành viên';
+        await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã chỉ định ${newOwnerName} làm Trưởng nhóm mới.`);
+
+        this.eventEmitter.emit(
+            'group.member_event',
+            new GroupMemberEvent(
+                conversationId,
+                'TRANSFER_OWNER',
+                { id: currentUserId, displayName: actorName },
+                [dto.newOwnerId],
+            ),
+        );
 
         return { message: 'Chuyển giao quyền Trưởng nhóm thành công' };
     }
@@ -987,6 +1167,7 @@ export class ConversationsService {
                 conversation: { id: conversationId },
                 user: { id: currentUserId },
             },
+            relations: { user: true },
         });
 
         if (!currentMember || currentMember.role !== ConversationRole.OWNER) {
@@ -1011,6 +1192,25 @@ export class ConversationsService {
 
         targetMember.role = dto.role;
         await this.memberRepository.save(targetMember);
+
+        const actorName = currentMember.user?.displayName || currentMember.user?.username || 'Trưởng nhóm';
+        const targetName = targetMember.user?.displayName || targetMember.user?.username || 'thành viên';
+        const roleText = dto.role === ConversationRole.ADMIN ? 'làm Quản trị viên' : 'vai trò Quản trị viên của';
+        const msgContent = dto.role === ConversationRole.ADMIN
+            ? `${actorName} đã bổ nhiệm ${targetName} ${roleText}.`
+            : `${actorName} đã gỡ ${roleText} ${targetName}.`;
+
+        await this.createSystemMessage(conversationId, currentUserId, msgContent);
+
+        this.eventEmitter.emit(
+            'group.member_event',
+            new GroupMemberEvent(
+                conversationId,
+                'ROLE_UPDATED',
+                { id: currentUserId, displayName: actorName },
+                [targetUserId],
+            ),
+        );
 
         return {
             message: 'Cập nhật vai trò thành viên thành công',
@@ -1063,6 +1263,14 @@ export class ConversationsService {
 
         const saved = await this.messageRepository.save(message);
 
+        const actor = await this.userRepository.findOne({
+            where: { id: currentUserId },
+            select: { id: true, displayName: true, username: true },
+        });
+        const actorName = actor?.displayName || actor?.username || 'Người dùng';
+
+        await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã ghim một tin nhắn.`);
+
         // Bắn domain event để FE hiển thị thanh Pin Bar trên đỉnh khung chat
         this.eventEmitter.emit(
             'message.pinned',
@@ -1075,7 +1283,7 @@ export class ConversationsService {
                     content: saved.content,
                     senderName: saved.sender?.displayName || saved.sender?.username,
                 },
-                { id: currentUserId, displayName: currentUserId },
+                { id: currentUserId, displayName: actorName },
             ),
         );
 
@@ -1130,6 +1338,14 @@ export class ConversationsService {
         message.pinnedBy = null as any;
 
         await this.messageRepository.save(message);
+
+        const actor = await this.userRepository.findOne({
+            where: { id: currentUserId },
+            select: { id: true, displayName: true, username: true },
+        });
+        const actorName = actor?.displayName || actor?.username || 'Người dùng';
+
+        await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã bỏ ghim một tin nhắn.`);
 
         // Bắn domain event để FE gỡ tin nhắn khỏi thanh Pin Bar
         this.eventEmitter.emit(

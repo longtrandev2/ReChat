@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { Outlet, useNavigate } from 'react-router-dom'
 import { ConversationSidebar } from './ConversationSidebar'
+import { CreateGroupModal } from './CreateGroupModal'
 
 /**
  * ChatLayout: Khung bố cục chính của phân hệ Trò chuyện (Chat Module)
@@ -8,6 +10,7 @@ import { ConversationSidebar } from './ConversationSidebar'
  */
 export function ChatLayout() {
   const navigate = useNavigate()
+  const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false)
 
   const handleSelectConversation = (conversationId: string) => {
     navigate(`/chat/${conversationId}`)
@@ -16,7 +19,10 @@ export function ChatLayout() {
   return (
     <div className="flex h-full w-full overflow-hidden">
       {/* 1. Sidebar danh sách đoạn chat (320px) */}
-      <ConversationSidebar onSelectConversation={handleSelectConversation} />
+      <ConversationSidebar
+        onSelectConversation={handleSelectConversation}
+        onOpenNewChatModal={() => setIsCreateGroupOpen(true)}
+      />
 
       {/* 2. Vùng Canvas hiển thị nội dung chat */}
       <main
@@ -26,6 +32,12 @@ export function ChatLayout() {
       >
         <Outlet />
       </main>
+
+      {/* 3. Modal tạo nhóm chat mới */}
+      <CreateGroupModal
+        isOpen={isCreateGroupOpen}
+        onClose={() => setIsCreateGroupOpen(false)}
+      />
     </div>
   )
 }

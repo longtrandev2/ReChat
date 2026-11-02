@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   X,
@@ -36,6 +36,7 @@ import { useAuthStore } from '@/stores/auth.store'
 import { conversationApi } from '@/features/conversations/services/conversation.api'
 import { mediaApi } from '../services/media.api'
 import { friendsApi, type FriendUser } from '@/features/friends/services/friends.api'
+import { userApi, type SearchedUser } from '@/features/users/services/user.api'
 import type {
   Conversation,
   ConversationMemberUser,
@@ -114,6 +115,8 @@ export function ChatDetailDrawer({
   // Upload Avatar
   const avatarInputRef = useRef<HTMLInputElement>(null)
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false)
+  const [overrideAvatarUrl, setOverrideAvatarUrl] = useState<string | null>(null)
+  const currentAvatarUrl = overrideAvatarUrl || conversation.avatarUrl
 
   // Quick Emoji Popover
   const [isEmojiPopoverOpen, setIsEmojiPopoverOpen] = useState(false)
@@ -123,6 +126,7 @@ export function ChatDetailDrawer({
   // Thêm thành viên nhóm Modal
   const [isAddMemberModalOpen, setIsAddMemberModalOpen] = useState(false)
   const [friendsList, setFriendsList] = useState<FriendUser[]>([])
+  const [searchedUsers, setSearchedUsers] = useState<SearchedUser[]>([])
   const [selectedFriendIds, setSelectedFriendIds] = useState<string[]>([])
   const [friendsSearch, setFriendsSearch] = useState('')
   const [isLoadingFriends, setIsLoadingFriends] = useState(false)
@@ -148,7 +152,7 @@ export function ChatDetailDrawer({
   })
 
   const isGroup = conversation.type === 'GROUP'
-  const members = conversation.members || []
+  const members = useMemo(() => conversation.members || [], [conversation.members])
 
   // Quyền hạn của user hiện tại trong nhóm (BR-14, BR-15, BR-16)
   const currentMember = members.find((m) => m.user?.id === user?.id)
@@ -280,13 +284,19 @@ export function ChatDetailDrawer({
     try {
       setIsUploadingAvatar(true)
       const uploadRes = await mediaApi.uploadMedia(file)
+      const avatarUrl = uploadRes.url || uploadRes.secure_url
+      if (!avatarUrl) {
+        throw new Error('Không nhận được URL ảnh từ máy chủ')
+      }
+      setOverrideAvatarUrl(avatarUrl)
       const updated = await conversationApi.updateGroup(conversation.id, {
-        avatarUrl: uploadRes.secure_url,
+        avatarUrl,
       })
       addOrUpdateConversation(updated)
-      onConversationUpdated?.({ avatarUrl: uploadRes.secure_url })
+      onConversationUpdated?.({ avatarUrl })
       toast.success('Đã cập nhật ảnh đại diện nhóm')
     } catch (err: unknown) {
+      setOverrideAvatarUrl(null)
       const error = err as { response?: { data?: { message?: string } } }
       toast.error(error.response?.data?.message || 'Không thể tải ảnh lên')
     } finally {
@@ -315,6 +325,7 @@ export function ChatDetailDrawer({
     setIsAddMemberModalOpen(true)
     setSelectedFriendIds([])
     setFriendsSearch('')
+    setSearchedUsers([])
     try {
       setIsLoadingFriends(true)
       const friends = await friendsApi.getFriends({ limit: 50 })
@@ -422,15 +433,58 @@ export function ChatDetailDrawer({
     }
   }
 
-  // Lọc bạn bè chưa tham gia nhóm
-  const eligibleFriends = friendsList.filter(
-    (f) => !members.some((m) => m.user?.id === f.id)
-  )
-  const filteredFriends = eligibleFriends.filter(
-    (f) =>
-      f.displayName.toLowerCase().includes(friendsSearch.toLowerCase()) ||
-      f.username.toLowerCase().includes(friendsSearch.toLowerCase())
-  )
+  // Tìm kiếm người dùng khi nhập từ khóa trong modal thêm thành viên (debounce 300ms)
+  useEffect(() => {
+    if (!friendsSearch.trim() || !isAddMemberModalOpen) {
+      return
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        const users = await userApi.searchUsers(friendsSearch.trim())
+        setSearchedUsers(users || [])
+      } catch {
+        setSearchedUsers([])
+      }
+    }, 300)
+
+    return () => clearTimeout(timer)
+  }, [friendsSearch, isAddMemberModalOpen])
+
+  // Lọc bạn bè và người dùng chưa tham gia nhóm
+  const eligibleFriends = useMemo(() => {
+    const existingMemberUserIds = new Set(members.map((m) => m.user?.id))
+    const map = new Map<string, FriendUser>()
+
+    for (const f of friendsList) {
+      if (!existingMemberUserIds.has(f.id) && f.id !== user?.id) {
+        map.set(f.id, f)
+      }
+    }
+
+    for (const u of searchedUsers) {
+      if (!existingMemberUserIds.has(u.id) && u.id !== user?.id && !map.has(u.id)) {
+        map.set(u.id, {
+          id: u.id,
+          username: u.username,
+          displayName: u.displayName || u.username,
+          avatarUrl: u.avatarUrl,
+        })
+      }
+    }
+
+    return Array.from(map.values())
+  }, [friendsList, searchedUsers, members, user?.id])
+
+  const filteredFriends = useMemo(() => {
+    if (!friendsSearch.trim()) return eligibleFriends
+    const q = friendsSearch.toLowerCase()
+    return eligibleFriends.filter(
+      (f) =>
+        f.displayName.toLowerCase().includes(q) ||
+        f.username.toLowerCase().includes(q)
+    )
+  }, [eligibleFriends, friendsSearch])
 
   if (!isOpen) return null
 
@@ -465,7 +519,7 @@ export function ChatDetailDrawer({
           <div className="relative mb-2.5">
             <Avatar className="w-20 h-20 border-2 border-border-light dark:border-white/15 shadow-md">
               <AvatarImage
-                src={(isGroup ? conversation.avatarUrl : partner?.avatarUrl || conversation.avatarUrl) || undefined}
+                src={(isGroup ? currentAvatarUrl : partner?.avatarUrl || currentAvatarUrl) || undefined}
                 alt={isGroup ? conversation.name : partner?.displayName || conversation.name}
               />
               <AvatarFallback className="bg-brand-soft text-brand font-bold text-xl">
@@ -1264,8 +1318,14 @@ export function ChatDetailDrawer({
                 <input
                   type="text"
                   value={friendsSearch}
-                  onChange={(e) => setFriendsSearch(e.target.value)}
-                  placeholder="Tìm bạn bè..."
+                  onChange={(e) => {
+                    const val = e.target.value
+                    setFriendsSearch(val)
+                    if (!val.trim()) {
+                      setSearchedUsers([])
+                    }
+                  }}
+                  placeholder="Tìm bạn bè hoặc username..."
                   className="w-full pl-9 pr-3.5 py-1.5 rounded-xl border border-border-light dark:border-border-dark bg-surface-light dark:bg-[#242F3D] text-xs text-ink-primary dark:text-white focus:outline-none focus:border-brand transition-colors"
                   data-testid="friends-search-input"
                 />
@@ -1280,11 +1340,13 @@ export function ChatDetailDrawer({
                 </div>
               ) : filteredFriends.length === 0 ? (
                 <div className="py-8 text-center text-xs text-ink-muted">
-                  {friendsList.length === 0
-                    ? 'Bạn chưa có bạn bè nào để thêm'
+                  {friendsSearch
+                    ? `Không tìm thấy người dùng "${friendsSearch}"`
+                    : friendsList.length === 0
+                    ? 'Bạn chưa có bạn bè nào. Nhập tên hoặc username ở trên để tìm.'
                     : eligibleFriends.length === 0
                     ? 'Tất cả bạn bè của bạn đã có mặt trong nhóm'
-                    : 'Không tìm thấy bạn bè phù hợp'}
+                    : 'Không tìm thấy người dùng phù hợp'}
                 </div>
               ) : (
                 filteredFriends.map((friend) => {

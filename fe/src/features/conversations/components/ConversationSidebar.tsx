@@ -71,9 +71,10 @@ export function ConversationSidebar({
         <button
           type="button"
           onClick={onOpenNewChatModal}
+          data-testid="open-create-group-modal-btn"
           title="Tạo cuộc trò chuyện mới"
           aria-label="Tạo cuộc trò chuyện mới"
-          className="w-9 h-9 flex items-center justify-center rounded-xl text-ink-secondary dark:text-ink-secondary-dark hover:text-brand dark:hover:text-brand-accent hover:bg-surface-hover dark:hover:bg-surface-dark-secondary transition-all duration-150 active:scale-95"
+          className="w-9 h-9 flex items-center justify-center rounded-xl text-ink-secondary dark:text-ink-secondary-dark hover:text-brand dark:hover:text-brand-accent hover:bg-surface-hover dark:hover:bg-surface-dark-secondary transition-all duration-150 active:scale-95 cursor-pointer"
         >
           <MessageSquarePlus className="w-5 h-5" />
         </button>

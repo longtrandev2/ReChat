@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/auth.store'
 import { postAuthBroadcast } from '@/lib/auth-broadcast'
 import { useConversationStore } from '@/features/conversations/stores/conversation.store'
 import { useMessagesStore } from '@/features/chat/stores/messages.store'
+import { conversationApi } from '@/features/conversations/services/conversation.api'
 import type { Conversation, LastMessage } from '@/features/conversations/types/conversation.types'
 import type { Message } from '@/features/chat/types/message.types'
 
@@ -180,6 +181,41 @@ export function useSocketInit() {
         .setLastReadMessageId(payload.conversationId, payload.lastReadMessageId)
     }
 
+    const handleGroupMembershipChanged = (payload: { conversationId: string; action: string }) => {
+      if (!payload || !payload.conversationId) return
+      if (payload.action === 'REMOVED' || payload.action === 'LEFT') {
+        useConversationStore.getState().removeConversation(payload.conversationId)
+      } else if (payload.action === 'ADDED') {
+        conversationApi
+          .getConversationById(payload.conversationId)
+          .then((conv) => {
+            if (conv) {
+              useConversationStore.getState().addOrUpdateConversation(conv)
+            }
+          })
+          .catch(() => {})
+      }
+    }
+
+    const handleConversationCustomized = (payload: {
+      conversationId: string
+      changes?: { name?: string; avatarUrl?: string; quickEmoji?: string }
+      name?: string
+      avatarUrl?: string
+      quickEmoji?: string
+    }) => {
+      if (!payload || !payload.conversationId) return
+      const changes = payload.changes || {}
+      const name = payload.name ?? changes.name
+      const avatarUrl = payload.avatarUrl ?? changes.avatarUrl
+      const quickEmoji = payload.quickEmoji ?? changes.quickEmoji
+      useConversationStore.getState().updateConversation(payload.conversationId, {
+        ...(name !== undefined ? { name } : {}),
+        ...(avatarUrl !== undefined ? { avatarUrl } : {}),
+        ...(quickEmoji !== undefined ? { quickEmoji } : {}),
+      })
+    }
+
     // Đăng ký listeners
     socket.on('connect', handleConnect)
     socket.on('disconnect', handleDisconnect)
@@ -193,6 +229,8 @@ export function useSocketInit() {
     socket.on('newMessage', handleNewMessage)
     socket.on('userTyping', handleUserTyping)
     socket.on('messageRead', handleMessageRead)
+    socket.on('groupMembershipChanged', handleGroupMembershipChanged)
+    socket.on('conversationCustomized', handleConversationCustomized)
 
     // Cập nhật trạng thái nếu socket đã kết nối trước đó
     if (socket.connected) {
@@ -213,6 +251,8 @@ export function useSocketInit() {
       socket.off('newMessage', handleNewMessage)
       socket.off('userTyping', handleUserTyping)
       socket.off('messageRead', handleMessageRead)
+      socket.off('groupMembershipChanged', handleGroupMembershipChanged)
+      socket.off('conversationCustomized', handleConversationCustomized)
     }
   }, [token, isAuthenticated, setStatus, updateUserStatus, reset])
 }

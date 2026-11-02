@@ -339,6 +339,25 @@ describe('MessageBubble Component Tests', () => {
     await user.click(unpinMenuItem)
     expect(handleUnpin).toHaveBeenCalledWith(pinnedMsg)
   })
+
+  it('renders SYSTEM message as a centered capsule badge without bubbles, ticks, or action menus', () => {
+    const systemMsg: Message = {
+      ...baseMessage,
+      id: 'sys-msg-1',
+      type: 'SYSTEM',
+      content: 'Alex đã thêm Bob vào nhóm.',
+    }
+
+    render(<MessageBubble message={systemMsg} isOutgoing={false} />)
+
+    const systemBadge = screen.getByTestId('system-message')
+    expect(systemBadge).toBeInTheDocument()
+    expect(systemBadge).toHaveTextContent('Alex đã thêm Bob vào nhóm.')
+    expect(screen.queryByTestId('message-bubble-sys-msg-1')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Đã đọc')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Đã gửi')).not.toBeInTheDocument()
+    expect(screen.queryByTitle('Tùy chọn khác')).not.toBeInTheDocument()
+  })
 })
 
 
