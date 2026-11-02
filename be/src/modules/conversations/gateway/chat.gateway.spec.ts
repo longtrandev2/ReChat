@@ -24,6 +24,7 @@ import {
     MessageRecalledEvent,
     MessageEditedEvent,
     MessageReactionEvent,
+    ConversationCustomizedEvent,
 } from '../../../common/events/index.js';
 
 describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () => {
@@ -44,6 +45,8 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
         recallMessage: ReturnType<typeof vi.fn>;
         editMessage: ReturnType<typeof vi.fn>;
         reactMessage: ReturnType<typeof vi.fn>;
+        updateGroup: ReturnType<typeof vi.fn>;
+        updateQuickEmoji: ReturnType<typeof vi.fn>;
     };
     let mockUserRepository: {
         findOne: ReturnType<typeof vi.fn>;
@@ -100,6 +103,8 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
             recallMessage: vi.fn(),
             editMessage: vi.fn(),
             reactMessage: vi.fn(),
+            updateGroup: vi.fn(),
+            updateQuickEmoji: vi.fn(),
         };
 
         mockUserRepository = {
@@ -1017,6 +1022,64 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
             );
             expect(result.status).toBe('success');
             expect(result.data).toEqual(mockReactionResult);
+        });
+
+        it('handleCustomizeConversation should throw WsException if client has no authenticated user', async () => {
+            const client = createMockSocket() as Socket;
+            client.data = {};
+
+            await expect(
+                gateway.handleCustomizeConversation(client, { conversationId: 'conv-1', quickEmoji: '🔥' }),
+            ).rejects.toThrow(WsException);
+        });
+
+        it('handleCustomizeConversation should delegate to service methods and return updated data', async () => {
+            const client = createMockSocket() as Socket;
+            client.data.user = { id: 'user-uuid-1', username: 'john_doe' };
+
+            mockConversationsService.updateGroup.mockResolvedValueOnce({ id: 'conv-1', name: 'New Name' });
+            mockConversationsService.updateQuickEmoji.mockResolvedValueOnce({ quickEmoji: '🔥' });
+
+            const result = await gateway.handleCustomizeConversation(client, {
+                conversationId: 'conv-1',
+                name: 'New Name',
+                quickEmoji: '🔥',
+            });
+
+            expect(mockConversationsService.updateGroup).toHaveBeenCalledWith(
+                'user-uuid-1',
+                'conv-1',
+                { name: 'New Name', avatarUrl: undefined },
+            );
+            expect(mockConversationsService.updateQuickEmoji).toHaveBeenCalledWith(
+                'user-uuid-1',
+                'conv-1',
+                { emoji: '🔥' },
+            );
+            expect(result.status).toBe('success');
+            expect(result.data.quickEmoji).toBe('🔥');
+        });
+
+        it('handleConversationCustomized should broadcast to room and member user channels', () => {
+            const event = new ConversationCustomizedEvent(
+                'conv-1',
+                { id: 'user-1', displayName: 'User One' },
+                { quickEmoji: '🎉' },
+                ['user-1', 'user-2'],
+            );
+
+            gateway.handleConversationCustomized(event);
+
+            expect(mockServer.to).toHaveBeenCalledWith('conv_conv-1');
+            expect(mockServer.to).toHaveBeenCalledWith('user_user-1');
+            expect(mockServer.to).toHaveBeenCalledWith('user_user-2');
+            expect(mockServer.emit).toHaveBeenCalledWith(
+                'conversationCustomized',
+                expect.objectContaining({
+                    conversationId: 'conv-1',
+                    quickEmoji: '🎉',
+                }),
+            );
         });
     });
 });

@@ -13,4 +13,6 @@ export * from './mark-as-read.dto.js';
 export * from './edit-message.dto.js';
 export * from './recall-message.dto.js';
 export * from './react-message.dto.js';
+export * from './update-quick-emoji.dto.js';
+export * from './customize-conversation.dto.js';
 

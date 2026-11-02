@@ -35,6 +35,7 @@ import {
     GetMediaQueryDto,
     EditMessageDto,
     ReactMessageDto,
+    UpdateQuickEmojiDto,
 } from './dto/index.js';
 
 @ApiTags('conversations')
@@ -677,6 +678,43 @@ export class ConversationsController {
         @Body() dto: UpdateGroupDto,
     ) {
         return this.conversationsService.updateGroup(user.id, conversationId, dto);
+    }
+
+    /**
+     * Tùy chỉnh biểu tượng cảm xúc mặc định (Quick Emoji) cho cuộc hội thoại (FR-30, BR-29)
+     * Áp dụng cho cả DIRECT và GROUP
+     * PATCH /api/v1/conversations/:id/quick-emoji
+     */
+    @Patch(':id/quick-emoji')
+    @ApiOperation({ summary: 'Tùy chỉnh biểu tượng cảm xúc Quick Emoji cho cuộc trò chuyện (FR-30, BR-29)' })
+    @ApiParam({ name: 'id', description: 'UUID của cuộc hội thoại', format: 'uuid', example: '81f0d361-9c12-4211-b0d5-768a31e138a2' })
+    @ApiResponse({
+        status: 200,
+        description: 'Tùy chỉnh Quick Emoji thành công',
+        schema: {
+            example: {
+                quickEmoji: '❤️',
+            },
+        },
+    })
+    @ApiResponse({
+        status: 400,
+        description: 'Emoji không hợp lệ hoặc để trống',
+    })
+    @ApiResponse({
+        status: 403,
+        description: 'Người dùng không phải thành viên của cuộc hội thoại',
+    })
+    @ApiResponse({
+        status: 404,
+        description: 'Cuộc hội thoại không tồn tại',
+    })
+    async updateQuickEmoji(
+        @CurrentUser() user: User,
+        @Param('id', ParseUUIDPipe) conversationId: string,
+        @Body() dto: UpdateQuickEmojiDto,
+    ) {
+        return this.conversationsService.updateQuickEmoji(user.id, conversationId, dto);
     }
 
     /**

@@ -594,6 +594,55 @@ describe('ConversationsService', () => {
             expect(conv.name).toBe('Updated Name');
             expect(conv.avatarUrl).toBe('new-avatar');
             expect(mockConversationRepo.save).toHaveBeenCalledWith(conv);
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'conversation.customized',
+                expect.any(Object),
+            );
+        });
+    });
+
+    // ==========================================
+    // 9b. updateQuickEmoji (FR-30, BR-29)
+    // ==========================================
+    describe('updateQuickEmoji', () => {
+        it('should throw NotFoundException if conversation not found', async () => {
+            mockConversationRepo.findOne.mockResolvedValue(null);
+            await expect(service.updateQuickEmoji('user-1', 'conv-1', { emoji: '❤️' }))
+                .rejects.toThrow(NotFoundException);
+        });
+
+        it('should throw ForbiddenException if user is not a member', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: 'conv-1' });
+            mockMemberRepo.findOne.mockResolvedValue(null);
+
+            await expect(service.updateQuickEmoji('user-1', 'conv-1', { emoji: '❤️' }))
+                .rejects.toThrow(ForbiddenException);
+        });
+
+        it('should throw BadRequestException if emoji is empty or blank', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: 'conv-1' });
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'm-1' });
+
+            await expect(service.updateQuickEmoji('user-1', 'conv-1', { emoji: '   ' }))
+                .rejects.toThrow(BadRequestException);
+        });
+
+        it('should update quickEmoji and emit conversation.customized', async () => {
+            const conv = { id: 'conv-1', quickEmoji: '👍' };
+            mockConversationRepo.findOne.mockResolvedValue(conv);
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'm-1' });
+
+            const result = await service.updateQuickEmoji('user-1', 'conv-1', { emoji: '🔥' });
+            expect(conv.quickEmoji).toBe('🔥');
+            expect(mockConversationRepo.save).toHaveBeenCalledWith(conv);
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'conversation.customized',
+                expect.objectContaining({
+                    conversationId: 'conv-1',
+                    changes: { quickEmoji: '🔥' },
+                }),
+            );
+            expect(result).toEqual({ quickEmoji: '🔥' });
         });
     });
 

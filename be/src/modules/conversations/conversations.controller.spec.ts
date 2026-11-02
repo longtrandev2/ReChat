@@ -26,6 +26,7 @@ describe('ConversationsController', () => {
             markAsRead: vi.fn(),
             getConversationDetail: vi.fn(),
             updateGroup: vi.fn(),
+            updateQuickEmoji: vi.fn(),
             kickMember: vi.fn(),
             transferOwnership: vi.fn(),
             updateMemberRole: vi.fn(),
@@ -157,6 +158,18 @@ describe('ConversationsController', () => {
             const result = await controller.updateGroup(mockCurrentUser, 'conv-1', dto);
             expect(mockConversationsService.updateGroup).toHaveBeenCalledWith(mockCurrentUser.id, 'conv-1', dto);
             expect(result).toEqual(mockUpdated);
+        });
+    });
+
+    describe('updateQuickEmoji', () => {
+        it('should delegate to service.updateQuickEmoji with dto', async () => {
+            const dto = { emoji: '❤️' };
+            const mockResult = { quickEmoji: '❤️' };
+            mockConversationsService.updateQuickEmoji.mockResolvedValue(mockResult);
+
+            const result = await controller.updateQuickEmoji(mockCurrentUser, 'conv-1', dto);
+            expect(mockConversationsService.updateQuickEmoji).toHaveBeenCalledWith(mockCurrentUser.id, 'conv-1', dto);
+            expect(result).toEqual(mockResult);
         });
     });
 

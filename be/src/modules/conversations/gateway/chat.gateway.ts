@@ -25,6 +25,7 @@ import {
     RecallMessageDto,
     EditMessageDto,
     ReactMessageDto,
+    CustomizeConversationDto,
 } from '../dto/index.js';
 import { User } from '../../users/entities/user.entity.js';
 import { Friendship, FriendshipStatus } from '../../friends/entities/friendship.entity.js';
@@ -43,6 +44,7 @@ import {
     MessageEditedEvent,
     MessageReactionEvent,
     MessageCreatedEvent,
+    ConversationCustomizedEvent,
 } from '../../../common/events/index.js';
 
 @WebSocketGateway({
@@ -489,6 +491,51 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         };
     }
 
+    /**
+     * Tùy chỉnh thông tin đoạn chat (Quick Emoji, tên, avatar) qua WebSocket (BR-29, BR-32)
+     */
+    @SubscribeMessage('customizeConversation')
+    async handleCustomizeConversation(
+        @ConnectedSocket() client: Socket,
+        @MessageBody() dto: CustomizeConversationDto,
+    ) {
+        const user = client.data?.user;
+        if (!user?.id) {
+            throw new WsException('Unauthorized: Missing authenticated session');
+        }
+
+        if (!dto.conversationId) {
+            throw new BadRequestException('conversationId không được để trống');
+        }
+
+        let updatedGroupResult = null;
+        let updatedQuickEmojiResult = null;
+
+        if (dto.name !== undefined || dto.avatarUrl !== undefined) {
+            updatedGroupResult = await this.conversationsService.updateGroup(
+                user.id,
+                dto.conversationId,
+                { name: dto.name, avatarUrl: dto.avatarUrl },
+            );
+        }
+
+        if (dto.quickEmoji !== undefined) {
+            updatedQuickEmojiResult = await this.conversationsService.updateQuickEmoji(
+                user.id,
+                dto.conversationId,
+                { emoji: dto.quickEmoji },
+            );
+        }
+
+        return {
+            status: 'success',
+            data: {
+                group: updatedGroupResult,
+                quickEmoji: updatedQuickEmojiResult?.quickEmoji,
+            },
+        };
+    }
+
     // =========================================================================
     // REALTIME NOTIFICATION EVENT LISTENERS (In-App Event Bus Mediator)
     // =========================================================================
@@ -622,6 +669,30 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                 conversationId: event.conversationId,
                 messageId: event.messageId,
             });
+        }
+    }
+
+    /**
+     * Broadcast sự kiện tùy chỉnh hội thoại (tên, avatar, quick emoji) tới phòng chat và các user (BR-29, BR-32)
+     */
+    @OnEvent('conversation.customized')
+    handleConversationCustomized(event: ConversationCustomizedEvent) {
+        if (!this.server) return;
+        const roomId = `conv_${event.conversationId}`;
+        const payload = {
+            conversationId: event.conversationId,
+            customizedBy: event.customizedBy,
+            changes: event.changes,
+            quickEmoji: event.changes.quickEmoji,
+            name: event.changes.name,
+            avatarUrl: event.changes.avatarUrl,
+            updatedBy: event.customizedBy,
+        };
+        this.server.to(roomId).emit('conversationCustomized', payload);
+        if (event.memberIds && event.memberIds.length > 0) {
+            for (const memberId of event.memberIds) {
+                this.server.to(`user_${memberId}`).emit('conversationCustomized', payload);
+            }
         }
     }
 

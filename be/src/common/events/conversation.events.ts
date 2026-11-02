@@ -97,3 +97,19 @@ export class MessageReactionEvent {
     ) { }
 }
 
+export class ConversationCustomizedEvent {
+    constructor(
+        public readonly conversationId: string,
+        public readonly customizedBy: {
+            id: string;
+            displayName: string;
+        },
+        public readonly changes: {
+            name?: string;
+            avatarUrl?: string;
+            quickEmoji?: string;
+        },
+        public readonly memberIds?: string[],
+    ) { }
+}
+

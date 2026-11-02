@@ -22,6 +22,7 @@ import {
     UpdateGroupDto,
     GetMediaQueryDto,
     SendMessageDto,
+    UpdateQuickEmojiDto,
 } from './dto/index.js';
 
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -33,6 +34,7 @@ import {
     MessageRecalledEvent,
     MessageEditedEvent,
     MessageReactionEvent,
+    ConversationCustomizedEvent,
 } from '../../common/events/index.js';
 
 @Injectable()
@@ -422,6 +424,7 @@ export class ConversationsService {
                 type: c.type,
                 name: displayName,
                 avatarUrl,
+                quickEmoji: c.quickEmoji || '👍',
                 partnerId,
                 isOnline: c.type === ConversationType.DIRECT
                     ? c.members.find((m) => m.user.id !== currentUserId)?.user?.isOnline
@@ -691,6 +694,7 @@ export class ConversationsService {
             type: conversation.type,
             name: displayName,
             avatarUrl,
+            quickEmoji: conversation.quickEmoji || '👍',
             currentUserRole: currentMember.role,
             unreadCount: currentMember.unreadCount,
             members: conversation.members.map((m) => ({
@@ -743,15 +747,84 @@ export class ConversationsService {
             throw new ForbiddenException('Bạn không phải thành viên của nhóm này');
         }
 
+        const changes: { name?: string; avatarUrl?: string } = {};
+
         if (dto.name !== undefined) {
             conversation.name = dto.name.trim();
+            changes.name = conversation.name;
         }
 
         if (dto.avatarUrl !== undefined) {
             conversation.avatarUrl = dto.avatarUrl;
+            changes.avatarUrl = conversation.avatarUrl;
         }
 
-        return this.conversationRepository.save(conversation);
+        const saved = await this.conversationRepository.save(conversation);
+
+        this.eventEmitter.emit(
+            'conversation.customized',
+            new ConversationCustomizedEvent(
+                conversationId,
+                {
+                    id: currentUserId,
+                    displayName: currentUserId,
+                },
+                changes,
+            ),
+        );
+
+        return saved;
+    }
+
+    /**
+     * Tùy chỉnh biểu tượng cảm xúc mặc định (Quick Emoji) cho cuộc hội thoại (FR-30, BR-29)
+     * Áp dụng cho cả DIRECT và GROUP
+     */
+    async updateQuickEmoji(
+        currentUserId: string,
+        conversationId: string,
+        dto: UpdateQuickEmojiDto,
+    ): Promise<{ quickEmoji: string }> {
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+        });
+
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        const member = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+        });
+
+        if (!member) {
+            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
+        }
+
+        const emoji = dto.emoji?.trim();
+        if (!emoji) {
+            throw new BadRequestException('Emoji không được để trống');
+        }
+
+        conversation.quickEmoji = emoji;
+        await this.conversationRepository.save(conversation);
+
+        this.eventEmitter.emit(
+            'conversation.customized',
+            new ConversationCustomizedEvent(
+                conversationId,
+                {
+                    id: currentUserId,
+                    displayName: currentUserId,
+                },
+                { quickEmoji: emoji },
+            ),
+        );
+
+        return { quickEmoji: emoji };
     }
 
     /**

@@ -33,6 +33,9 @@ export class Conversation {
     @Column({ nullable: true, length: 255 })
     avatarUrl?: string;
 
+    @Column({ nullable: true, length: 32, default: '👍' })
+    quickEmoji?: string;
+
     @Column({ nullable: true, type: 'uuid' })
     lastMessageId?: string;
 
