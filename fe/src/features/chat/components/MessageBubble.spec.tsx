@@ -1,0 +1,443 @@
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { MessageBubble } from './MessageBubble'
+import type { Message } from '../types/message.types'
+
+describe('MessageBubble Component Tests', () => {
+  const baseMessage: Message = {
+    id: 'msg-1',
+    content: 'Xin chào bạn nhé!',
+    type: 'TEXT',
+    fileUrl: null,
+    replyToId: null,
+    isRecalled: false,
+    createdAt: '2026-10-26T10:30:00.000Z',
+    updatedAt: '2026-10-26T10:30:00.000Z',
+    sender: {
+      id: 'user-1',
+      username: 'user1',
+      displayName: 'Nguyễn Văn A',
+      avatarUrl: null,
+    },
+  }
+
+  it('renders outgoing text message with right alignment and read status', () => {
+    render(<MessageBubble message={baseMessage} isOutgoing={true} isRead={true} />)
+
+    expect(screen.getByText('Xin chào bạn nhé!')).toBeInTheDocument()
+    expect(screen.getByLabelText('Đã đọc')).toBeInTheDocument()
+    const container = screen.getByTestId('message-bubble-msg-1')
+    expect(container).toHaveClass('justify-end')
+  })
+
+  it('renders outgoing unread message with single tick', () => {
+    render(<MessageBubble message={baseMessage} isOutgoing={true} isRead={false} />)
+
+    expect(screen.getByLabelText('Đã gửi')).toBeInTheDocument()
+  })
+
+  it('renders incoming text message with left alignment and sender avatar', () => {
+    render(<MessageBubble message={baseMessage} isOutgoing={false} showAvatar={true} />)
+
+    expect(screen.getByText('Xin chào bạn nhé!')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Đã đọc')).not.toBeInTheDocument()
+    // Check avatar fallback initials 'NV'
+    expect(screen.getByText('NV')).toBeInTheDocument()
+    const container = screen.getByTestId('message-bubble-msg-1')
+    expect(container).toHaveClass('justify-start')
+  })
+
+  it('renders sender name for incoming message in group chat', () => {
+    render(
+      <MessageBubble
+        message={baseMessage}
+        isOutgoing={false}
+        isGroup={true}
+        showSenderName={true}
+      />
+    )
+
+    expect(screen.getByText('Nguyễn Văn A')).toBeInTheDocument()
+  })
+
+  it('renders recalled message with placeholder text', () => {
+    const recalledMsg: Message = {
+      ...baseMessage,
+      isRecalled: true,
+      content: '[Tin nhắn đã bị thu hồi]',
+    }
+
+    render(<MessageBubble message={recalledMsg} isOutgoing={false} />)
+
+    expect(screen.getByText('[Tin nhắn đã bị thu hồi]')).toBeInTheDocument()
+    expect(screen.getByText('[Tin nhắn đã bị thu hồi]')).toHaveClass('italic')
+  })
+
+  it('renders image attachment when message type is IMAGE', () => {
+    const imageMsg: Message = {
+      ...baseMessage,
+      type: 'IMAGE',
+      fileUrl: 'https://example.com/photo.jpg',
+      content: 'Ảnh chụp chuyến đi',
+    }
+
+    render(<MessageBubble message={imageMsg} isOutgoing={true} />)
+
+    const img = screen.getByRole('img', { name: 'Hình ảnh đính kèm' })
+    expect(img).toBeInTheDocument()
+    expect(img).toHaveAttribute('src', 'https://example.com/photo.jpg')
+    expect(screen.getByText('Ảnh chụp chuyến đi')).toBeInTheDocument()
+  })
+
+  it('renders reaction pills and triggers onReact when clicked', async () => {
+    const handleReact = vi.fn()
+    const reactedMsg: Message = {
+      ...baseMessage,
+      reactions: [
+        {
+          emoji: '❤️',
+          count: 3,
+          users: [{ id: 'user-2', displayName: 'User Hai' }],
+          hasReacted: true,
+        },
+      ],
+    }
+
+    render(<MessageBubble message={reactedMsg} isOutgoing={false} onReact={handleReact} />)
+
+    expect(screen.getByText('❤️')).toBeInTheDocument()
+    expect(screen.getByText('3')).toBeInTheDocument()
+
+    const pill = screen.getByTitle('User Hai')
+    pill.click()
+    expect(handleReact).toHaveBeenCalledWith(reactedMsg, '❤️')
+  })
+
+  it('renders (đã chỉnh sửa) indicator when message isEdited is true', () => {
+    const editedMsg: Message = {
+      ...baseMessage,
+      isEdited: true,
+      content: 'Nội dung sau khi sửa',
+    }
+
+    render(<MessageBubble message={editedMsg} isOutgoing={true} />)
+
+    expect(screen.getByText('(đã chỉnh sửa)')).toBeInTheDocument()
+    expect(screen.getByText('Nội dung sau khi sửa')).toBeInTheDocument()
+  })
+
+  it('renders file attachment card with download link when message type is FILE', () => {
+    const fileMsg: Message = {
+      ...baseMessage,
+      id: 'msg-file-1',
+      type: 'FILE',
+      fileUrl: 'https://example.com/files/lib.txt',
+      fileSize: 1024 * 512, // 512 KB
+      content: 'lib.txt',
+    }
+
+    render(<MessageBubble message={fileMsg} isOutgoing={false} />)
+
+    expect(screen.getByTestId('file-attachment-msg-file-1')).toBeInTheDocument()
+    expect(screen.getByText('lib.txt')).toBeInTheDocument()
+    expect(screen.getByText('Tệp văn bản TXT')).toBeInTheDocument()
+    expect(screen.getByText('512.0 KB')).toBeInTheDocument()
+
+    const downloadBtn = screen.getByRole('button', { name: 'Tải tệp xuống' })
+    expect(downloadBtn).toBeInTheDocument()
+  })
+
+  it('renders quoted reply context when message has replyTo', () => {
+    const replyMsg: Message = {
+      ...baseMessage,
+      id: 'msg-reply-1',
+      content: 'Tôi trả lời tin này',
+      replyToId: 'parent-1',
+      replyTo: {
+        id: 'parent-1',
+        content: 'Tin nhắn gốc',
+        type: 'TEXT',
+        isRecalled: false,
+        createdAt: '2026-10-26T10:00:00.000Z',
+        sender: {
+          id: 'user-bob',
+          username: 'bob',
+          displayName: 'Bob Trần',
+          avatarUrl: null,
+        },
+      },
+    }
+
+    render(<MessageBubble message={replyMsg} isOutgoing={true} />)
+
+    expect(screen.getByTestId('reply-preview-msg-reply-1')).toBeInTheDocument()
+    expect(screen.getByText('Bob Trần')).toBeInTheDocument()
+    expect(screen.getByText('Tin nhắn gốc')).toBeInTheDocument()
+    expect(screen.getByText('Tôi trả lời tin này')).toBeInTheDocument()
+  })
+
+  it('triggers onScrollToReply when clicking reply preview', async () => {
+    const handleScrollToReply = vi.fn()
+    const replyMsg: Message = {
+      ...baseMessage,
+      id: 'msg-reply-2',
+      content: 'Tin nhắn phản hồi cho người nhận B',
+      replyToId: 'parent-99',
+      replyTo: {
+        id: 'parent-99',
+        content: 'Nội dung tin nhắn x',
+        type: 'TEXT',
+        isRecalled: false,
+        createdAt: '2026-10-26T10:00:00.000Z',
+        sender: {
+          id: 'user-alice',
+          username: 'alice',
+          displayName: 'Alice Nguyễn',
+          avatarUrl: null,
+        },
+      },
+    }
+
+    render(
+      <MessageBubble
+        message={replyMsg}
+        isOutgoing={false}
+        onScrollToReply={handleScrollToReply}
+      />
+    )
+
+    const replyPreview = screen.getByTestId('reply-preview-msg-reply-2')
+    fireEvent.click(replyPreview)
+
+    expect(handleScrollToReply).toHaveBeenCalledWith('parent-99')
+  })
+
+  it('calls onImageClick when clicking on image attachment', () => {
+    const handleImageClick = vi.fn()
+    const imageMsg: Message = {
+      ...baseMessage,
+      type: 'IMAGE',
+      fileUrl: 'https://example.com/lightbox-photo.jpg',
+      content: 'Chuyến đi Đà Lạt',
+    }
+
+    render(
+      <MessageBubble
+        message={imageMsg}
+        isOutgoing={true}
+        onImageClick={handleImageClick}
+      />
+    )
+
+    const imgContainer = screen.getByTestId(`image-attachment-${imageMsg.id}`)
+    fireEvent.click(imgContainer)
+
+    expect(handleImageClick).toHaveBeenCalledWith(
+      'https://example.com/lightbox-photo.jpg',
+      'Chuyến đi Đà Lạt'
+    )
+  })
+
+  it('omits raw file name under image attachment if content matches filename pattern', () => {
+    const imageMsg: Message = {
+      ...baseMessage,
+      type: 'IMAGE',
+      fileUrl: 'https://example.com/photo.png',
+      content: 'Screenshot_2026-10-27_10.png',
+    }
+
+    render(<MessageBubble message={imageMsg} isOutgoing={false} />)
+
+    expect(screen.getByRole('img', { name: 'Hình ảnh đính kèm' })).toBeInTheDocument()
+    expect(screen.queryByText('Screenshot_2026-10-27_10.png')).not.toBeInTheDocument()
+  })
+
+  it('renders micro-actions toolbar to the left (mr-2) for outgoing messages', () => {
+    render(<MessageBubble message={baseMessage} isOutgoing={true} />)
+
+    const toolbar = screen.getByTestId(`message-toolbar-${baseMessage.id}`)
+    expect(toolbar).toBeInTheDocument()
+    expect(toolbar).toHaveClass('mr-2')
+  })
+
+  it('renders micro-actions toolbar to the right (ml-2) for incoming messages', () => {
+    render(<MessageBubble message={baseMessage} isOutgoing={false} />)
+
+    const toolbar = screen.getByTestId(`message-toolbar-${baseMessage.id}`)
+    expect(toolbar).toBeInTheDocument()
+    expect(toolbar).toHaveClass('ml-2')
+  })
+
+  it('does NOT render micro-actions toolbar when message is recalled', () => {
+    const recalledMsg: Message = {
+      ...baseMessage,
+      isRecalled: true,
+      content: '[Tin nhắn đã bị thu hồi]',
+    }
+
+    render(<MessageBubble message={recalledMsg} isOutgoing={true} />)
+
+    expect(screen.queryByTestId(`message-toolbar-${recalledMsg.id}`)).not.toBeInTheDocument()
+  })
+
+  it('renders pinned indicator badge when isPinned is true', () => {
+    const pinnedMsg: Message = {
+      ...baseMessage,
+      isPinned: true,
+    }
+
+    render(<MessageBubble message={pinnedMsg} isOutgoing={true} />)
+
+    expect(screen.getByTestId(`pinned-indicator-${pinnedMsg.id}`)).toBeInTheDocument()
+  })
+
+  it('renders pin option in dropdown and triggers onPin callback', async () => {
+    const user = userEvent.setup()
+    const handlePin = vi.fn()
+
+    render(
+      <MessageBubble
+        message={baseMessage}
+        isOutgoing={true}
+        onPin={handlePin}
+      />
+    )
+
+    const moreButton = screen.getByTitle('Tùy chọn khác')
+    await user.click(moreButton)
+
+    const pinMenuItem = await screen.findByTestId(`pin-message-${baseMessage.id}`)
+    expect(pinMenuItem).toBeInTheDocument()
+
+    await user.click(pinMenuItem)
+    expect(handlePin).toHaveBeenCalledWith(baseMessage)
+  })
+
+  it('renders unpin option in dropdown when message is pinned and triggers onUnpin callback', async () => {
+    const user = userEvent.setup()
+    const handleUnpin = vi.fn()
+    const pinnedMsg: Message = {
+      ...baseMessage,
+      isPinned: true,
+    }
+
+    render(
+      <MessageBubble
+        message={pinnedMsg}
+        isOutgoing={true}
+        onUnpin={handleUnpin}
+      />
+    )
+
+    const moreButton = screen.getByTitle('Tùy chọn khác')
+    await user.click(moreButton)
+
+    const unpinMenuItem = await screen.findByTestId(`unpin-message-${pinnedMsg.id}`)
+    expect(unpinMenuItem).toBeInTheDocument()
+
+    await user.click(unpinMenuItem)
+    expect(handleUnpin).toHaveBeenCalledWith(pinnedMsg)
+  })
+
+  it('renders SYSTEM message as a centered capsule badge without bubbles, ticks, or action menus', () => {
+    const systemMsg: Message = {
+      ...baseMessage,
+      id: 'sys-msg-1',
+      type: 'SYSTEM',
+      content: 'Alex đã thêm Bob vào nhóm.',
+    }
+
+    render(<MessageBubble message={systemMsg} isOutgoing={false} />)
+
+    const systemBadge = screen.getByTestId('system-message')
+    expect(systemBadge).toBeInTheDocument()
+    expect(systemBadge).toHaveTextContent('Alex đã thêm Bob vào nhóm.')
+    expect(screen.queryByTestId('message-bubble-sys-msg-1')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Đã đọc')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Đã gửi')).not.toBeInTheDocument()
+    expect(screen.queryByTitle('Tùy chọn khác')).not.toBeInTheDocument()
+  })
+
+  it('highlights matching search keyword in message content with mark tag', () => {
+    render(
+      <MessageBubble
+        message={baseMessage}
+        isOutgoing={true}
+        searchKeyword="chào"
+      />
+    )
+
+    const highlight = screen.getByTestId('search-highlight')
+    expect(highlight).toBeInTheDocument()
+    expect(highlight).toHaveTextContent('chào')
+    expect(highlight.tagName.toLowerCase()).toBe('mark')
+  })
+
+  it('renders normal text without mark tag when searchKeyword is empty or does not match', () => {
+    const { rerender } = render(
+      <MessageBubble
+        message={baseMessage}
+        isOutgoing={true}
+        searchKeyword=""
+      />
+    )
+    expect(screen.queryByTestId('search-highlight')).not.toBeInTheDocument()
+
+    rerender(
+      <MessageBubble
+        message={baseMessage}
+        isOutgoing={true}
+        searchKeyword="không khớp"
+      />
+    )
+    expect(screen.queryByTestId('search-highlight')).not.toBeInTheDocument()
+  })
+  describe('safe file links', () => {
+    it('does not open or fetch a javascript: file URL when downloading', async () => {
+      const user = userEvent.setup()
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      const evilMsg: Message = {
+        ...baseMessage,
+        id: 'msg-evil',
+        type: 'FILE',
+        fileUrl: 'javascript:alert(1)',
+        content: 'evil.txt',
+      }
+
+      render(<MessageBubble message={evilMsg} isOutgoing={false} />)
+      await user.click(screen.getByRole('button', { name: 'Tải tệp xuống' }))
+
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(openSpy).not.toHaveBeenCalled()
+      openSpy.mockRestore()
+      fetchSpy.mockRestore()
+    })
+
+    it('opens http(s) image URL in a new tab when no lightbox handler is given', async () => {
+      const user = userEvent.setup()
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+      const okMsg: Message = {
+        ...baseMessage,
+        id: 'msg-ok',
+        type: 'IMAGE',
+        fileUrl: 'https://example.com/ok.png',
+        content: '',
+      }
+
+      render(<MessageBubble message={okMsg} isOutgoing={false} />)
+      await user.click(screen.getByTestId('image-attachment-msg-ok'))
+      expect(openSpy).toHaveBeenCalledWith('https://example.com/ok.png', '_blank', 'noopener,noreferrer')
+
+      openSpy.mockClear()
+      const evilImg = { ...okMsg, id: 'msg-evil-img', fileUrl: 'data:text/html,<script>1</script>' }
+      render(<MessageBubble message={evilImg} isOutgoing={false} />)
+      await user.click(screen.getByTestId('image-attachment-msg-evil-img'))
+      expect(openSpy).not.toHaveBeenCalled()
+      openSpy.mockRestore()
+    })
+  })
+})
+
+

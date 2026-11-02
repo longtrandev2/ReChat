@@ -1,0 +1,467 @@
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Friendship, FriendshipStatus } from './entities/friendship.entity.js';
+import { Conversation } from '../conversations/entities/conversation.entity.js';
+import { findDirectConversation } from '../conversations/direct-conversation-key.js';
+import { User } from '../users/entities/user.entity.js';
+import { PaginationQueryDto, PaginatedResponse } from '../../common/dto/pagination.dto.js';
+import {
+    FriendRequestSentEvent,
+    FriendRequestAcceptedEvent,
+    FriendRequestRejectedEvent,
+    FriendRequestCancelledEvent,
+    FriendRemovedEvent,
+    UserBlockedEvent,
+    UserUnblockedEvent,
+    USER_BLOCKED,
+    USER_UNBLOCKED,
+} from '../../common/events/index.js';
+
+@Injectable()
+export class FriendsService {
+    constructor(
+        @InjectRepository(Friendship)
+        private readonly friendshipRepository: Repository<Friendship>,
+
+        @InjectRepository(User)
+        private readonly userRepository: Repository<User>,
+
+        @InjectRepository(Conversation)
+        private readonly conversationRepository: Repository<Conversation>,
+
+        private readonly eventEmitter: EventEmitter2,
+    ) { }
+
+    /**
+     * Gửi lời mời kết bạn từ currentUserId tới targetUserId (BR-03, BR-04)
+     */
+    async sendFriendRequest(currentUserId: string, targetUserId: string): Promise<Friendship> {
+        // 1. Không tự gửi lời mời kết bạn cho chính mình (BR-03)
+        if (currentUserId === targetUserId) {
+            throw new BadRequestException('Không thể gửi lời mời kết bạn cho chính mình');
+        }
+
+        // 2. Kiểm tra người nhận có tồn tại hay không
+        const targetUser = await this.userRepository.findOne({
+            where: { id: targetUserId },
+        });
+        if (!targetUser) {
+            throw new NotFoundException('Người dùng không tồn tại');
+        }
+
+        // 3. Kiểm tra quan hệ 2 chiều hiện tại giữa 2 người (BR-04)
+        const existing = await this.friendshipRepository.findOne({
+            where: [
+                { requester: { id: currentUserId }, addressee: { id: targetUserId } },
+                { requester: { id: targetUserId }, addressee: { id: currentUserId } },
+            ],
+            relations: {
+                requester: true,
+                addressee: true,
+            },
+        });
+
+        if (existing) {
+            if (existing.status === FriendshipStatus.ACCEPTED) {
+                throw new ConflictException('Hai người đã là bạn bè');
+            }
+            if (existing.status === FriendshipStatus.PENDING) {
+                if (existing.requester.id === currentUserId) {
+                    throw new ConflictException('Bạn đã gửi lời mời kết bạn trước đó rồi');
+                } else {
+                    throw new ConflictException('Người này đã gửi lời mời cho bạn, vui lòng phản hồi lời mời');
+                }
+            }
+            if (existing.status === FriendshipStatus.BLOCKED) {
+                throw new ForbiddenException('Không thể gửi lời mời kết bạn do một trong hai người đã chặn người kia');
+            }
+        }
+
+        // 4. Tạo mới và lưu bản ghi lời mời
+        const newFriendship = this.friendshipRepository.create({
+            requester: { id: currentUserId } as User,
+            addressee: targetUser,
+            status: FriendshipStatus.PENDING,
+        });
+
+        const saved = await this.friendshipRepository.save(newFriendship);
+
+        // 5. Lấy thông tin requester để phát domain event realtime
+        const requester = await this.userRepository.findOne({
+            where: { id: currentUserId },
+            select: { id: true, username: true, displayName: true, avatarUrl: true },
+        });
+
+        if (requester) {
+            this.eventEmitter.emit(
+                'friend.request_sent',
+                new FriendRequestSentEvent(
+                    saved.id,
+                    {
+                        id: requester.id,
+                        username: requester.username,
+                        displayName: requester.displayName || requester.username,
+                        avatarUrl: requester.avatarUrl,
+                    },
+                    targetUserId,
+                    saved.createdAt,
+                ),
+            );
+        }
+
+        return saved;
+    }
+
+    async acceptFriendRequest(currentUserId: string, requestId: string) {
+        const friendship = await this.findPendingRequest(requestId);
+
+        if (friendship.addressee.id !== currentUserId)
+            throw new ForbiddenException('Bạn không có quyền chấp nhận lời mời kết bạn này')
+
+        friendship.status = FriendshipStatus.ACCEPTED;
+        const saved = await this.friendshipRepository.save(friendship);
+
+        // Bắn domain event báo cho người gửi lời mời ban đầu (requester)
+        this.eventEmitter.emit(
+            'friend.request_accepted',
+            new FriendRequestAcceptedEvent(
+                saved.id,
+                friendship.requester.id,
+                {
+                    id: friendship.addressee.id,
+                    username: friendship.addressee.username,
+                    displayName: friendship.addressee.displayName || friendship.addressee.username,
+                    avatarUrl: friendship.addressee.avatarUrl,
+                    isOnline: friendship.addressee.isOnline,
+                },
+                new Date(),
+            ),
+        );
+
+        return saved;
+    }
+
+    async rejectFriendRequest(currentUserId: string, requestId: string) {
+        const friendship = await this.findPendingRequest(requestId);
+
+        if (friendship.addressee.id !== currentUserId)
+            throw new ForbiddenException('Bạn không có quyền từ chối lời mời kết bạn này')
+
+        await this.friendshipRepository.delete(requestId);
+
+        // Bắn domain event báo cho requester biết lời mời bị từ chối
+        this.eventEmitter.emit(
+            'friend.request_rejected',
+            new FriendRequestRejectedEvent(requestId, friendship.requester.id),
+        );
+
+        return { message: 'Đã từ chối lời mời kết bạn' }
+    }
+
+    async cancelFriendRequest(currentUserId: string, requestId: string) {
+        const friendship = await this.findPendingRequest(requestId);
+
+        if (friendship.requester.id !== currentUserId)
+            throw new ForbiddenException('Bạn không có quyền từ chối lời mời kết bạn này')
+
+        await this.friendshipRepository.delete(requestId);
+
+        // Bắn domain event báo cho addressee biết lời mời đã bị hủy
+        this.eventEmitter.emit(
+            'friend.request_cancelled',
+            new FriendRequestCancelledEvent(requestId, friendship.addressee.id),
+        );
+
+        return { message: 'Đã hủy chối lời mời kết bạn' }
+    }
+
+
+    private async findPendingRequest(requestId: string): Promise<Friendship> {
+        const friendship = await this.friendshipRepository.findOne({
+            where: { id: requestId },
+            relations: {
+                requester: true,
+                addressee: true
+            }
+        })
+        if (!friendship)
+            throw new NotFoundException('Lời mời kết bạn không tồn tại')
+
+        if (friendship.status !== FriendshipStatus.PENDING)
+            throw new BadRequestException('Lời mời kết bạn không ở trạng thái chờ duyệt')
+
+        return friendship;
+    }
+
+    async unfriend(currentUserId: string, friendId: string) {
+        const friendship = await this.friendshipRepository.findOne({
+            where: [
+                { requester: { id: currentUserId }, addressee: { id: friendId }, status: FriendshipStatus.ACCEPTED },
+                { requester: { id: friendId }, addressee: { id: currentUserId }, status: FriendshipStatus.ACCEPTED }
+            ]
+        })
+        if (!friendship)
+            throw new NotFoundException('Hai người không phải bạn bè')
+
+        await this.friendshipRepository.delete(friendship.id);
+
+        // Bắn domain event báo cho cả 2 phía về việc hủy kết bạn
+        this.eventEmitter.emit(
+            'friend.removed',
+            new FriendRemovedEvent(currentUserId, friendId),
+        );
+
+        return { message: 'Đã hủy kết bạn thành công' }
+    }
+
+    async getFriendList(
+        currentUserId: string,
+        query: PaginationQueryDto = new PaginationQueryDto(),
+    ): Promise<PaginatedResponse<any>> {
+        const { page, limit } = query;
+        const skip = (page - 1) * limit;
+
+        const [friendships, total] = await this.friendshipRepository.findAndCount({
+            where: [
+                { requester: { id: currentUserId }, status: FriendshipStatus.ACCEPTED },
+                { addressee: { id: currentUserId }, status: FriendshipStatus.ACCEPTED },
+            ],
+            relations: {
+                requester: true,
+                addressee: true,
+            },
+            select: {
+                id: true,
+                createdAt: true,
+                requester: { id: true, username: true, displayName: true, avatarUrl: true, isOnline: true, lastSeen: true },
+                addressee: { id: true, username: true, displayName: true, avatarUrl: true, isOnline: true, lastSeen: true },
+            },
+            order: {
+                createdAt: 'DESC',
+            },
+            skip,
+            take: limit,
+        });
+
+        // Làm phẳng dữ liệu: trích xuất thông tin người bạn
+        const friends = friendships.map((f) => {
+            const friend = f.requester.id === currentUserId ? f.addressee : f.requester;
+            return {
+                ...friend,
+                friendshipId: f.id,
+                becameFriendsAt: f.createdAt,
+            };
+        });
+
+        return {
+            data: friends,
+            meta: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+                hasNextPage: page * limit < total,
+                hasPrevPage: page > 1,
+            },
+        };
+    }
+
+    async getSentRequests(currentUserId: string) {
+        const friendships = await this.friendshipRepository.find({
+            where: {
+                requester: { id: currentUserId },
+                status: FriendshipStatus.PENDING
+            },
+            relations: {
+                addressee: true,
+            },
+            order: {
+                createdAt: 'DESC',
+            },
+            select: {
+                id: true,
+                status: true,
+                createdAt: true,
+                addressee: {
+                    id: true,
+                    username: true,
+                    displayName: true,
+                    avatarUrl: true
+                }
+            }
+        })
+
+        return friendships;
+
+    }
+
+    async getReceivedRequests(currentUserId: string) {
+        const friendships = await this.friendshipRepository.find({
+            where: {
+                addressee: { id: currentUserId },
+                status: FriendshipStatus.PENDING
+            },
+            relations: {
+                requester: true,
+            },
+            order: {
+                createdAt: 'DESC',
+            },
+            select: {
+                id: true,
+                status: true,
+                createdAt: true,
+                requester: {
+                    id: true,
+                    username: true,
+                    displayName: true,
+                    avatarUrl: true
+                }
+            }
+        })
+
+        return friendships;
+    }
+
+    /**
+     * Chặn người dùng (FR-29, BR-28)
+     */
+    async blockUser(currentUserId: string, targetUserId: string) {
+        if (currentUserId === targetUserId) {
+            throw new BadRequestException('Không thể tự chặn chính mình');
+        }
+
+        const targetUser = await this.userRepository.findOne({
+            where: { id: targetUserId },
+        });
+        if (!targetUser) {
+            throw new NotFoundException('Người dùng không tồn tại');
+        }
+
+        const existing = await this.friendshipRepository.findOne({
+            where: [
+                { requester: { id: currentUserId }, addressee: { id: targetUserId } },
+                { requester: { id: targetUserId }, addressee: { id: currentUserId } },
+            ],
+            relations: {
+                requester: true,
+                addressee: true,
+            },
+        });
+
+        if (existing?.status === FriendshipStatus.BLOCKED) {
+            // BR-28: chỉ người đã chặn mới sở hữu quan hệ chặn; người bị chặn không được "chặn ngược" để chiếm quyền mở chặn
+            if (existing.requester.id !== currentUserId) {
+                throw new ForbiddenException('Bạn không thể chặn người dùng này');
+            }
+            // Chặn lặp lại bởi cùng người chặn: idempotent, không phát lại event
+            return { message: 'Đã chặn người dùng thành công' };
+        }
+
+        if (existing) {
+            // PENDING / ACCEPTED -> BLOCKED, người gọi trở thành blocker
+            existing.requester = { id: currentUserId } as User;
+            existing.addressee = targetUser;
+            existing.status = FriendshipStatus.BLOCKED;
+            await this.friendshipRepository.save(existing);
+        } else {
+            const blockedFriendship = this.friendshipRepository.create({
+                requester: { id: currentUserId } as User,
+                addressee: targetUser,
+                status: FriendshipStatus.BLOCKED,
+            });
+            await this.friendshipRepository.save(blockedFriendship);
+        }
+
+        this.eventEmitter.emit(
+            'friend.removed',
+            new FriendRemovedEvent(currentUserId, targetUserId),
+        );
+        this.eventEmitter.emit(
+            USER_BLOCKED,
+            new UserBlockedEvent(currentUserId, targetUserId, await this.findDirectConversationId(currentUserId, targetUserId)),
+        );
+
+        return { message: 'Đã chặn người dùng thành công' };
+    }
+
+    /** Id hội thoại DIRECT giữa 2 user (nếu có) để đính kèm event chặn; lỗi tra cứu không làm hỏng thao tác chặn */
+    private async findDirectConversationId(userA: string, userB: string): Promise<string | null> {
+        try {
+            const conversation = await findDirectConversation(this.conversationRepository, userA, userB);
+            return conversation?.id ?? null;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Bỏ chặn người dùng (FR-29, BR-28)
+     */
+    async unblockUser(currentUserId: string, targetUserId: string) {
+        if (currentUserId === targetUserId) {
+            throw new BadRequestException('Không thể tự bỏ chặn chính mình');
+        }
+
+        const blockedFriendship = await this.friendshipRepository.findOne({
+            where: {
+                requester: { id: currentUserId },
+                addressee: { id: targetUserId },
+                status: FriendshipStatus.BLOCKED,
+            },
+        });
+
+        if (!blockedFriendship) {
+            throw new NotFoundException('Người dùng này không nằm trong danh sách chặn của bạn');
+        }
+
+        await this.friendshipRepository.delete(blockedFriendship.id);
+
+        this.eventEmitter.emit(
+            USER_UNBLOCKED,
+            new UserUnblockedEvent(currentUserId, targetUserId, await this.findDirectConversationId(currentUserId, targetUserId)),
+        );
+
+        return { message: 'Đã bỏ chặn người dùng thành công' };
+    }
+
+    /**
+     * Lấy danh sách người dùng đã bị chặn bởi currentUserId (FR-29)
+     */
+    async getBlockedUsers(currentUserId: string) {
+        const friendships = await this.friendshipRepository.find({
+            where: {
+                requester: { id: currentUserId },
+                status: FriendshipStatus.BLOCKED,
+            },
+            relations: {
+                addressee: true,
+            },
+            order: {
+                updatedAt: 'DESC',
+            },
+            select: {
+                id: true,
+                createdAt: true,
+                updatedAt: true,
+                addressee: {
+                    id: true,
+                    username: true,
+                    displayName: true,
+                    avatarUrl: true,
+                },
+            },
+        });
+
+        return friendships.map((f) => ({
+            id: f.addressee.id,
+            username: f.addressee.username,
+            displayName: f.addressee.displayName || f.addressee.username,
+            avatarUrl: f.addressee.avatarUrl,
+            blockedAt: f.updatedAt || f.createdAt,
+        }));
+    }
+}
+

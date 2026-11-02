@@ -1,0 +1,2276 @@
+import {
+    BadRequestException,
+    ConflictException,
+    ForbiddenException,
+    Injectable,
+    NotFoundException,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { DataSource, EntityManager, In, MoreThan, Repository, SelectQueryBuilder } from 'typeorm';
+import { Conversation, ConversationType } from './entities/conversation.entity.js';
+import { ConversationMember, ConversationRole } from './entities/conversation-member.entity.js';
+import { Message, MessageType } from './entities/message.entity.js';
+import { MessageReaction } from './entities/message-reaction.entity.js';
+import { User } from '../users/entities/user.entity.js';
+import { Friendship, FriendshipStatus } from '../friends/entities/friendship.entity.js';
+import {
+    CreateGroupDto,
+    AddMembersDto,
+    GetMessagesQueryDto,
+    TransferOwnerDto,
+    UpdateMemberRoleDto,
+    UpdateGroupDto,
+    GetMediaQueryDto,
+    SendMessageDto,
+    UpdateQuickEmojiDto,
+} from './dto/index.js';
+import { buildDirectKey, findDirectConversation, isDuplicateKeyError } from './direct-conversation-key.js';
+import {
+    BlockStatus,
+    buildConversationBlockedException,
+    getBlockStatus,
+    getBlockStatusMap,
+} from './conversation-block-policy.js';
+
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import {
+    ConversationCreatedEvent,
+    InboxUpdatedEvent,
+    GroupMemberEvent,
+    MessagePinnedEvent,
+    MessageRecalledEvent,
+    MessageEditedEvent,
+    MessageReactionEvent,
+    ConversationCustomizedEvent,
+    MessageCreatedEvent,
+} from '../../common/events/index.js';
+
+/** Thời hạn chỉnh sửa tin nhắn kể từ lúc gửi (BR-M5-05) */
+const EDIT_WINDOW_MS = 15 * 60 * 1000;
+/** Số kết quả tối đa của tìm kiếm tin nhắn (FR-31) */
+const SEARCH_RESULT_LIMIT = 50;
+
+@Injectable()
+export class ConversationsService {
+    constructor(
+        @InjectRepository(Conversation)
+        private readonly conversationRepository: Repository<Conversation>,
+
+        @InjectRepository(ConversationMember)
+        private readonly memberRepository: Repository<ConversationMember>,
+
+        @InjectRepository(Message)
+        private readonly messageRepository: Repository<Message>,
+
+        @InjectRepository(MessageReaction)
+        private readonly reactionRepository: Repository<MessageReaction>,
+
+        @InjectRepository(User)
+        private readonly userRepository: Repository<User>,
+
+        @InjectRepository(Friendship)
+        private readonly friendshipRepository: Repository<Friendship>,
+
+        private readonly eventEmitter: EventEmitter2,
+
+        private readonly dataSource: DataSource,
+    ) { }
+
+    /** Tin nhắn SYSTEM do server sinh ra, không thể react / sửa / thu hồi / ghim / trả lời (BR-36) */
+    private assertNotSystemMessage(message: { type: MessageType }, action: string): void {
+        if (message.type === MessageType.SYSTEM) {
+            throw new BadRequestException(`Không thể ${action} tin nhắn hệ thống`);
+        }
+    }
+
+    /**
+     * Chặn gửi tin vào hội thoại DIRECT khi giữa 2 thành viên có quan hệ BLOCKED (cả 2 chiều) (FR-29, BR-28, BR-38)
+     */
+    private async assertDirectConversationNotBlocked(conversationId: string, senderId: string): Promise<void> {
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+            select: { id: true, type: true },
+        });
+        if (conversation?.type !== ConversationType.DIRECT) return;
+
+        const members = (await this.memberRepository.find({
+            where: { conversation: { id: conversationId } },
+            relations: { user: true },
+        })) || [];
+        const partnerId = members.map((m) => m.user?.id).find((id) => id && id !== senderId);
+        if (!partnerId) return;
+
+        const status = await getBlockStatus(this.friendshipRepository, senderId, partnerId);
+        if (status !== 'NONE') {
+            throw buildConversationBlockedException(status);
+        }
+    }
+
+    /** Ẩn các tin nhắn tới mốc "Xóa đoạn chat" (clearedAt) của riêng thành viên (FR-48) */
+    private applyClearedAtFilter(qb: SelectQueryBuilder<Message>, member: ConversationMember): void {
+        if (member.clearedAt) {
+            qb.andWhere('m.createdAt > :clearedAt', { clearedAt: member.clearedAt });
+        }
+    }
+
+    /**
+     * Tạo tin nhắn hệ thống (SYSTEM Message) ghi lại các sự kiện nhóm/hội thoại (chuẩn Messenger)
+     */
+    private async createSystemMessage(
+        conversationId: string,
+        actorId: string,
+        content: string,
+    ): Promise<Message> {
+        const { message, publish } = await this.persistSystemMessage(conversationId, actorId, content);
+        publish();
+        return message;
+    }
+
+    /**
+     * Ghi tin nhắn SYSTEM vào DB (có thể nằm trong transaction qua `manager`) và trả về hàm `publish`
+     * để phát domain event SAU khi transaction commit (tránh báo realtime cho dữ liệu có thể bị rollback).
+     */
+    private async persistSystemMessage(
+        conversationId: string,
+        actorId: string,
+        content: string,
+        manager?: EntityManager,
+    ): Promise<{ message: Message; publish: () => void }> {
+        const userRepo = manager ? manager.getRepository(User) : this.userRepository;
+        const messageRepo = manager ? manager.getRepository(Message) : this.messageRepository;
+        const conversationRepo = manager ? manager.getRepository(Conversation) : this.conversationRepository;
+        const memberRepo = manager ? manager.getRepository(ConversationMember) : this.memberRepository;
+
+        const actor = await userRepo.findOne({
+            where: { id: actorId },
+            select: { id: true, username: true, displayName: true, avatarUrl: true },
+        });
+
+        const message = messageRepo.create({
+            conversation: { id: conversationId } as Conversation,
+            sender: (actor || { id: actorId }) as User,
+            content: content.trim(),
+            type: MessageType.SYSTEM,
+        });
+        const savedMessage = await messageRepo.save(message);
+
+        const msgId = savedMessage?.id || 'msg-system-uuid';
+        const msgCreatedAt = savedMessage?.createdAt || new Date();
+
+        await conversationRepo.update(conversationId, {
+            lastMessageId: msgId,
+            lastMessageAt: msgCreatedAt,
+        });
+
+        const members = await memberRepo.find({
+            where: { conversation: { id: conversationId } },
+            relations: { user: true },
+        });
+        const memberIds = (members || []).map((m) => m.user?.id || (m as any).userId).filter(Boolean);
+
+        const senderObj = {
+            id: actor?.id || actorId,
+            username: actor?.username || 'system',
+            displayName: actor?.displayName || actor?.username || 'Người dùng',
+            avatarUrl: actor?.avatarUrl || null,
+        };
+
+        const payload = {
+            id: msgId,
+            conversationId,
+            content: content.trim(),
+            type: MessageType.SYSTEM,
+            fileUrl: null,
+            fileSize: null,
+            replyToId: null,
+            replyTo: null,
+            reactions: [],
+            isRecalled: false,
+            isEdited: false,
+            editedAt: null,
+            isPinned: false,
+            createdAt: msgCreatedAt,
+            sender: senderObj,
+        };
+
+        const publish = () => {
+            this.eventEmitter.emit(
+                'message.created',
+                new MessageCreatedEvent(conversationId, payload),
+            );
+
+            this.eventEmitter.emit(
+                'inbox.updated',
+                new InboxUpdatedEvent(
+                    conversationId,
+                    memberIds,
+                    {
+                        id: msgId,
+                        content: content.trim(),
+                        type: MessageType.SYSTEM,
+                        fileUrl: null,
+                        senderName: senderObj.displayName,
+                        createdAt: msgCreatedAt,
+                    },
+                    actorId,
+                ),
+            );
+        };
+
+        return { message: savedMessage, publish };
+    }
+
+    /**
+     * Tạo hoặc lấy cuộc hội thoại 1-1 (DIRECT) giữa 2 người bạn (BR-05, FR-10)
+     */
+    async createOrGetDirect(currentUserId: string, targetUserId: string): Promise<Conversation> {
+        if (currentUserId === targetUserId) {
+            throw new BadRequestException('Không thể tự tạo cuộc hội thoại với chính mình');
+        }
+
+        const targetUser = await this.userRepository.findOne({
+            where: {
+                id: targetUserId,
+            },
+        });
+
+        if (!targetUser) {
+            throw new NotFoundException('Người dùng không tồn tại');
+        }
+
+        const friendship = await this.friendshipRepository.findOne({
+            where: [
+                { requester: { id: currentUserId }, addressee: { id: targetUserId }, status: FriendshipStatus.ACCEPTED },
+                { requester: { id: targetUserId }, addressee: { id: currentUserId }, status: FriendshipStatus.ACCEPTED },
+            ],
+        });
+
+        if (!friendship) {
+            throw new ForbiddenException('Chỉ có thể nhắn tin với người là bạn bè');
+        }
+
+        // Tìm cuộc hội thoại DIRECT đã tồn tại giữa 2 người (BR-05): theo directKey, fallback theo thành viên
+        const existingConversation = await findDirectConversation(
+            this.conversationRepository,
+            currentUserId,
+            targetUserId,
+        );
+
+        if (existingConversation) {
+            return existingConversation;
+        }
+
+        // Tạo cuộc hội thoại mới trong 1 transaction. directKey UNIQUE chặn tạo trùng khi 2 request đồng thời (BR-05)
+        let savedConversation: Conversation;
+        try {
+            savedConversation = await this.dataSource.transaction(async (manager) => {
+                const conversationRepo = manager.getRepository(Conversation);
+                const memberRepo = manager.getRepository(ConversationMember);
+
+                const conversation = await conversationRepo.save(
+                    conversationRepo.create({
+                        type: ConversationType.DIRECT,
+                        directKey: buildDirectKey(currentUserId, targetUserId),
+                    }),
+                );
+
+                await memberRepo.save([
+                    memberRepo.create({
+                        conversation,
+                        user: { id: currentUserId } as User,
+                        role: ConversationRole.MEMBER,
+                    }),
+                    memberRepo.create({
+                        conversation,
+                        user: targetUser,
+                        role: ConversationRole.MEMBER,
+                    }),
+                ]);
+
+                return conversation;
+            });
+        } catch (error) {
+            // Request song song đã tạo trước -> trả về hội thoại thắng cuộc thay vì lỗi 500
+            if (isDuplicateKeyError(error)) {
+                const winner = await findDirectConversation(this.conversationRepository, currentUserId, targetUserId);
+                if (winner) return winner;
+            }
+            throw error;
+        }
+
+        // Phát domain event để FE của cả 2 phía lập tức hiển thị conversation mới vào danh sách Inbox
+        this.eventEmitter.emit(
+            'conversation.created',
+            new ConversationCreatedEvent(
+                savedConversation.id,
+                [currentUserId, targetUserId],
+                savedConversation,
+            ),
+        );
+
+        return savedConversation;
+    }
+
+    /**
+     * Tạo nhóm chat mới (BR-06, BR-07)
+     */
+    async createGroup(ownerId: string, dto: CreateGroupDto): Promise<Conversation> {
+        // 1. Lọc bỏ ownerId nếu client lỡ gửi kèm chính mình, và loại bỏ các ID trùng lặp
+        const uniqueMemberIds = [...new Set(dto.memberIds.filter((id) => id !== ownerId))];
+
+        // 2. Kiểm tra số lượng thành viên tối thiểu sau khi lọc (BR-07)
+        if (uniqueMemberIds.length < 1) {
+            throw new BadRequestException('Nhóm chat phải có ít nhất 1 thành viên khác');
+        }
+
+        // 3. Kiểm tra tất cả các thành viên có tồn tại trong hệ thống không
+        const existingUsers = await this.userRepository.find({
+            where: { id: In(uniqueMemberIds) },
+            select: { id: true },
+        });
+
+        if (existingUsers.length !== uniqueMemberIds.length) {
+            throw new NotFoundException('Một hoặc nhiều người dùng không tồn tại');
+        }
+
+        // 4-6. Tạo nhóm + thành viên + tin nhắn hệ thống trong 1 transaction: lỗi giữa chừng không để lại nhóm mồ côi
+        const { savedGroup, publishSystemMessage } = await this.dataSource.transaction(async (manager) => {
+            const conversationRepo = manager.getRepository(Conversation);
+            const memberRepo = manager.getRepository(ConversationMember);
+
+            // Tạo cuộc hội thoại GROUP (BR-06)
+            const group = await conversationRepo.save(
+                conversationRepo.create({
+                    type: ConversationType.GROUP,
+                    name: dto.name.trim(),
+                }),
+            );
+
+            // Owner (role: OWNER) và các thành viên khác (role: MEMBER)
+            const ownerMember = memberRepo.create({
+                conversation: group,
+                user: { id: ownerId } as User,
+                role: ConversationRole.OWNER,
+            });
+
+            const otherMembers = uniqueMemberIds.map((memberId) =>
+                memberRepo.create({
+                    conversation: group,
+                    user: { id: memberId } as User,
+                    role: ConversationRole.MEMBER,
+                }),
+            );
+
+            await memberRepo.save([ownerMember, ...otherMembers]);
+
+            const owner = await manager.getRepository(User).findOne({
+                where: { id: ownerId },
+                select: { id: true, displayName: true, username: true },
+            });
+            const ownerName = owner?.displayName || owner?.username || 'Người dùng';
+            const systemMessage = await this.persistSystemMessage(
+                group.id,
+                ownerId,
+                `${ownerName} đã tạo nhóm.`,
+                manager,
+            );
+
+            return { savedGroup: group, publishSystemMessage: systemMessage.publish };
+        });
+
+        // Chỉ phát event realtime sau khi transaction đã commit
+        publishSystemMessage();
+
+        // Phát domain event để FE của tất cả thành viên trong nhóm lập tức thấy nhóm mới trong Inbox
+        this.eventEmitter.emit(
+            'conversation.created',
+            new ConversationCreatedEvent(
+                savedGroup.id,
+                [ownerId, ...uniqueMemberIds],
+                savedGroup,
+            ),
+        );
+
+        return savedGroup;
+    }
+
+    /**
+     * Thêm thành viên vào nhóm chat (BR-08)
+     */
+    async addMembers(
+        currentUserId: string,
+        conversationId: string,
+        dto: AddMembersDto,
+    ): Promise<{ message: string; addedCount: number }> {
+        // 1. Kiểm tra cuộc hội thoại có tồn tại không
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+        });
+
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        // 2. Không cho phép thêm thành viên vào cuộc trò chuyện 1-1
+        if (conversation.type === ConversationType.DIRECT) {
+            throw new BadRequestException('Không thể thêm thành viên vào cuộc trò chuyện 1-1');
+        }
+
+        // 3. Kiểm tra người thực hiện có phải thành viên của nhóm không (BR-08)
+        const currentMember = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+        });
+
+        if (!currentMember) {
+            throw new ForbiddenException('Bạn không phải thành viên của nhóm chat này');
+        }
+
+        // 4. Lọc danh sách ID không trùng lặp
+        const uniqueMemberIds = [...new Set(dto.memberIds)];
+
+        // 5. Kiểm tra người dùng có tồn tại trong hệ thống không
+        const existingUsers = await this.userRepository.find({
+            where: { id: In(uniqueMemberIds) },
+            select: { id: true },
+        });
+
+        if (existingUsers.length !== uniqueMemberIds.length) {
+            throw new NotFoundException('Một hoặc nhiều người dùng không tồn tại');
+        }
+
+        // 6. Lọc những người đã có sẵn trong nhóm
+        const existingGroupMembers = await this.memberRepository.find({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: In(uniqueMemberIds) },
+            },
+            relations: { user: true },
+        });
+
+        const existingMemberUserIds = existingGroupMembers.map((m) => m.user.id);
+        const newMemberIds = uniqueMemberIds.filter((id) => !existingMemberUserIds.includes(id));
+
+        if (newMemberIds.length === 0) {
+            throw new ConflictException('Tất cả người dùng được chọn đã là thành viên của nhóm');
+        }
+
+        // 7. Tạo và lưu bản ghi thành viên mới
+        const newMembers = newMemberIds.map((userId) =>
+            this.memberRepository.create({
+                conversation,
+                user: { id: userId } as User,
+                role: ConversationRole.MEMBER,
+            }),
+        );
+
+        const savedMembers = await this.memberRepository.save(newMembers);
+
+        const actor = await this.userRepository.findOne({
+            where: { id: currentUserId },
+            select: { id: true, displayName: true, username: true },
+        });
+        const actorName = actor?.displayName || actor?.username || 'Người dùng';
+        const targetUsers = await this.userRepository.find({
+            where: { id: In(newMemberIds) },
+            select: { id: true, displayName: true, username: true },
+        });
+        const targetNames = targetUsers.map((u) => u.displayName || u.username).join(', ');
+        await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã thêm ${targetNames} vào nhóm.`);
+
+        // Phát domain event để FE cập nhật danh sách thành viên và thông báo vào room
+        this.eventEmitter.emit(
+            'group.member_event',
+            new GroupMemberEvent(
+                conversationId,
+                'ADDED',
+                { id: currentUserId, displayName: actorName },
+                newMemberIds,
+                savedMembers,
+            ),
+        );
+
+        return {
+            message: 'Thêm thành viên thành công',
+            addedCount: newMembers.length,
+        };
+    }
+
+    /**
+     * Rời khỏi nhóm chat và chuyển giao quyền Owner nếu cần (BR-12)
+     */
+    async leaveGroup(
+        currentUserId: string,
+        conversationId: string,
+    ): Promise<{ message: string }> {
+        // 1. Kiểm tra cuộc hội thoại
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+        });
+
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        if (conversation.type === ConversationType.DIRECT) {
+            throw new BadRequestException('Không thể rời khỏi cuộc trò chuyện 1-1');
+        }
+
+        // 2. Tìm bản ghi thành viên của currentUserId
+        const currentMember = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+        });
+
+        if (!currentMember) {
+            throw new NotFoundException('Bạn không phải thành viên của nhóm này');
+        }
+
+        const isOwner = currentMember.role === ConversationRole.OWNER;
+
+        const actor = await this.userRepository.findOne({
+            where: { id: currentUserId },
+            select: { id: true, displayName: true, username: true },
+        });
+        const actorName = actor?.displayName || actor?.username || 'Người dùng';
+
+        // 3. Xóa tư cách thành viên của currentUserId
+        await this.memberRepository.delete(currentMember.id);
+
+        // 4. Nếu người rời đi là OWNER -> Thực thi luật chuyển giao BR-12
+        if (isOwner) {
+            const remainingMembers = await this.memberRepository.find({
+                where: { conversation: { id: conversationId } },
+                relations: { user: true },
+                order: { joinedAt: 'ASC' },
+            });
+
+            // Trường hợp 1: Nhóm còn thành viên khác -> Thăng cấp người gia nhập sớm nhất làm OWNER
+            if (remainingMembers.length > 0) {
+                const nextOwner = remainingMembers[0];
+                nextOwner.role = ConversationRole.OWNER;
+                await this.memberRepository.save(nextOwner);
+
+                await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã rời khỏi nhóm.`);
+                const nextOwnerId = nextOwner.user?.id || (nextOwner as any).userId || currentUserId;
+                const nextOwnerName = nextOwner.user?.displayName || nextOwner.user?.username || 'Người dùng';
+                await this.createSystemMessage(conversationId, nextOwnerId, `${nextOwnerName} là Trưởng nhóm mới.`);
+
+                this.eventEmitter.emit(
+                    'group.member_event',
+                    new GroupMemberEvent(
+                        conversationId,
+                        'LEFT',
+                        { id: currentUserId, displayName: actorName },
+                        [currentUserId],
+                    ),
+                );
+
+                return { message: 'Đã rời nhóm thành công. Quyền trưởng nhóm đã được chuyển giao.' };
+            }
+
+            // Trường hợp 2: Không còn ai trong nhóm (Owner là người cuối cùng) -> Giải tán nhóm
+            await this.conversationRepository.delete(conversationId);
+            // Báo gateway cho socket của người rời nhóm thoát khỏi room conv_ đã bị giải tán
+            this.eventEmitter.emit(
+                'group.member_event',
+                new GroupMemberEvent(
+                    conversationId,
+                    'LEFT',
+                    { id: currentUserId, displayName: actorName },
+                    [currentUserId],
+                ),
+            );
+            return { message: 'Đã rời nhóm và giải tán nhóm thành công' };
+        }
+
+        await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã rời khỏi nhóm.`);
+
+        this.eventEmitter.emit(
+            'group.member_event',
+            new GroupMemberEvent(
+                conversationId,
+                'LEFT',
+                { id: currentUserId, displayName: actorName },
+                [currentUserId],
+            ),
+        );
+
+        return { message: 'Đã rời nhóm thành công' };
+    }
+
+    /**
+     * Lấy danh sách Inbox của user hiện tại (FR-09)
+     * Trả về danh sách cuộc hội thoại, sắp xếp theo lastMessageAt DESC,
+     * tự động bóc tách avatar/tên cho 1-1 hoặc nhóm, kèm unreadCount và lastMessage.
+     */
+    async getInbox(currentUserId: string): Promise<any[]> {
+        // 1. Lấy tất cả cuộc trò chuyện mà currentUserId tham gia, kèm thành viên
+        const conversations = await this.conversationRepository
+            .createQueryBuilder('c')
+            .innerJoin('c.members', 'm', 'm.userId = :currentUserId', { currentUserId })
+            .leftJoinAndSelect('c.members', 'all_members')
+            .leftJoinAndSelect('all_members.user', 'member_user')
+            .orderBy('c.lastMessageAt', 'DESC')
+            .addOrderBy('c.createdAt', 'DESC')
+            .getMany();
+
+        if (conversations.length === 0) {
+            return [];
+        }
+
+        // 2. Tối ưu: Lấy các lastMessage trong 1 query duy nhất qua In(lastMessageIds) để triệt tiêu N+1
+        const lastMessageIds = conversations
+            .map((c) => c.lastMessageId)
+            .filter((id): id is string => Boolean(id));
+
+        let lastMessageMap = new Map<string, Message>();
+        if (lastMessageIds.length > 0) {
+            const lastMessages = await this.messageRepository.find({
+                where: { id: In(lastMessageIds) },
+                relations: { sender: true },
+            });
+            lastMessageMap = new Map(lastMessages.map((msg) => [msg.id, msg]));
+        }
+
+        // 2b. Trạng thái chặn với đối phương của các hội thoại DIRECT (1 query, 2 chiều) (FR-29, BR-28)
+        const partnerIds = conversations
+            .filter((c) => c.type === ConversationType.DIRECT)
+            .map((c) => c.members.find((m) => m.user.id !== currentUserId)?.user?.id)
+            .filter((id): id is string => Boolean(id));
+        const blockMap = await getBlockStatusMap(this.friendshipRepository, currentUserId, partnerIds);
+
+        // 3. Biến đổi dữ liệu (Projection) theo góc nhìn của currentUserId
+        const items = conversations.map((c) => {
+            const myMember = c.members.find((m) => m.user.id === currentUserId);
+            let displayName = c.name;
+            let avatarUrl = c.avatarUrl;
+            let partnerId: string | undefined = undefined;
+
+            if (c.type === ConversationType.DIRECT) {
+                const partner = c.members.find((m) => m.user.id !== currentUserId)?.user;
+                displayName = partner?.displayName || partner?.username || 'Người dùng';
+                avatarUrl = partner?.avatarUrl;
+                partnerId = partner?.id;
+            }
+
+            const lastMsg = c.lastMessageId ? lastMessageMap.get(c.lastMessageId) : null;
+
+            // "Xóa đoạn chat": ẩn hội thoại đến khi có tin nhắn mới hơn mốc clearedAt (FR-48)
+            if (myMember?.clearedAt && (!lastMsg || new Date(lastMsg.createdAt) <= new Date(myMember.clearedAt))) {
+                return null;
+            }
+
+            const blockStatus: BlockStatus = partnerId ? blockMap.get(partnerId) ?? 'NONE' : 'NONE';
+            const isDirect = c.type === ConversationType.DIRECT;
+
+            return {
+                id: c.id,
+                type: c.type,
+                name: displayName,
+                avatarUrl,
+                quickEmoji: c.quickEmoji || '👍',
+                partnerId,
+                // Bị chặn (2 chiều) thì không thấy trạng thái trực tuyến của nhau (BR-28)
+                isOnline: isDirect
+                    ? blockStatus === 'NONE'
+                        ? c.members.find((m) => m.user.id !== currentUserId)?.user?.isOnline
+                        : false
+                    : undefined,
+                ...(isDirect ? { blockStatus } : {}),
+                unreadCount: myMember ? myMember.unreadCount : 0,
+                isMuted: myMember ? Boolean(myMember.isMuted) : false,
+                isPinned: myMember ? Boolean(myMember.isPinned) : false,
+                pinnedAt: myMember?.pinnedAt ?? null,
+                lastMessage: lastMsg
+                    ? {
+                        id: lastMsg.id,
+                        content: lastMsg.content,
+                        type: lastMsg.type,
+                        createdAt: lastMsg.createdAt,
+                        sender: {
+                            id: lastMsg.sender.id,
+                            username: lastMsg.sender.username,
+                            displayName: lastMsg.sender.displayName,
+                            avatarUrl: lastMsg.sender.avatarUrl,
+                        },
+                    }
+                    : null,
+                lastMessageAt: c.lastMessageAt || c.createdAt,
+                createdAt: c.createdAt,
+                updatedAt: c.updatedAt,
+            };
+        });
+
+        // 4. Bỏ hội thoại đã xóa đoạn chat; ghim lên đầu (pinnedAt DESC), phần còn lại giữ thứ tự cũ (sort ổn định)
+        return items
+            .filter((item): item is NonNullable<typeof item> => item !== null)
+            .sort((a, b) => {
+                if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+                if (a.isPinned && b.isPinned) {
+                    return new Date(b.pinnedAt as Date).getTime() - new Date(a.pinnedAt as Date).getTime();
+                }
+                return 0;
+            });
+    }
+
+    /**
+     * Lấy lịch sử tin nhắn của cuộc hội thoại bằng Cursor Pagination (FR-13, BR-08)
+     */
+    /**
+     * Phân trang con trỏ "before" theo khóa ghép (createdAt, id), so sánh hoàn toàn trong SQL:
+     * - Nhiều tin nhắn có thể trùng createdAt (insert cùng câu lệnh, tin nhắn hệ thống) -> chỉ so createdAt sẽ mất tin
+     *   ở ranh giới trang; id là khóa phụ giúp thứ tự tuyệt đối và ổn định.
+     * - Không nạp createdAt của tin mốc vào JS Date (chỉ chính xác tới ms) vì cột datetime(6) lưu tới micro-giây.
+     */
+    private async applyBeforeCursor(
+        qb: SelectQueryBuilder<Message>,
+        conversationId: string,
+        before: string | undefined,
+        limit: number,
+    ): Promise<void> {
+        if (before) {
+            const beforeMessage = await this.messageRepository.findOne({
+                where: { id: before, conversation: { id: conversationId } },
+                select: { id: true },
+            });
+            if (!beforeMessage) {
+                throw new BadRequestException('Tin nhắn mốc (before cursor) không tồn tại trong hội thoại này');
+            }
+
+            qb.andWhere(
+                '(m.createdAt, m.id) < (SELECT cursor_msg.createdAt, cursor_msg.id FROM messages cursor_msg WHERE cursor_msg.id = :beforeId)',
+                { beforeId: before },
+            );
+        }
+
+        qb.orderBy('m.createdAt', 'DESC').addOrderBy('m.id', 'DESC').take(limit);
+    }
+
+    async getMessages(
+        currentUserId: string,
+        conversationId: string,
+        query: GetMessagesQueryDto,
+    ): Promise<Message[]> {
+        // 1. Kiểm tra cuộc hội thoại tồn tại
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+        });
+
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        // 2. Kiểm tra quyền truy cập: Người gửi request phải thuộc cuộc trò chuyện (BR-08)
+        const member = await this.validateMembership(conversationId, currentUserId);
+
+        // 3. Xây dựng Cursor Query
+        const limit = query.limit || 30;
+
+        const qb = this.messageRepository
+            .createQueryBuilder('m')
+            .leftJoinAndSelect('m.sender', 'sender')
+            .where('m.conversationId = :conversationId', { conversationId });
+        this.applyClearedAtFilter(qb, member);
+
+        // Lọc theo loại tin nhắn (TEXT, IMAGE, FILE) nếu có
+        if (query.type) {
+            qb.andWhere('m.type = :messageType', { messageType: query.type });
+            // Loại bỏ hoàn toàn các tin nhắn đã bị thu hồi khỏi gallery Media/Files
+            qb.andWhere('m.isRecalled = :isRecalled', { isRecalled: false });
+        }
+
+        // Phân trang con trỏ `before` với khóa ghép (createdAt, id)
+        await this.applyBeforeCursor(qb, conversationId, query.before, limit);
+
+        const messages = await qb.getMany();
+
+        // 4. Enrich Reactions & Reply Context
+        const messageIds = messages.map((m) => m.id);
+        const replyToIds = messages
+            .map((m) => m.replyToId)
+            .filter((id): id is string => Boolean(id));
+
+        const reactionsMap = new Map<
+            string,
+            Array<{
+                emoji: string;
+                count: number;
+                users: Array<{ id: string; displayName: string }>;
+                hasReacted: boolean;
+            }>
+        >();
+
+        if (messageIds.length > 0) {
+            const rawReactions =
+                (await this.reactionRepository.find({
+                    where: { message: { id: In(messageIds) } },
+                    relations: { user: true, message: true },
+                    order: { createdAt: 'ASC' },
+                })) || [];
+
+            for (const r of rawReactions) {
+                const msgId = r.message?.id || (r as any).messageId;
+                if (!msgId) continue;
+                if (!reactionsMap.has(msgId)) {
+                    reactionsMap.set(msgId, []);
+                }
+                const list = reactionsMap.get(msgId)!;
+                let group = list.find((g) => g.emoji === r.emoji);
+                if (!group) {
+                    group = { emoji: r.emoji, count: 0, users: [], hasReacted: false };
+                    list.push(group);
+                }
+                group.count += 1;
+                group.users.push({
+                    id: r.user.id,
+                    displayName: r.user.displayName || r.user.username,
+                });
+                if (r.user.id === currentUserId) {
+                    group.hasReacted = true;
+                }
+            }
+        }
+
+        const parentMap = new Map<string, any>();
+        if (replyToIds.length > 0) {
+            const parents = await this.messageRepository.find({
+                where: { id: In(replyToIds) },
+                relations: { sender: true },
+                select: {
+                    id: true,
+                    content: true,
+                    type: true,
+                    fileUrl: true,
+                    isRecalled: true,
+                    createdAt: true,
+                    sender: {
+                        id: true,
+                        username: true,
+                        displayName: true,
+                        avatarUrl: true,
+                    },
+                },
+            });
+
+            for (const p of parents) {
+                parentMap.set(p.id, {
+                    id: p.id,
+                    content: p.isRecalled ? '[Tin nhắn đã bị thu hồi]' : p.content,
+                    type: p.type,
+                    fileUrl: p.isRecalled ? null : p.fileUrl,
+                    sender: {
+                        id: p.sender?.id,
+                        username: p.sender?.username,
+                        displayName: p.sender?.displayName || p.sender?.username,
+                        avatarUrl: p.sender?.avatarUrl,
+                    },
+                });
+            }
+        }
+
+        for (const m of messages) {
+            (m as any).reactions = reactionsMap.get(m.id) || [];
+            if (m.replyToId) {
+                (m as any).replyTo = parentMap.get(m.replyToId) || null;
+            }
+        }
+
+        // 5. Đảo ngược mảng để trả về theo thứ tự thời gian tăng dần (ASC: cũ -> mới)
+        return messages.reverse();
+    }
+
+    /**
+     * Đánh dấu đã đọc toàn bộ tin nhắn trong hội thoại (FR-16, BR-10)
+     */
+    async markAsRead(
+        currentUserId: string,
+        conversationId: string,
+    ): Promise<{ message: string; lastReadMessageId?: string }> {
+        // 1. Kiểm tra thành viên
+        const member = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+        });
+
+        if (!member) {
+            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
+        }
+
+        // 2. Lấy lastMessageId của cuộc hội thoại
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+            select: { id: true, lastMessageId: true },
+        });
+
+        // 3. Reset unreadCount = 0 và cập nhật lastReadMessageId (BR-10)
+        member.unreadCount = 0;
+        if (conversation?.lastMessageId) {
+            member.lastReadMessageId = conversation.lastMessageId;
+        }
+
+        await this.memberRepository.save(member);
+
+        return {
+            message: 'Đã đánh dấu đã đọc thành công',
+            lastReadMessageId: member.lastReadMessageId,
+        };
+    }
+
+    /**
+     * Lấy thông tin chi tiết cuộc hội thoại và danh sách thành viên (FR-18, BR-08)
+     */
+    async getConversationDetail(
+        currentUserId: string,
+        conversationId: string,
+    ): Promise<any> {
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+            relations: {
+                members: {
+                    user: true,
+                },
+            },
+        });
+
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        const currentMember = conversation.members.find(
+            (m) => m.user.id === currentUserId,
+        );
+
+        if (!currentMember) {
+            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
+        }
+
+        let displayName = conversation.name;
+        let avatarUrl = conversation.avatarUrl;
+        let partnerId: string | undefined;
+        let blockStatus: BlockStatus = 'NONE';
+
+        if (conversation.type === ConversationType.DIRECT) {
+            const partner = conversation.members.find(
+                (m) => m.user.id !== currentUserId,
+            )?.user;
+            displayName = partner?.displayName || partner?.username || 'Người dùng';
+            avatarUrl = partner?.avatarUrl;
+            partnerId = partner?.id;
+            if (partnerId) {
+                blockStatus = await getBlockStatus(this.friendshipRepository, currentUserId, partnerId);
+            }
+        }
+
+        return {
+            id: conversation.id,
+            type: conversation.type,
+            name: displayName,
+            avatarUrl,
+            quickEmoji: conversation.quickEmoji || '👍',
+            currentUserRole: currentMember.role,
+            unreadCount: currentMember.unreadCount,
+            isMuted: Boolean(currentMember.isMuted),
+            isPinned: Boolean(currentMember.isPinned),
+            pinnedAt: currentMember.pinnedAt ?? null,
+            ...(conversation.type === ConversationType.DIRECT ? { blockStatus } : {}),
+            members: conversation.members.map((m) => {
+                // Bị chặn (2 chiều) thì giấu trạng thái trực tuyến của đối phương (BR-28)
+                const hidePresence = blockStatus !== 'NONE' && m.user.id === partnerId;
+                return {
+                    id: m.id,
+                    role: m.role,
+                    joinedAt: m.joinedAt,
+                    isMuted: Boolean(m.isMuted),
+                    user: {
+                        id: m.user.id,
+                        username: m.user.username,
+                        displayName: m.user.displayName,
+                        avatarUrl: m.user.avatarUrl,
+                        isOnline: hidePresence ? false : m.user.isOnline,
+                        lastSeen: hidePresence ? null : m.user.lastSeen,
+                    },
+                };
+            }),
+            createdAt: conversation.createdAt,
+            updatedAt: conversation.updatedAt,
+        };
+    }
+
+    /**
+     * Cập nhật thông tin nhóm chat: Tên nhóm, ảnh đại diện (FR-19, BR-17)
+     * BR-17: Mọi thành viên trong nhóm đều có quyền cập nhật
+     */
+    async updateGroup(
+        currentUserId: string,
+        conversationId: string,
+        dto: UpdateGroupDto,
+    ): Promise<Conversation> {
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+        });
+
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        if (conversation.type === ConversationType.DIRECT) {
+            throw new BadRequestException('Không thể cập nhật thông tin cuộc trò chuyện 1-1');
+        }
+
+        const member = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+        });
+
+        if (!member) {
+            throw new ForbiddenException('Bạn không phải thành viên của nhóm này');
+        }
+
+        const changes: { name?: string; avatarUrl?: string } = {};
+
+        if (dto.name !== undefined) {
+            conversation.name = dto.name.trim();
+            changes.name = conversation.name;
+        }
+
+        if (dto.avatarUrl !== undefined) {
+            conversation.avatarUrl = dto.avatarUrl;
+            changes.avatarUrl = conversation.avatarUrl;
+        }
+
+        const saved = await this.conversationRepository.save(conversation);
+
+        const actor = await this.userRepository.findOne({
+            where: { id: currentUserId },
+            select: { id: true, displayName: true, username: true },
+        });
+        const actorName = actor?.displayName || actor?.username || 'Người dùng';
+
+        if (dto.name !== undefined) {
+            await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã đổi tên nhóm thành "${conversation.name}".`);
+        }
+        if (dto.avatarUrl !== undefined) {
+            await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã thay đổi ảnh nhóm.`);
+        }
+
+        const allMembers = (await this.memberRepository.find({
+            where: { conversation: { id: conversationId } },
+            relations: { user: true },
+        })) || [];
+        const memberIds = allMembers.map((m) => m.user?.id || (m as any).userId).filter(Boolean);
+
+        this.eventEmitter.emit(
+            'conversation.customized',
+            new ConversationCustomizedEvent(
+                conversationId,
+                {
+                    id: currentUserId,
+                    displayName: actorName,
+                },
+                changes,
+                memberIds,
+            ),
+        );
+
+        return saved;
+    }
+
+    /**
+     * Tùy chỉnh biểu tượng cảm xúc mặc định (Quick Emoji) cho cuộc hội thoại (FR-30, BR-29)
+     * Áp dụng cho cả DIRECT và GROUP
+     */
+    async updateQuickEmoji(
+        currentUserId: string,
+        conversationId: string,
+        dto: UpdateQuickEmojiDto,
+    ): Promise<{ quickEmoji: string }> {
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+        });
+
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        const member = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+        });
+
+        if (!member) {
+            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
+        }
+
+        const emoji = dto.emoji?.trim();
+        if (!emoji) {
+            throw new BadRequestException('Emoji không được để trống');
+        }
+
+        conversation.quickEmoji = emoji;
+        await this.conversationRepository.save(conversation);
+
+        const actor = await this.userRepository.findOne({
+            where: { id: currentUserId },
+            select: { id: true, displayName: true, username: true },
+        });
+        const actorName = actor?.displayName || actor?.username || 'Người dùng';
+
+        await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã đổi biểu tượng cảm xúc nhanh thành ${emoji}.`);
+
+        const allMembers = (await this.memberRepository.find({
+            where: { conversation: { id: conversationId } },
+            relations: { user: true },
+        })) || [];
+        const memberIds = allMembers.map((m) => m.user?.id || (m as any).userId).filter(Boolean);
+
+        this.eventEmitter.emit(
+            'conversation.customized',
+            new ConversationCustomizedEvent(
+                conversationId,
+                {
+                    id: currentUserId,
+                    displayName: actorName,
+                },
+                { quickEmoji: emoji },
+                memberIds,
+            ),
+        );
+
+        return { quickEmoji: emoji };
+    }
+
+    /**
+     * Xóa thành viên khỏi nhóm chat - Kick member (FR-18, BR-14)
+     * - Chỉ OWNER hoặc ADMIN mới có quyền kick
+     * - ADMIN không thể kick OWNER hoặc ADMIN khác
+     * - OWNER có thể kick bất kỳ ai trừ chính mình
+     */
+    async kickMember(
+        currentUserId: string,
+        conversationId: string,
+        targetUserId: string,
+    ): Promise<{ message: string }> {
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+        });
+
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        if (conversation.type === ConversationType.DIRECT) {
+            throw new BadRequestException('Không thể xóa thành viên khỏi cuộc trò chuyện 1-1');
+        }
+
+        if (currentUserId === targetUserId) {
+            throw new BadRequestException('Không thể tự xóa chính mình khỏi nhóm, hãy sử dụng tính năng rời nhóm');
+        }
+
+        const currentMember = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+        });
+
+        if (!currentMember) {
+            throw new ForbiddenException('Bạn không phải thành viên của nhóm này');
+        }
+
+        if (currentMember.role === ConversationRole.MEMBER) {
+            throw new ForbiddenException('Chỉ Trưởng nhóm hoặc Phó nhóm mới có quyền xóa thành viên');
+        }
+
+        const targetMember = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: targetUserId },
+            },
+            relations: { user: true },
+        });
+
+        if (!targetMember) {
+            throw new NotFoundException('Thành viên không tồn tại trong nhóm này');
+        }
+
+        if (targetMember.role === ConversationRole.OWNER) {
+            throw new ForbiddenException('Không thể xóa Trưởng nhóm khỏi nhóm');
+        }
+
+        if (currentMember.role === ConversationRole.ADMIN && targetMember.role === ConversationRole.ADMIN) {
+            throw new ForbiddenException('Phó nhóm không có quyền xóa Phó nhóm khác');
+        }
+
+        const actor = await this.userRepository.findOne({
+            where: { id: currentUserId },
+            select: { id: true, displayName: true, username: true },
+        });
+        const actorName = actor?.displayName || actor?.username || 'Người dùng';
+        const targetName = targetMember.user?.displayName || targetMember.user?.username || 'thành viên';
+
+        await this.memberRepository.delete(targetMember.id);
+
+        await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã xóa ${targetName} khỏi nhóm.`);
+
+        this.eventEmitter.emit(
+            'group.member_event',
+            new GroupMemberEvent(
+                conversationId,
+                'REMOVED',
+                { id: currentUserId, displayName: actorName },
+                [targetUserId],
+            ),
+        );
+
+        return { message: 'Đã xóa thành viên khỏi nhóm chat thành công' };
+    }
+
+    /**
+     * Chuyển giao quyền Trưởng nhóm (FR-18, BR-15)
+     * - Chỉ OWNER mới có quyền chuyển giao
+     * - Sau khi chuyển: người nhận thành OWNER, người cũ chuyển thành ADMIN
+     */
+    async transferOwnership(
+        currentUserId: string,
+        conversationId: string,
+        dto: TransferOwnerDto,
+    ): Promise<{ message: string }> {
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+        });
+
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        if (conversation.type === ConversationType.DIRECT) {
+            throw new BadRequestException('Không thể chuyển quyền trong cuộc trò chuyện 1-1');
+        }
+
+        const currentMember = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+            relations: { user: true },
+        });
+
+        if (!currentMember || currentMember.role !== ConversationRole.OWNER) {
+            throw new ForbiddenException('Chỉ Trưởng nhóm mới có quyền chuyển giao quyền Trưởng nhóm');
+        }
+
+        if (currentUserId === dto.newOwnerId) {
+            throw new BadRequestException('Bạn đã là Trưởng nhóm của cuộc trò chuyện này');
+        }
+
+        const newOwnerMember = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: dto.newOwnerId },
+            },
+            relations: { user: true },
+        });
+
+        if (!newOwnerMember) {
+            throw new NotFoundException('Người dùng được chọn không phải là thành viên của nhóm chat');
+        }
+
+        newOwnerMember.role = ConversationRole.OWNER;
+        currentMember.role = ConversationRole.ADMIN;
+
+        await this.memberRepository.save([newOwnerMember, currentMember]);
+
+        const actorName = currentMember.user?.displayName || currentMember.user?.username || 'Trưởng nhóm';
+        const newOwnerName = newOwnerMember.user?.displayName || newOwnerMember.user?.username || 'thành viên';
+        await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã chỉ định ${newOwnerName} làm Trưởng nhóm mới.`);
+
+        this.eventEmitter.emit(
+            'group.member_event',
+            new GroupMemberEvent(
+                conversationId,
+                'TRANSFER_OWNER',
+                { id: currentUserId, displayName: actorName },
+                [dto.newOwnerId],
+            ),
+        );
+
+        return { message: 'Chuyển giao quyền Trưởng nhóm thành công' };
+    }
+
+    /**
+     * Thay đổi vai trò thành viên - Thăng/Giáng cấp Admin (FR-18, BR-16)
+     * - Chỉ OWNER mới có quyền thay đổi vai trò
+     * - Không thể tự đổi vai trò của chính mình
+     */
+    async updateMemberRole(
+        currentUserId: string,
+        conversationId: string,
+        targetUserId: string,
+        dto: UpdateMemberRoleDto,
+    ): Promise<{ message: string; member: { id: string; userId: string; role: ConversationRole } }> {
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+        });
+
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        if (conversation.type === ConversationType.DIRECT) {
+            throw new BadRequestException('Không thể thay đổi vai trò trong cuộc trò chuyện 1-1');
+        }
+
+        const currentMember = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+            relations: { user: true },
+        });
+
+        if (!currentMember || currentMember.role !== ConversationRole.OWNER) {
+            throw new ForbiddenException('Chỉ Trưởng nhóm mới có quyền thay đổi vai trò của thành viên');
+        }
+
+        if (currentUserId === targetUserId) {
+            throw new BadRequestException('Không thể tự thay đổi vai trò của chính mình');
+        }
+
+        const targetMember = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: targetUserId },
+            },
+            relations: { user: true },
+        });
+
+        if (!targetMember) {
+            throw new NotFoundException('Thành viên không tồn tại trong nhóm chat');
+        }
+
+        targetMember.role = dto.role;
+        await this.memberRepository.save(targetMember);
+
+        const actorName = currentMember.user?.displayName || currentMember.user?.username || 'Trưởng nhóm';
+        const targetName = targetMember.user?.displayName || targetMember.user?.username || 'thành viên';
+        const roleText = dto.role === ConversationRole.ADMIN ? 'làm Quản trị viên' : 'vai trò Quản trị viên của';
+        const msgContent = dto.role === ConversationRole.ADMIN
+            ? `${actorName} đã bổ nhiệm ${targetName} ${roleText}.`
+            : `${actorName} đã gỡ ${roleText} ${targetName}.`;
+
+        await this.createSystemMessage(conversationId, currentUserId, msgContent);
+
+        this.eventEmitter.emit(
+            'group.member_event',
+            new GroupMemberEvent(
+                conversationId,
+                'ROLE_UPDATED',
+                { id: currentUserId, displayName: actorName },
+                [targetUserId],
+            ),
+        );
+
+        return {
+            message: 'Cập nhật vai trò thành viên thành công',
+            member: {
+                id: targetMember.id,
+                userId: targetMember.user.id,
+                role: targetMember.role,
+            },
+        };
+    }
+
+    /**
+     * Ghim tin nhắn trong cuộc trò chuyện (FR-20, BR-18)
+     */
+    async pinMessage(
+        currentUserId: string,
+        conversationId: string,
+        messageId: string,
+    ): Promise<Message> {
+        const member = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+        });
+
+        if (!member) {
+            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
+        }
+
+        const message = await this.messageRepository.findOne({
+            where: {
+                id: messageId,
+                conversation: { id: conversationId },
+            },
+            relations: { sender: true },
+        });
+
+        if (!message) {
+            throw new NotFoundException('Tin nhắn không tồn tại trong cuộc hội thoại này');
+        }
+
+        this.assertNotSystemMessage(message, 'ghim');
+
+        if (message.isRecalled) {
+            throw new BadRequestException('Không thể ghim tin nhắn đã bị thu hồi');
+        }
+
+        message.isPinned = true;
+        message.pinnedAt = new Date();
+        message.pinnedBy = { id: currentUserId } as User;
+
+        const saved = await this.messageRepository.save(message);
+
+        const actor = await this.userRepository.findOne({
+            where: { id: currentUserId },
+            select: { id: true, displayName: true, username: true },
+        });
+        const actorName = actor?.displayName || actor?.username || 'Người dùng';
+
+        await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã ghim một tin nhắn.`);
+
+        // Bắn domain event để FE hiển thị thanh Pin Bar trên đỉnh khung chat
+        this.eventEmitter.emit(
+            'message.pinned',
+            new MessagePinnedEvent(
+                conversationId,
+                messageId,
+                true,
+                {
+                    id: saved.id,
+                    content: saved.content,
+                    senderName: saved.sender?.displayName || saved.sender?.username,
+                },
+                { id: currentUserId, displayName: actorName },
+            ),
+        );
+
+        return saved;
+    }
+
+    /**
+     * Bỏ ghim tin nhắn trong cuộc trò chuyện (FR-20, BR-18)
+     * - Người ghim hoặc OWNER / ADMIN có quyền bỏ ghim
+     */
+    async unpinMessage(
+        currentUserId: string,
+        conversationId: string,
+        messageId: string,
+    ): Promise<{ message: string }> {
+        const member = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+        });
+
+        if (!member) {
+            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
+        }
+
+        const message = await this.messageRepository.findOne({
+            where: {
+                id: messageId,
+                conversation: { id: conversationId },
+            },
+            relations: { pinnedBy: true },
+        });
+
+        if (!message) {
+            throw new NotFoundException('Tin nhắn không tồn tại trong cuộc hội thoại này');
+        }
+
+        if (!message.isPinned) {
+            throw new BadRequestException('Tin nhắn này chưa được ghim');
+        }
+
+        const isPinner = message.pinnedBy?.id === currentUserId;
+        const isStaff = member.role === ConversationRole.OWNER || member.role === ConversationRole.ADMIN;
+
+        if (!isPinner && !isStaff) {
+            throw new ForbiddenException('Bạn không có quyền bỏ ghim tin nhắn này');
+        }
+
+        message.isPinned = false;
+        message.pinnedAt = null as any;
+        message.pinnedBy = null as any;
+
+        await this.messageRepository.save(message);
+
+        const actor = await this.userRepository.findOne({
+            where: { id: currentUserId },
+            select: { id: true, displayName: true, username: true },
+        });
+        const actorName = actor?.displayName || actor?.username || 'Người dùng';
+
+        await this.createSystemMessage(conversationId, currentUserId, `${actorName} đã bỏ ghim một tin nhắn.`);
+
+        // Bắn domain event để FE gỡ tin nhắn khỏi thanh Pin Bar
+        this.eventEmitter.emit(
+            'message.pinned',
+            new MessagePinnedEvent(
+                conversationId,
+                messageId,
+                false,
+            ),
+        );
+
+        return { message: 'Bỏ ghim tin nhắn thành công' };
+    }
+
+    /**
+     * Lấy danh sách các tin nhắn đang được ghim trong cuộc trò chuyện (FR-20, BR-18)
+     */
+    async getPinnedMessages(
+        currentUserId: string,
+        conversationId: string,
+    ): Promise<Message[]> {
+        const member = await this.validateMembership(conversationId, currentUserId);
+
+        return this.messageRepository.find({
+            where: {
+                conversation: { id: conversationId },
+                isPinned: true,
+                isRecalled: false,
+                // Ẩn tin nhắn ghim trước mốc "Xóa đoạn chat" của riêng người gọi (FR-48)
+                ...(member.clearedAt ? { createdAt: MoreThan(member.clearedAt) } : {}),
+            },
+            relations: {
+                sender: true,
+                pinnedBy: true,
+            },
+            order: {
+                pinnedAt: 'DESC',
+            },
+        });
+    }
+
+    /**
+     * Lấy danh sách ảnh và tệp tin đa phương tiện trong cuộc hội thoại (FR-21, BR-19)
+     * Hỗ trợ lọc theo loại tin nhắn (IMAGE, FILE) và phân trang con trỏ (Cursor pagination)
+     */
+    async getMediaMessages(
+        currentUserId: string,
+        conversationId: string,
+        query: GetMediaQueryDto,
+    ): Promise<Message[]> {
+        const member = await this.validateMembership(conversationId, currentUserId);
+
+        const limit = query.limit || 30;
+
+        const qb = this.messageRepository
+            .createQueryBuilder('m')
+            .leftJoinAndSelect('m.sender', 'sender')
+            .where('m.conversationId = :conversationId', { conversationId })
+            .andWhere('m.isRecalled = false');
+        this.applyClearedAtFilter(qb, member);
+
+        if (query.type) {
+            qb.andWhere('m.type = :type', { type: query.type });
+        } else {
+            qb.andWhere('m.type IN (:...types)', { types: [MessageType.IMAGE, MessageType.FILE] });
+        }
+
+        // Phân trang con trỏ `before` với khóa ghép (createdAt, id)
+        await this.applyBeforeCursor(qb, conversationId, query.before, limit);
+
+        return qb.getMany();
+    }
+
+    /**
+     * Kiểm tra trạng thái hoạt động (Active presence) của cuộc hội thoại (FR-22, BR-20)
+     * - DIRECT: Active khi đối phương đang isOnline === true
+     * - GROUP: Active khi có ít nhất 1 thành viên khác (ngoại trừ user hiện tại) đang isOnline === true
+     */
+    async getConversationActiveStatus(
+        currentUserId: string,
+        conversationId: string,
+    ): Promise<{
+        conversationId: string;
+        type: ConversationType;
+        isActive: boolean;
+        activeMemberCount: number;
+        totalMemberCount: number;
+    }> {
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+            relations: {
+                members: {
+                    user: true,
+                },
+            },
+        });
+
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        const isMember = conversation.members.some((m) => m.user.id === currentUserId);
+        if (!isMember) {
+            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
+        }
+
+        const otherMembers = conversation.members.filter((m) => m.user.id !== currentUserId);
+
+        let isActive = false;
+        let activeMemberCount = 0;
+
+        if (conversation.type === ConversationType.DIRECT) {
+            const partner = otherMembers[0]?.user;
+            // Bị chặn (2 chiều) thì không thấy trạng thái trực tuyến của nhau (BR-28)
+            const blockStatus = partner
+                ? await getBlockStatus(this.friendshipRepository, currentUserId, partner.id)
+                : 'NONE';
+            isActive = blockStatus === 'NONE' && Boolean(partner?.isOnline);
+            activeMemberCount = isActive ? 1 : 0;
+        } else {
+            activeMemberCount = otherMembers.filter((m) => Boolean(m.user?.isOnline)).length;
+            isActive = activeMemberCount > 0;
+        }
+
+        return {
+            conversationId: conversation.id,
+            type: conversation.type,
+            isActive,
+            activeMemberCount,
+            totalMemberCount: conversation.members.length,
+        };
+    }
+
+    /**
+     * Xác thực người dùng có phải thành viên của cuộc hội thoại hay không (BR-08)
+     */
+    async validateMembership(
+        conversationId: string,
+        userId: string,
+    ): Promise<ConversationMember> {
+        const member = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: userId },
+            },
+            relations: {
+                user: true,
+            },
+        });
+
+        if (!member) {
+            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
+        }
+
+        return member;
+    }
+
+    /**
+     * Tạo và lưu tin nhắn mới vào cuộc hội thoại (FR-15, BR-08, BR-09, BR-10)
+     */
+    async createMessage(
+        senderId: string,
+        dto: SendMessageDto,
+    ): Promise<Message> {
+        const { conversationId, content, type = MessageType.TEXT, fileUrl, fileSize, replyToId } = dto;
+
+        // 1. Kiểm tra thành viên hội thoại (BR-08)
+        await this.validateMembership(conversationId, senderId);
+
+        // 1b. SYSTEM chỉ do server sinh ra, client không được giả mạo (BR-36)
+        if (type === MessageType.SYSTEM) {
+            throw new BadRequestException('Không thể gửi tin nhắn loại SYSTEM');
+        }
+
+        // 1c. Hội thoại DIRECT có quan hệ chặn (2 chiều) -> 403 CONVERSATION_BLOCKED (FR-29, BR-28)
+        await this.assertDirectConversationNotBlocked(conversationId, senderId);
+
+        // 2. Validate nội dung tin nhắn (BR-09)
+        if (!content || !content.trim()) {
+            throw new BadRequestException('Nội dung tin nhắn không được để trống');
+        }
+        if (content.trim().length > 2000) {
+            throw new BadRequestException('Nội dung tin nhắn không được vượt quá 2000 ký tự');
+        }
+
+        // 3. Nếu là replyTo, kiểm tra tin nhắn gốc có thuộc hội thoại này không
+        let replyToSummary: any = null;
+        if (replyToId) {
+            const originalMessage = await this.messageRepository.findOne({
+                where: {
+                    id: replyToId,
+                    conversation: { id: conversationId },
+                },
+                relations: { sender: true },
+                select: {
+                    id: true,
+                    content: true,
+                    type: true,
+                    fileUrl: true,
+                    fileSize: true,
+                    isRecalled: true,
+                    sender: {
+                        id: true,
+                        username: true,
+                        displayName: true,
+                        avatarUrl: true,
+                    },
+                },
+            });
+            if (!originalMessage) {
+                throw new BadRequestException('Tin nhắn trả lời không tồn tại trong cuộc hội thoại này');
+            }
+            this.assertNotSystemMessage(originalMessage, 'trả lời');
+            replyToSummary = {
+                id: originalMessage.id,
+                content: originalMessage.isRecalled ? '[Tin nhắn đã bị thu hồi]' : originalMessage.content,
+                type: originalMessage.type,
+                fileUrl: originalMessage.isRecalled ? null : originalMessage.fileUrl,
+                fileSize: originalMessage.isRecalled ? null : originalMessage.fileSize,
+                sender: {
+                    id: originalMessage.sender?.id,
+                    username: originalMessage.sender?.username,
+                    displayName: originalMessage.sender?.displayName || originalMessage.sender?.username,
+                    avatarUrl: originalMessage.sender?.avatarUrl,
+                },
+            };
+        }
+
+        // 4. Lưu tin nhắn mới vào DB
+        const message = this.messageRepository.create({
+            conversation: { id: conversationId } as Conversation,
+            sender: { id: senderId } as User,
+            content: content.trim(),
+            type,
+            fileUrl,
+            fileSize,
+            replyToId,
+        });
+        const savedMessage = await this.messageRepository.save(message);
+
+        // 5. Cập nhật lastMessageId và lastMessageAt của conversation
+        await this.conversationRepository.update(conversationId, {
+            lastMessageId: savedMessage.id,
+            lastMessageAt: savedMessage.createdAt,
+        });
+
+        // 6. Tăng unreadCount cho các thành viên khác trong nhóm (BR-10)
+        await this.memberRepository
+            .createQueryBuilder()
+            .update(ConversationMember)
+            .set({ unreadCount: () => 'unreadCount + 1' })
+            .where('conversationId = :conversationId', { conversationId })
+            .andWhere('userId != :senderId', { senderId })
+            .execute();
+
+        // 7. Lấy lại tin nhắn kèm thông tin người gửi đầy đủ
+        const fullMessage = await this.messageRepository.findOneOrFail({
+            where: { id: savedMessage.id },
+            relations: {
+                sender: true,
+            },
+            select: {
+                id: true,
+                content: true,
+                type: true,
+                fileUrl: true,
+                fileSize: true,
+                replyToId: true,
+                isRecalled: true,
+                isEdited: true,
+                editedAt: true,
+                isPinned: true,
+                createdAt: true,
+                updatedAt: true,
+                sender: {
+                    id: true,
+                    username: true,
+                    displayName: true,
+                    avatarUrl: true,
+                },
+            },
+        });
+
+        // 8. Lấy danh sách thành viên để phát event inbox.updated cho những ai ngoài phòng
+        const members = await this.memberRepository.find({
+            where: { conversation: { id: conversationId } },
+            relations: { user: true },
+        });
+        const memberIds = members.map((m) => m.user?.id || (m as any).userId).filter(Boolean);
+
+        this.eventEmitter.emit(
+            'inbox.updated',
+            new InboxUpdatedEvent(
+                conversationId,
+                memberIds,
+                {
+                    id: fullMessage.id,
+                    content: fullMessage.content,
+                    type: fullMessage.type,
+                    fileUrl: fullMessage.fileUrl,
+                    senderName: fullMessage.sender.displayName || fullMessage.sender.username,
+                    createdAt: fullMessage.createdAt,
+                },
+                senderId,
+            ),
+        );
+
+        (fullMessage as any).replyTo = replyToSummary;
+        (fullMessage as any).reactions = [];
+
+        return fullMessage;
+    }
+
+    /**
+     * Thu hồi tin nhắn trong cuộc trò chuyện (Milestone 5, BR-M5-01, BR-M5-02, BR-M5-03)
+     * - Chỉ người gửi tin nhắn (sender) mới có quyền thu hồi
+     * - Không giới hạn thời gian (cho phép thu hồi bất kỳ lúc nào)
+     * - Áp dụng Tombstone pattern: isRecalled = true, content = '[Tin nhắn đã bị thu hồi]', fileUrl = null
+     */
+    async recallMessage(
+        currentUserId: string,
+        conversationId: string,
+        messageId: string,
+    ): Promise<Message> {
+        // 1. Kiểm tra cuộc trò chuyện
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+        });
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        // 2. Kiểm tra thành viên cuộc trò chuyện
+        const member = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+        });
+        if (!member) {
+            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
+        }
+
+        // 3. Tìm tin nhắn
+        const message = await this.messageRepository.findOne({
+            where: {
+                id: messageId,
+                conversation: { id: conversationId },
+            },
+            relations: { sender: true },
+        });
+
+        if (!message) {
+            throw new NotFoundException('Tin nhắn không tồn tại trong cuộc hội thoại này');
+        }
+
+        // 3b. Tin nhắn hệ thống không thể thu hồi (BR-36)
+        this.assertNotSystemMessage(message, 'thu hồi');
+
+        // 4. Kiểm tra quyền sở hữu
+        if (message.sender.id !== currentUserId) {
+            throw new ForbiddenException('Bạn không có quyền thu hồi tin nhắn của người khác');
+        }
+
+        // 5. Kiểm tra nếu tin nhắn đã thu hồi rồi
+        if (message.isRecalled) {
+            return message;
+        }
+
+        // 6. Áp dụng Tombstone pattern
+        const originalFileUrl = message.fileUrl;
+        message.isRecalled = true;
+        message.content = '[Tin nhắn đã bị thu hồi]';
+        // null (không phải undefined) để TypeORM thực sự xóa fileUrl trong DB
+        message.fileUrl = null;
+
+        const savedMessage = await this.messageRepository.save(message);
+
+        // 7. Lấy danh sách thành viên để thông báo
+        const members = await this.memberRepository.find({
+            where: { conversation: { id: conversationId } },
+            relations: { user: true },
+        });
+        const memberIds = members.map((m) => m.user?.id || (m as any).userId).filter(Boolean);
+        const isLastMessage = conversation.lastMessageId === messageId;
+
+        this.eventEmitter.emit(
+            'message.recalled',
+            new MessageRecalledEvent(
+                conversationId,
+                messageId,
+                new Date(),
+                currentUserId,
+                isLastMessage,
+                memberIds,
+                originalFileUrl ?? undefined,
+            ),
+        );
+
+        return savedMessage;
+    }
+
+    /**
+     * Chỉnh sửa nội dung tin nhắn văn bản (Milestone 5, BR-M5-04 -> BR-M5-07)
+     * - Chỉ người gửi tin nhắn mới có quyền chỉnh sửa
+     * - Chỉ được sửa trong vòng 15 phút kể từ thời điểm gửi (createdAt + 15m >= NOW)
+     * - Không cho phép chỉnh sửa tin nhắn đã bị thu hồi
+     * - Nội dung mới không được rỗng và không được trùng với nội dung hiện tại
+     */
+    async editMessage(
+        currentUserId: string,
+        conversationId: string,
+        messageId: string,
+        newContent: string,
+    ): Promise<Message> {
+        // 1. Kiểm tra cuộc trò chuyện
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+        });
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        // 2. Kiểm tra thành viên cuộc trò chuyện
+        const member = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+        });
+        if (!member) {
+            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
+        }
+
+        // 3. Tìm tin nhắn
+        const message = await this.messageRepository.findOne({
+            where: {
+                id: messageId,
+                conversation: { id: conversationId },
+            },
+            relations: { sender: true },
+        });
+
+        if (!message) {
+            throw new NotFoundException('Tin nhắn không tồn tại trong cuộc hội thoại này');
+        }
+
+        // 3b. Tin nhắn hệ thống không thể chỉnh sửa (BR-36)
+        this.assertNotSystemMessage(message, 'chỉnh sửa');
+
+        // 4. Kiểm tra quyền sở hữu
+        if (message.sender.id !== currentUserId) {
+            throw new ForbiddenException('Bạn không có quyền chỉnh sửa tin nhắn của người khác');
+        }
+
+        // 5. Kiểm tra nếu tin nhắn đã bị thu hồi
+        if (message.isRecalled) {
+            throw new BadRequestException('Không thể chỉnh sửa tin nhắn đã bị thu hồi');
+        }
+
+        // 6. Kiểm tra giới hạn 15 phút (BR-M5-05)
+        // createdAt trong tương lai (lệch đồng hồ) -> ageMs âm -> vẫn được sửa
+        const now = new Date();
+        const ageMs = now.getTime() - new Date(message.createdAt).getTime();
+        if (ageMs > EDIT_WINDOW_MS) {
+            throw new BadRequestException('Chỉ có thể chỉnh sửa tin nhắn trong vòng 15 phút kể từ khi gửi');
+        }
+
+        // 7. Validate nội dung mới
+        const trimmedContent = newContent ? newContent.trim() : '';
+        if (!trimmedContent) {
+            throw new BadRequestException('Nội dung tin nhắn không được để trống');
+        }
+
+        if (trimmedContent === message.content) {
+            throw new BadRequestException('Nội dung mới không được trùng với nội dung hiện tại');
+        }
+
+        // 8. Cập nhật tin nhắn
+        message.content = trimmedContent;
+        message.isEdited = true;
+        message.editedAt = now;
+
+        const savedMessage = await this.messageRepository.save(message);
+
+        // 9. Lấy danh sách thành viên để thông báo
+        const members = await this.memberRepository.find({
+            where: { conversation: { id: conversationId } },
+            relations: { user: true },
+        });
+        const memberIds = members.map((m) => m.user?.id || (m as any).userId).filter(Boolean);
+        const isLastMessage = conversation.lastMessageId === messageId;
+
+        this.eventEmitter.emit(
+            'message.edited',
+            new MessageEditedEvent(
+                conversationId,
+                messageId,
+                savedMessage.content,
+                message.editedAt,
+                currentUserId,
+                isLastMessage,
+                memberIds,
+            ),
+        );
+
+        return savedMessage;
+    }
+
+    /**
+     * Thả hoặc hủy cảm xúc vào tin nhắn (Milestone 5, BR-M5-07, BR-M5-08)
+     * - Toggle logic:
+     *   + Nếu chưa có reaction -> Tạo mới (action: 'ADDED')
+     *   + Nếu đã có cùng emoji -> Xóa (action: 'REMOVED')
+     *   + Nếu đã có nhưng khác emoji -> Cập nhật sang emoji mới (action: 'CHANGED')
+     * - Phát event domain 'message.reaction_updated'
+     */
+    async reactMessage(
+        currentUserId: string,
+        conversationId: string,
+        messageId: string,
+        emoji: string,
+    ): Promise<{
+        action: 'ADDED' | 'REMOVED' | 'CHANGED';
+        emoji: string | null;
+        messageId: string;
+        reactions: Array<{
+            emoji: string;
+            count: number;
+            users: Array<{ id: string; displayName: string }>;
+            hasReacted: boolean;
+        }>;
+    }> {
+        // 1. Kiểm tra cuộc trò chuyện
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+        });
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        // 2. Kiểm tra thành viên cuộc trò chuyện (kèm user info)
+        const member = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+            relations: { user: true },
+        });
+        if (!member) {
+            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
+        }
+
+        // 3. Tìm tin nhắn
+        const message = await this.messageRepository.findOne({
+            where: {
+                id: messageId,
+                conversation: { id: conversationId },
+            },
+        });
+        if (!message) {
+            throw new NotFoundException('Tin nhắn không tồn tại trong cuộc hội thoại này');
+        }
+
+        // 3b. Tin nhắn hệ thống không thể thả cảm xúc (BR-36)
+        this.assertNotSystemMessage(message, 'thả cảm xúc vào');
+
+        // 4. Không cho phép thả reaction vào tin nhắn đã thu hồi
+        if (message.isRecalled) {
+            throw new BadRequestException('Không thể thả cảm xúc vào tin nhắn đã bị thu hồi');
+        }
+
+        // 5. Kiểm tra reaction hiện có
+        const existingReaction = await this.reactionRepository.findOne({
+            where: {
+                message: { id: messageId },
+                user: { id: currentUserId },
+            },
+        });
+
+        let action: 'ADDED' | 'REMOVED' | 'CHANGED';
+        if (!existingReaction) {
+            action = 'ADDED';
+            const newReaction = this.reactionRepository.create({
+                message: { id: messageId } as Message,
+                user: { id: currentUserId } as User,
+                emoji,
+            });
+            await this.reactionRepository.save(newReaction);
+        } else if (existingReaction.emoji === emoji) {
+            action = 'REMOVED';
+            await this.reactionRepository.remove(existingReaction);
+        } else {
+            action = 'CHANGED';
+            existingReaction.emoji = emoji;
+            await this.reactionRepository.save(existingReaction);
+        }
+
+        // 6. Phát event domain
+        const userDisplayName = member.user?.displayName || member.user?.username || 'User';
+        this.eventEmitter.emit(
+            'message.reaction_updated',
+            new MessageReactionEvent(
+                conversationId,
+                messageId,
+                {
+                    id: currentUserId,
+                    displayName: userDisplayName,
+                    avatarUrl: member.user?.avatarUrl,
+                },
+                emoji,
+                action,
+            ),
+        );
+
+        // 7. Lấy danh sách reactions tổng hợp sau khi cập nhật
+        const reactions = await this.getMessageReactions(messageId, currentUserId);
+
+        return {
+            action,
+            emoji: action === 'REMOVED' ? null : emoji,
+            messageId,
+            reactions,
+        };
+    }
+
+    /**
+     * Lấy danh sách aggregated reactions cho 1 tin nhắn
+     */
+    async getMessageReactions(
+        messageId: string,
+        currentUserId: string,
+    ): Promise<
+        Array<{
+            emoji: string;
+            count: number;
+            users: Array<{ id: string; displayName: string }>;
+            hasReacted: boolean;
+        }>
+    > {
+        const rawReactions = await this.reactionRepository.find({
+            where: { message: { id: messageId } },
+            relations: { user: true },
+            order: { createdAt: 'ASC' },
+        });
+
+        const list: Array<{
+            emoji: string;
+            count: number;
+            users: Array<{ id: string; displayName: string }>;
+            hasReacted: boolean;
+        }> = [];
+
+        for (const r of rawReactions) {
+            let group = list.find((g) => g.emoji === r.emoji);
+            if (!group) {
+                group = { emoji: r.emoji, count: 0, users: [], hasReacted: false };
+                list.push(group);
+            }
+            group.count += 1;
+            group.users.push({
+                id: r.user.id,
+                displayName: r.user.displayName || r.user.username,
+            });
+            if (r.user.id === currentUserId) {
+                group.hasReacted = true;
+            }
+        }
+
+        return list;
+    }
+
+    /**
+     * Tìm kiếm tin nhắn trong cuộc trò chuyện theo từ khóa (FR-31, BR-30)
+     * Không phân biệt hoa thường, loại trừ tin nhắn đã thu hồi.
+     */
+    async searchMessages(
+        currentUserId: string,
+        conversationId: string,
+        keyword: string,
+    ): Promise<Message[]> {
+        if (!keyword || !keyword.trim()) {
+            return [];
+        }
+
+        // 1. Kiểm tra cuộc trò chuyện tồn tại
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+        });
+
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        // 2. Kiểm tra quyền thành viên (BR-08)
+        const member = await this.validateMembership(conversationId, currentUserId);
+
+        // 3. Tìm kiếm tin nhắn khớp từ khóa (không phân biệt hoa thường, loại trừ isRecalled)
+        const searchPattern = `%${keyword.trim()}%`;
+        const qb = this.messageRepository
+            .createQueryBuilder('m')
+            .leftJoinAndSelect('m.sender', 'sender')
+            .where('m.conversationId = :conversationId', { conversationId })
+            .andWhere('m.isRecalled = :isRecalled', { isRecalled: false })
+            .andWhere('LOWER(m.content) LIKE LOWER(:searchPattern)', { searchPattern });
+        this.applyClearedAtFilter(qb, member);
+
+        // Mới nhất trước, giới hạn SEARCH_RESULT_LIMIT kết quả để tránh quét/trả về cả lịch sử
+        return qb
+            .orderBy('m.createdAt', 'DESC')
+            .addOrderBy('m.id', 'DESC')
+            .take(SEARCH_RESULT_LIMIT)
+            .getMany();
+    }
+
+    /**
+     * Tắt/bật thông báo cuộc hội thoại (FR-32, BR-31)
+     */
+    async toggleMute(
+        currentUserId: string,
+        conversationId: string,
+        isMuted: boolean,
+    ): Promise<{ conversationId: string; isMuted: boolean }> {
+        // 1. Kiểm tra cuộc trò chuyện tồn tại
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+        });
+
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        // 2. Tìm bản ghi thành viên của user
+        const member = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+        });
+
+        if (!member) {
+            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
+        }
+
+        // 3. Cập nhật trạng thái tắt thông báo
+        member.isMuted = isMuted;
+        await this.memberRepository.save(member);
+
+        return {
+            conversationId,
+            isMuted: member.isMuted,
+        };
+    }
+}
+
+
+
