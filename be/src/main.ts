@@ -4,6 +4,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
+import { corsOriginCallback } from './common/config/cors-origins.js';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor.js';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
 import { RedisIoAdapter } from './common/adapters/index.js';
@@ -24,8 +25,9 @@ async function bootstrap() {
   // Parse Cookie cho xác thực HttpOnly Refresh Token an toàn (OWASP 2025)
   app.use(cookieParser());
 
+  // CORS whitelist theo CLIENT_URL: không phản chiếu mọi origin khi bật credentials (cookie)
   app.enableCors({
-    origin: true,
+    origin: corsOriginCallback,
     credentials: true,
   });
 

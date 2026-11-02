@@ -11,6 +11,7 @@ import { MessageType } from '../entities/message.entity.js';
 import { User } from '../../users/entities/user.entity.js';
 import { Friendship, FriendshipStatus } from '../../friends/entities/friendship.entity.js';
 import { Socket } from 'socket.io';
+import { RedisService } from '../../../common/redis/redis.service.js';
 import {
     FriendRequestSentEvent,
     FriendRequestAcceptedEvent,
@@ -54,6 +55,10 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
     };
     let mockFriendshipRepository: {
         find: ReturnType<typeof vi.fn>;
+    };
+    let mockRedisService: {
+        isTokenBlacklisted: ReturnType<typeof vi.fn>;
+        get: ReturnType<typeof vi.fn>;
     };
     let mockServer: {
         to: ReturnType<typeof vi.fn>;
@@ -121,6 +126,11 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
             find: vi.fn().mockResolvedValue([]),
         };
 
+        mockRedisService = {
+            isTokenBlacklisted: vi.fn().mockResolvedValue(false),
+            get: vi.fn().mockResolvedValue(null),
+        };
+
         mockServer = {
             to: vi.fn().mockReturnThis(),
             emit: vi.fn(),
@@ -148,6 +158,10 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
                 {
                     provide: getRepositoryToken(Friendship),
                     useValue: mockFriendshipRepository,
+                },
+                {
+                    provide: RedisService,
+                    useValue: mockRedisService,
                 },
             ],
         }).compile();
@@ -188,6 +202,36 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
             });
             expect(client.disconnect).toHaveBeenCalledWith(true);
             expect(client.data.user).toBeUndefined();
+            expect(mockConnectionManager.addConnection).not.toHaveBeenCalled();
+        });
+
+        it('should reject a blacklisted (logged out) token by JTI', async () => {
+            const client = createMockSocket({ token: 'Bearer revoked.jwt.token' }) as Socket;
+            mockJwtService.verifyAsync.mockResolvedValue({ sub: 'user-uuid-1', username: 'john_doe', jti: 'jti-revoked' });
+            mockRedisService.isTokenBlacklisted.mockImplementation(async (key: string) => key === 'jti-revoked');
+
+            await gateway.handleConnection(client);
+
+            expect(client.disconnect).toHaveBeenCalledWith(true);
+            expect(client.data.user).toBeUndefined();
+            expect(mockConnectionManager.addConnection).not.toHaveBeenCalled();
+        });
+
+        it('should reject a token whose device was remotely logged out', async () => {
+            const client = createMockSocket({ token: 'Bearer old.device.token' }) as Socket;
+            mockJwtService.verifyAsync.mockResolvedValue({
+                sub: 'user-uuid-1',
+                username: 'john_doe',
+                did: 'device-2',
+                iat: 1700000000,
+            });
+            mockRedisService.get.mockImplementation(async (key: string) =>
+                key === 'auth:device_min_issued_at:user-uuid-1:device-2' ? '1700000500000' : null,
+            );
+
+            await gateway.handleConnection(client);
+
+            expect(client.disconnect).toHaveBeenCalledWith(true);
             expect(mockConnectionManager.addConnection).not.toHaveBeenCalled();
         });
 

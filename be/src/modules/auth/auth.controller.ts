@@ -27,6 +27,7 @@ import {
     Disable2faDto,
     Verify2faLoginDto,
     Resend2faOtpDto,
+    ChangePasswordDto,
 } from "./dto/index.js";
 import { AuthService } from "./auth.service.js";
 import { AuthGuard } from "@nestjs/passport";
@@ -44,6 +45,28 @@ import { OptionalJwtAuthGuard } from "../../common/guards/optional-jwt-auth.guar
 @Controller('auth')
 export class AuthController {
     constructor(private readonly authService: AuthService) { }
+
+    /**
+     * Ghi Refresh Token vào HttpOnly cookie và loại bỏ nó khỏi response body
+     * (Refresh Token tuyệt đối không được lộ ra JavaScript phía client).
+     */
+    private withRefreshCookie<T extends { refreshToken?: string }>(result: T, res?: Response): Omit<T, 'refreshToken'> | T {
+        if (!result.refreshToken) {
+            return result;
+        }
+        if (res?.cookie) {
+            res.cookie(REFRESH_TOKEN_COOKIE_NAME, result.refreshToken, getRefreshTokenCookieOptions());
+        }
+        const { refreshToken: _rt, ...cleanResult } = result;
+        return cleanResult;
+    }
+
+    private getClientMeta(req?: Request): { ip?: string; userAgent?: string } {
+        return {
+            ip: req?.ip || req?.socket?.remoteAddress,
+            userAgent: req?.headers ? req.headers['user-agent'] : undefined,
+        };
+    }
 
     /**
      * Đăng ký tài khoản mới (FR-01)
@@ -78,6 +101,7 @@ export class AuthController {
      */
     @Post('verify-email')
     @HttpCode(HttpStatus.OK)
+    @Throttle({ auth: { limit: 5, ttl: 60000 } })
     @ApiOperation({ summary: 'Xác thực tài khoản bằng mã OTP gửi về email' })
     @ApiResponse({
         status: 200,
@@ -87,8 +111,15 @@ export class AuthController {
         status: 400,
         description: 'Mã OTP không đúng hoặc đã hết hạn',
     })
-    verifyEmail(@Body() verifyEmailDto: VerifyEmailDto) {
-        return this.authService.verifyEmail(verifyEmailDto);
+    async verifyEmail(
+        @Body() verifyEmailDto: VerifyEmailDto,
+        @Req() req?: Request,
+        @Res({ passthrough: true }) res?: Response,
+        @DeviceId() deviceId?: string,
+    ) {
+        const { ip, userAgent } = this.getClientMeta(req);
+        const result = await this.authService.verifyEmail(verifyEmailDto, ip, userAgent, deviceId);
+        return this.withRefreshCookie(result, res);
     }
 
     /**
@@ -135,20 +166,11 @@ export class AuthController {
         @Res({ passthrough: true }) res?: Response,
         @DeviceId() deviceId?: string,
     ) {
-        const ip = req?.ip || req?.socket?.remoteAddress;
-        const userAgent = req?.headers ? req.headers['user-agent'] : undefined;
+        const { ip, userAgent } = this.getClientMeta(req);
         const result = await this.authService.login(loginDto, ip, userAgent, deviceId);
 
-        if ('refreshToken' in result && result.refreshToken) {
-            if (res?.cookie) {
-                res.cookie(
-                    REFRESH_TOKEN_COOKIE_NAME,
-                    result.refreshToken,
-                    getRefreshTokenCookieOptions(),
-                );
-            }
-            const { refreshToken: _rt, ...cleanResult } = result;
-            return cleanResult;
+        if ('refreshToken' in result) {
+            return this.withRefreshCookie(result, res);
         }
 
         return result;
@@ -175,23 +197,9 @@ export class AuthController {
         @Res({ passthrough: true }) res?: Response,
         @DeviceId() deviceId?: string,
     ) {
-        const ip = req?.ip || req?.socket?.remoteAddress;
-        const userAgent = req?.headers ? req.headers['user-agent'] : undefined;
+        const { ip, userAgent } = this.getClientMeta(req);
         const result = await this.authService.verify2faLogin(verifyDto, ip, userAgent, deviceId);
-
-        if (result.refreshToken) {
-            if (res?.cookie) {
-                res.cookie(
-                    REFRESH_TOKEN_COOKIE_NAME,
-                    result.refreshToken,
-                    getRefreshTokenCookieOptions(),
-                );
-            }
-            const { refreshToken: _rt, ...cleanResult } = result;
-            return cleanResult;
-        }
-
-        return result;
+        return this.withRefreshCookie(result, res);
     }
 
     /**
@@ -233,6 +241,7 @@ export class AuthController {
     @HttpCode(HttpStatus.OK)
     @UseGuards(AuthGuard('jwt'))
     @ApiBearerAuth('JWT-auth')
+    @Throttle({ auth: { limit: 5, ttl: 60000 } })
     @ApiOperation({ summary: 'Xác nhận mã OTP để chính thức bật 2FA' })
     @ApiResponse({
         status: 200,
@@ -249,6 +258,7 @@ export class AuthController {
     @HttpCode(HttpStatus.OK)
     @UseGuards(AuthGuard('jwt'))
     @ApiBearerAuth('JWT-auth')
+    @Throttle({ auth: { limit: 5, ttl: 60000 } })
     @ApiOperation({ summary: 'Tắt tính năng 2FA (yêu cầu mật khẩu hiện tại)' })
     @ApiResponse({
         status: 200,
@@ -293,6 +303,26 @@ export class AuthController {
         @Param('deviceId') deviceId: string,
     ) {
         return this.authService.revokeSession(user.id, deviceId);
+    }
+
+    /**
+     * Đổi mật khẩu trong Cài đặt (FR-49, BR-39). Đăng xuất mọi thiết bị khác thiết bị hiện tại.
+     */
+    @Post('change-password')
+    @HttpCode(HttpStatus.OK)
+    @UseGuards(AuthGuard('jwt'))
+    @ApiBearerAuth('JWT-auth')
+    @Throttle({ auth: { limit: 5, ttl: 60000 } })
+    @ApiOperation({ summary: 'Đổi mật khẩu tài khoản cá nhân (đăng xuất các thiết bị khác)' })
+    @ApiResponse({ status: 200, description: 'Đổi mật khẩu thành công' })
+    @ApiResponse({ status: 400, description: 'Mật khẩu mới không đạt chuẩn, trùng mật khẩu cũ hoặc xác nhận không khớp' })
+    @ApiResponse({ status: 401, description: 'Mật khẩu hiện tại không chính xác' })
+    changePassword(
+        @CurrentUser() user: User,
+        @Body() changePasswordDto: ChangePasswordDto,
+        @DeviceId() deviceId?: string,
+    ) {
+        return this.authService.changePassword(user, changePasswordDto, deviceId);
     }
 
     /**
@@ -374,18 +404,9 @@ export class AuthController {
             throw new UnauthorizedException('Refresh token không tồn tại trong cookie');
         }
 
-        const result = await this.authService.refreshTokens(rawRefreshToken, deviceId);
-
-        if (res?.cookie) {
-            res.cookie(
-                REFRESH_TOKEN_COOKIE_NAME,
-                result.refreshToken,
-                getRefreshTokenCookieOptions(),
-            );
-        }
-
-        const { refreshToken: _rt, ...cleanResult } = result;
-        return cleanResult;
+        const { ip, userAgent } = this.getClientMeta(req);
+        const result = await this.authService.refreshTokens(rawRefreshToken, deviceId, ip, userAgent);
+        return this.withRefreshCookie(result, res);
     }
 
     /**

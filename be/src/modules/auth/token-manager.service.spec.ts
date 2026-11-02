@@ -341,6 +341,76 @@ describe('TokenManagerService', () => {
         });
     });
 
+    describe('device-bound revocation (remote logout / password change)', () => {
+        it('should include the device id (did) in the access token payload', async () => {
+            await service.generateTokenPair(mockUser, 'chrome-desktop');
+
+            expect(mockJwtService.signAsync).toHaveBeenCalledWith(
+                expect.objectContaining({ sub: 'user-uuid-1', did: 'chrome-desktop' }),
+                expect.any(Object),
+            );
+        });
+
+        it('should bind the new family to the device and revoke the device previous family on re-login', async () => {
+            mockRedisService.get.mockImplementation(async (key: string) =>
+                key === 'auth:device_family:user-uuid-1:chrome-desktop' ? 'old-family' : null,
+            );
+            mockRedisService.smembers.mockResolvedValue(['old-token-1']);
+
+            const result = await service.generateTokenPair(mockUser, 'chrome-desktop');
+
+            expect(mockRedisService.del).toHaveBeenCalledWith('auth:refresh:old-token-1');
+            expect(mockRedisService.del).toHaveBeenCalledWith('auth:family:old-family');
+            expect(mockRedisService.set).toHaveBeenCalledWith(
+                'auth:device_family:user-uuid-1:chrome-desktop',
+                result.familyId,
+                2592000,
+            );
+            expect(mockRedisService.sadd).toHaveBeenCalledWith('auth:user_token_devices:user-uuid-1', 'chrome-desktop');
+        });
+
+        it('should NOT revoke the family during rotation of the same family', async () => {
+            await service.generateTokenPair(mockUser, 'chrome-desktop', 'family-keep');
+
+            expect(mockRedisService.get).not.toHaveBeenCalledWith('auth:device_family:user-uuid-1:chrome-desktop');
+            expect(mockRedisService.del).not.toHaveBeenCalledWith('auth:family:family-keep');
+        });
+
+        it('revokeDevice should kill the family and set a device min-issued-at marker', async () => {
+            mockRedisService.get.mockResolvedValue('family-x');
+            mockRedisService.smembers.mockResolvedValue(['t1', 't2']);
+
+            await service.revokeDevice('user-uuid-1', 'phone');
+
+            expect(mockRedisService.del).toHaveBeenCalledWith('auth:refresh:t1', 'auth:refresh:t2');
+            expect(mockRedisService.del).toHaveBeenCalledWith('auth:family:family-x');
+            expect(mockRedisService.del).toHaveBeenCalledWith('auth:device_family:user-uuid-1:phone');
+            expect(mockRedisService.srem).toHaveBeenCalledWith('auth:user_token_devices:user-uuid-1', 'phone');
+            expect(mockRedisService.set).toHaveBeenCalledWith(
+                'auth:device_min_issued_at:user-uuid-1:phone',
+                expect.stringMatching(/^\d+000$/),
+                960,
+            );
+        });
+
+        it('revokeAllDevices should revoke every device except the excluded one', async () => {
+            mockRedisService.smembers.mockImplementation(async (key: string) =>
+                key === 'auth:user_token_devices:user-uuid-1' ? ['laptop', 'phone', 'tablet'] : [],
+            );
+            mockRedisService.get.mockResolvedValue(null);
+
+            const revoked = await service.revokeAllDevices('user-uuid-1', 'laptop');
+
+            expect(revoked).toEqual(['phone', 'tablet']);
+            expect(mockRedisService.set).toHaveBeenCalledWith(
+                'auth:device_min_issued_at:user-uuid-1:phone', expect.any(String), 960,
+            );
+            expect(mockRedisService.set).not.toHaveBeenCalledWith(
+                'auth:device_min_issued_at:user-uuid-1:laptop', expect.any(String), expect.any(Number),
+            );
+        });
+    });
+
     describe('revokeToken & revokeFamily', () => {
         it('should revoke individual token and remove from family', async () => {
             await service.revokeToken('token-1', 'family-1');

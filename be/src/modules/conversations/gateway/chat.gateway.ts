@@ -30,6 +30,9 @@ import {
 import { User } from '../../users/entities/user.entity.js';
 import { Friendship, FriendshipStatus } from '../../friends/entities/friendship.entity.js';
 import { OnEvent } from '@nestjs/event-emitter';
+import { RedisService } from '../../../common/redis/redis.service.js';
+import { getAccessTokenRevocationReason } from '../../../common/auth/access-token-revocation.js';
+import { corsOriginCallback } from '../../../common/config/cors-origins.js';
 import {
     FriendRequestSentEvent,
     FriendRequestAcceptedEvent,
@@ -49,7 +52,8 @@ import {
 
 @WebSocketGateway({
     cors: {
-        origin: true,
+        // Chỉ chấp nhận origin trong whitelist CLIENT_URL (không phản chiếu mọi origin kèm credentials)
+        origin: corsOriginCallback,
         credentials: true,
     },
 })
@@ -69,6 +73,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         private readonly userRepository: Repository<User>,
         @InjectRepository(Friendship)
         private readonly friendshipRepository: Repository<Friendship>,
+        private readonly redisService: RedisService,
     ) { }
 
     afterInit(_server: Server) {
@@ -104,6 +109,12 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
             // 3. Giải mã và xác thực chữ ký JWT
             const payload = await this.jwtService.verifyAsync(token);
+
+            // 3b. Từ chối token đã logout / bị đăng xuất từ xa / bị thu hồi do đổi-đặt lại mật khẩu
+            const revokedReason = await getAccessTokenRevocationReason(this.redisService, payload, token);
+            if (revokedReason) {
+                throw new Error(revokedReason);
+            }
 
             // 4. Lưu thông tin User (kèm displayName, avatarUrl) vào session stateful của Socket (client.data)
             const userId = payload.sub || payload.id;

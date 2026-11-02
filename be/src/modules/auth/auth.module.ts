@@ -8,6 +8,8 @@ import { PassportModule } from '@nestjs/passport';
 import { JwtStrategy } from './strategies/jwt.strategies.js';
 import { AuthController } from './auth.controller.js';
 import { TokenManagerService } from './token-manager.service.js';
+import { getJwtSecret } from '../../common/config/jwt-secret.js';
+import { ACCESS_TOKEN_TTL_SECONDS } from './constants/auth-cookie.constants.js';
 
 @Module({
     imports: [
@@ -18,8 +20,9 @@ import { TokenManagerService } from './token-manager.service.js';
             imports: [ConfigModule],
             inject: [ConfigService],
             useFactory: (configService: ConfigService) => ({
-                secret: configService.get<string>('JWT_SECRET') || 'secretKeyChatApp123',
-                signOptions: { expiresIn: '7d' },
+                secret: getJwtSecret(configService),
+                // Mặc định khớp Access Token ngắn hạn 15 phút, không cấp token dài hạn ngoài luồng TokenManager
+                signOptions: { expiresIn: ACCESS_TOKEN_TTL_SECONDS },
             }),
         }),
     ],

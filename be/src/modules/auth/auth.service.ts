@@ -29,9 +29,20 @@ import {
     Disable2faDto,
     Verify2faLoginDto,
     Resend2faOtpDto,
+    ChangePasswordDto,
 } from "./dto/index.js";
 import { ConfigService } from "@nestjs/config";
 import { TokenManagerService } from "./token-manager.service.js";
+import { toAuthUser } from "./auth-user.mapper.js";
+import { REFRESH_TOKEN_TTL_SECONDS } from "./constants/auth-cookie.constants.js";
+import { generateOtp } from "../../common/utils/generate-otp.js";
+import { currentSecondInMs, userMinIssuedAtKey } from "../../common/auth/access-token-revocation.js";
+
+/** Số lần nhập sai OTP tối đa trước khi hủy mã (BR-25) */
+const MAX_OTP_ATTEMPTS = 5;
+/** Số lần gửi lại OTP 2FA đăng nhập tối đa cho một mfaToken */
+const MAX_2FA_LOGIN_RESENDS = 3;
+const emailVerifyAttemptsKey = (email: string) => `email_verify_attempts:${email}`;
 
 @Injectable()
 export class AuthService {
@@ -99,7 +110,7 @@ export class AuthService {
 
         // Sinh mã OTP 6 số ngẫu nhiên và lưu vào Redis (TTL 15 phút = 900s)
         if (normalizedEmail) {
-            const otp = Math.floor(100000 + Math.random() * 900000).toString();
+            const otp = generateOtp();
             await this.redisService.set(`email_verify:${normalizedEmail}`, otp, 900);
 
             // Đẩy email xác nhận vào BullMQ Queue
@@ -112,7 +123,12 @@ export class AuthService {
         };
     }
 
-    async verifyEmail(dto: VerifyEmailDto): Promise<AuthResponse & { message: string }> {
+    async verifyEmail(
+        dto: VerifyEmailDto,
+        clientIp?: string,
+        userAgent?: string,
+        deviceId?: string,
+    ): Promise<AuthResponse & { message: string }> {
         const normalizedEmail = dto.email.trim().toLowerCase();
         const user = await this.userRepository.findOne({ where: { email: normalizedEmail } });
 
@@ -130,6 +146,7 @@ export class AuthService {
         }
 
         if (cachedOtp !== dto.otp.trim()) {
+            await this.registerFailedEmailOtpAttempt(normalizedEmail);
             throw new BadRequestException('Mã OTP không chính xác');
         }
 
@@ -137,21 +154,39 @@ export class AuthService {
         user.isEmailVerified = true;
         await this.userRepository.save(user);
 
-        // Xóa OTP khỏi Redis
-        await this.redisService.del(`email_verify:${normalizedEmail}`);
+        // Xóa OTP và bộ đếm nhập sai khỏi Redis
+        await this.redisService.del(`email_verify:${normalizedEmail}`, emailVerifyAttemptsKey(normalizedEmail));
 
-        const token = await this.generateToken(user.id, user.username);
+        // Cấp cặp token chuẩn (Access 15 phút + Refresh cookie) và ghi session như luồng login
+        const effectiveDeviceId = deviceId || 'default-device';
+        const tokenPair = await this.tokenManagerService.generateTokenPair(
+            { id: user.id, username: user.username },
+            effectiveDeviceId,
+        );
+        await this.recordSession(user.id, effectiveDeviceId, clientIp, userAgent);
+
         return {
             message: 'Xác thực email thành công',
-            accessToken: token,
-            user: {
-                id: user.id,
-                username: user.username,
-                displayName: user.displayName,
-                avatarUrl: user.avatarUrl,
-                createdAt: user.createdAt,
-            },
+            accessToken: tokenPair.accessToken,
+            refreshToken: tokenPair.refreshToken,
+            user: toAuthUser(user),
         };
+    }
+
+    /**
+     * Đếm số lần nhập sai OTP xác thực email. Quá MAX_OTP_ATTEMPTS lần thì hủy OTP, buộc gửi lại mã mới
+     * (chống brute-force mã 6 chữ số trong 15 phút).
+     */
+    private async registerFailedEmailOtpAttempt(normalizedEmail: string): Promise<void> {
+        const key = emailVerifyAttemptsKey(normalizedEmail);
+        const attempts = Number((await this.redisService.get(key)) || 0) + 1;
+
+        if (attempts >= MAX_OTP_ATTEMPTS) {
+            await this.redisService.del(`email_verify:${normalizedEmail}`, key);
+            throw new BadRequestException('Nhập sai mã OTP quá 5 lần. Vui lòng yêu cầu gửi lại mã mới.');
+        }
+
+        await this.redisService.set(key, String(attempts), 900);
     }
 
     async resendVerification(dto: ResendVerificationDto): Promise<{ message: string }> {
@@ -171,8 +206,9 @@ export class AuthService {
             throw new HttpException('Vui lòng đợi 60 giây trước khi yêu cầu gửi lại mã mới', HttpStatus.TOO_MANY_REQUESTS);
         }
 
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const otp = generateOtp();
         await this.redisService.set(`email_verify:${normalizedEmail}`, otp, 900);
+        await this.redisService.del(emailVerifyAttemptsKey(normalizedEmail));
         await this.redisService.set(`resend_limit:${normalizedEmail}`, '1', 60);
 
         await this.mailService.sendVerificationEmail(normalizedEmail, user.username, otp);
@@ -210,7 +246,7 @@ export class AuthService {
         // Kiểm tra xác thực 2 bước (2FA qua Email OTP)
         if (user.twoFactorEnabled && user.email) {
             const mfaToken = randomUUID();
-            const otp = Math.floor(100000 + Math.random() * 900000).toString();
+            const otp = generateOtp();
 
             // Lưu phiên 2FA tạm thời vào Redis (TTL 5 phút = 300s)
             const mfaData = {
@@ -241,23 +277,29 @@ export class AuthService {
             effectiveDeviceId,
         );
 
-        // Lưu session nếu client gửi kèm deviceId
-        await this.redisService.saveSession(user.id, effectiveDeviceId, {
-            ip: clientIp || 'unknown',
-            userAgent: userAgent || 'unknown',
-        });
+        await this.recordSession(user.id, effectiveDeviceId, clientIp, userAgent);
 
         return {
             accessToken: tokenPair.accessToken,
             refreshToken: tokenPair.refreshToken,
-            user: {
-                id: user.id,
-                username: user.username,
-                displayName: user.displayName,
-                avatarUrl: user.avatarUrl,
-                createdAt: user.createdAt,
-            },
+            user: toAuthUser(user),
         };
+    }
+
+    /**
+     * Ghi / gia hạn phiên đăng nhập hiển thị ở Cài đặt > Thiết bị.
+     * TTL bằng Refresh Token (30 ngày): thiết bị còn đăng nhập thì luôn còn trong danh sách và luôn thu hồi được.
+     */
+    private async recordSession(userId: string, deviceId: string, clientIp?: string, userAgent?: string): Promise<void> {
+        await this.redisService.saveSession(
+            userId,
+            deviceId,
+            {
+                ip: clientIp || 'unknown',
+                userAgent: userAgent || 'unknown',
+            },
+            REFRESH_TOKEN_TTL_SECONDS,
+        );
     }
 
     async send2faSetupOtp(user: User): Promise<{ message: string; maskedEmail: string }> {
@@ -265,7 +307,7 @@ export class AuthService {
             throw new BadRequestException('Tài khoản chưa có email để thiết lập xác thực 2 bước');
         }
 
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const otp = generateOtp();
         await this.redisService.set(`2fa_setup:${user.id}`, otp, 300); // 5 phút
 
         await this.mailService.sendTwoFactorOtpEmail(user.email, user.username, otp, 'setup');
@@ -286,8 +328,8 @@ export class AuthService {
             throw new BadRequestException('Mã xác thực không chính xác');
         }
 
-        user.twoFactorEnabled = true;
-        await this.userRepository.save(user);
+        // Chỉ cập nhật đúng cột twoFactorEnabled (req.user không chứa password, không save cả entity)
+        await this.userRepository.update(user.id, { twoFactorEnabled: true });
 
         await this.redisService.del(`2fa_setup:${user.id}`);
 
@@ -297,13 +339,14 @@ export class AuthService {
     }
 
     async disable2fa(user: User, dto: Disable2faDto): Promise<{ message: string }> {
-        const isMatch = await bcrypt.compare(dto.password, user.password);
+        // JwtStrategy đã loại bỏ password khỏi req.user => phải đọc lại hash từ DB
+        const dbUser = await this.findUserWithPasswordOrFail(user.id);
+        const isMatch = await bcrypt.compare(dto.password, dbUser.password);
         if (!isMatch) {
             throw new UnauthorizedException('Mật khẩu không chính xác');
         }
 
-        user.twoFactorEnabled = false;
-        await this.userRepository.save(user);
+        await this.userRepository.update(user.id, { twoFactorEnabled: false });
 
         return {
             message: 'Đã tắt tính năng xác thực 2 bước (2FA) thành công.',
@@ -323,7 +366,7 @@ export class AuthService {
 
         const mfaData = JSON.parse(cachedRaw);
 
-        if (mfaData.attempts >= 5) {
+        if (mfaData.attempts >= MAX_OTP_ATTEMPTS) {
             await this.redisService.del(`mfa_login:${dto.mfaToken}`);
             throw new BadRequestException('Nhập sai mã OTP quá 5 lần. Vui lòng đăng nhập lại.');
         }
@@ -348,21 +391,17 @@ export class AuthService {
             effectiveDeviceId,
         );
 
-        await this.redisService.saveSession(user.id, effectiveDeviceId, {
-            ip: clientIp || mfaData.clientIp || 'unknown',
-            userAgent: userAgent || mfaData.userAgent || 'unknown',
-        });
+        await this.recordSession(
+            user.id,
+            effectiveDeviceId,
+            clientIp || mfaData.clientIp,
+            userAgent || mfaData.userAgent,
+        );
 
         return {
             accessToken: tokenPair.accessToken,
             refreshToken: tokenPair.refreshToken,
-            user: {
-                id: user.id,
-                username: user.username,
-                displayName: user.displayName,
-                avatarUrl: user.avatarUrl,
-                createdAt: user.createdAt,
-            },
+            user: toAuthUser(user),
         };
     }
 
@@ -378,9 +417,14 @@ export class AuthService {
         }
 
         const mfaData = JSON.parse(cachedRaw);
-        const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
+        // KHÔNG reset attempts: nếu reset, kẻ tấn công đoán OTP vô hạn bằng cách gửi lại mã liên tục (BR-25)
+        const resends = Number(mfaData.resends || 0);
+        if (resends >= MAX_2FA_LOGIN_RESENDS) {
+            throw new BadRequestException('Đã vượt quá số lần gửi lại mã. Vui lòng đăng nhập lại.');
+        }
+        const newOtp = generateOtp();
         mfaData.otp = newOtp;
-        mfaData.attempts = 0;
+        mfaData.resends = resends + 1;
 
         await this.redisService.set(`mfa_login:${dto.mfaToken}`, JSON.stringify(mfaData), 300);
         await this.redisService.set(`resend_2fa_limit:${dto.mfaToken}`, '1', 60);
@@ -401,13 +445,20 @@ export class AuthService {
     }
 
     async revokeSession(userId: string, targetDeviceId: string): Promise<{ message: string }> {
+        // Thu hồi thật: hủy refresh token family + chặn access token đang dùng của thiết bị (BR-27)
+        await this.tokenManagerService.revokeDevice(userId, targetDeviceId);
         await this.redisService.deleteSession(userId, targetDeviceId);
         return {
             message: `Đã kết thúc phiên đăng nhập của thiết bị ${targetDeviceId}`,
         };
     }
 
-    async refreshTokens(rawRefreshToken: string, deviceId?: string): Promise<AuthResponse> {
+    async refreshTokens(
+        rawRefreshToken: string,
+        deviceId?: string,
+        clientIp?: string,
+        userAgent?: string,
+    ): Promise<AuthResponse> {
         const newPair = await this.tokenManagerService.rotateRefreshToken(rawRefreshToken, deviceId);
 
         const user = await this.userRepository.findOne({ where: { id: newPair.userId } });
@@ -415,16 +466,13 @@ export class AuthService {
             throw new UnauthorizedException('Người dùng không tồn tại hoặc tài khoản đã bị khóa');
         }
 
+        // Gia hạn session + cập nhật lastActiveAt để danh sách thiết bị phản ánh đúng thiết bị còn hoạt động
+        await this.recordSession(user.id, newPair.deviceId, clientIp, userAgent);
+
         return {
             accessToken: newPair.accessToken,
             refreshToken: newPair.refreshToken,
-            user: {
-                id: user.id,
-                username: user.username,
-                displayName: user.displayName,
-                avatarUrl: user.avatarUrl,
-                createdAt: user.createdAt,
-            },
+            user: toAuthUser(user),
         };
     }
 
@@ -457,8 +505,9 @@ export class AuthService {
             }
         }
 
-        // 3. Xóa thiết bị khỏi danh sách sessions
+        // 3. Hủy toàn bộ token family của thiết bị và xóa khỏi danh sách sessions
         if (userId && deviceId) {
+            await this.tokenManagerService.revokeDevice(userId, deviceId);
             await this.redisService.deleteSession(userId, deviceId);
         }
 
@@ -508,12 +557,65 @@ export class AuthService {
         // Xóa token đặt lại mật khẩu
         await this.redisService.del(`pwd_reset:${dto.token}`);
 
-        // Xóa toàn bộ phiên đăng nhập cũ trên mọi thiết bị (đá văng thiết bị cũ)
+        // Thu hồi thật toàn bộ phiên trên mọi thiết bị (BR-24): refresh token family + access token đang dùng
+        await this.tokenManagerService.revokeAllDevices(user.id);
         await this.redisService.deleteAllUserSessions(user.id);
+        // Chặn cả token cấp trước khi có chỉ mục thiết bị (không nằm trong user_token_devices)
+        await this.redisService.set(
+            userMinIssuedAtKey(user.id),
+            String(currentSecondInMs()),
+            REFRESH_TOKEN_TTL_SECONDS,
+        );
 
         return {
             message: 'Đặt lại mật khẩu thành công. Vui lòng đăng nhập lại với mật khẩu mới.',
         };
+    }
+
+    /**
+     * Đổi mật khẩu trong Cài đặt (FR-49, BR-39).
+     * Đổi thành công thì đăng xuất mọi thiết bị KHÁC (giữ thiết bị hiện tại) để kẻ đang chiếm phiên bị đá ra.
+     */
+    async changePassword(
+        user: User,
+        dto: ChangePasswordDto,
+        currentDeviceId?: string,
+    ): Promise<{ message: string; revokedSessions: number }> {
+        if (dto.newPassword !== dto.confirmPassword) {
+            throw new BadRequestException('Mật khẩu xác nhận không khớp');
+        }
+
+        if (dto.currentPassword === dto.newPassword) {
+            throw new BadRequestException('Mật khẩu mới không được trùng với mật khẩu hiện tại');
+        }
+
+        // JwtStrategy đã loại bỏ password khỏi req.user => phải đọc lại hash từ DB
+        const dbUser = await this.findUserWithPasswordOrFail(user.id);
+        const isCurrentPasswordValid = await bcrypt.compare(dto.currentPassword, dbUser.password);
+        if (!isCurrentPasswordValid) {
+            throw new UnauthorizedException('Mật khẩu hiện tại không chính xác');
+        }
+
+        const hashedPassword = await bcrypt.hash(dto.newPassword, 10);
+        await this.userRepository.update(user.id, { password: hashedPassword });
+
+        const revokedDeviceIds = await this.tokenManagerService.revokeAllDevices(user.id, currentDeviceId);
+        for (const deviceId of revokedDeviceIds) {
+            await this.redisService.deleteSession(user.id, deviceId);
+        }
+
+        return {
+            message: 'Đổi mật khẩu thành công. Các thiết bị khác đã được đăng xuất.',
+            revokedSessions: revokedDeviceIds.length,
+        };
+    }
+
+    private async findUserWithPasswordOrFail(userId: string): Promise<User> {
+        const dbUser = await this.userRepository.findOne({ where: { id: userId } });
+        if (!dbUser) {
+            throw new NotFoundException('Người dùng không tồn tại');
+        }
+        return dbUser;
     }
 
     private maskEmail(email: string): string {
@@ -523,14 +625,5 @@ export class AuthService {
             return `${name[0]}*@${domain}`;
         }
         return `${name[0]}${'*'.repeat(Math.max(name.length - 2, 3))}${name[name.length - 1]}@${domain}`;
-    }
-
-    private async generateToken(userId: string, username: string): Promise<string> {
-        const payload = {
-            sub: userId,
-            username: username,
-        };
-
-        return this.jwtService.signAsync(payload);
     }
 }

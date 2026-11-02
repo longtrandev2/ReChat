@@ -6,6 +6,11 @@ import { ExtractJwt, Strategy } from "passport-jwt";
 import { Repository } from "typeorm";
 import { User } from "../../users/entities/user.entity.js";
 import { RedisService } from "../../../common/redis/redis.service.js";
+import { getJwtSecret } from "../../../common/config/jwt-secret.js";
+import {
+    getAccessTokenRevocationReason,
+    type RevocableTokenPayload,
+} from "../../../common/auth/access-token-revocation.js";
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -18,15 +23,15 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         super({
             jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
             ignoreExpiration: false,
-            secretOrKey: configService.get<string>('JWT_SECRET') || 'secretKeyChatApp123',
+            secretOrKey: getJwtSecret(configService),
             passReqToCallback: true,
         });
     }
 
-    // Kiểm tra token blacklist và payload hợp lệ
+    // Kiểm tra token đã bị thu hồi (logout, đăng xuất từ xa, reset/đổi mật khẩu) và payload hợp lệ
     async validate(reqOrPayload: any, maybePayload?: any) {
         let req: any;
-        let payload: { sub: string; username: string; jti?: string; iat?: number };
+        let payload: RevocableTokenPayload & { username?: string };
 
         if (maybePayload && reqOrPayload) {
             req = reqOrPayload;
@@ -36,25 +41,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         }
 
         if (this.redisService) {
-            // 1. Kiểm tra JTI blacklist (Vô hiệu hóa Access Token cụ thể khi logout)
-            if (payload?.jti && (await this.redisService.isTokenBlacklisted(payload.jti))) {
-                throw new UnauthorizedException('Phiên đăng nhập đã bị thu hồi hoặc đã đăng xuất');
-            }
-
-            // 2. Kiểm tra token string blacklist (Hỗ trợ tương thích ngược token cũ)
-            if (req && req.headers) {
-                const token = ExtractJwt.fromAuthHeaderAsBearerToken()(req);
-                if (token && (await this.redisService.isTokenBlacklisted(token))) {
-                    throw new UnauthorizedException('Phiên đăng nhập đã bị thu hồi hoặc đã đăng xuất');
-                }
-            }
-
-            // 3. Kiểm tra mốc thời gian tối thiểu (Remote Logout / Password Reset)
-            if (payload?.iat && payload?.sub) {
-                const minIat = await this.redisService.get(`auth:user_min_issued_at:${payload.sub}`);
-                if (minIat && payload.iat * 1000 < Number(minIat)) {
-                    throw new UnauthorizedException('Phiên đăng nhập đã bị hủy từ xa');
-                }
+            const rawToken = req?.headers ? ExtractJwt.fromAuthHeaderAsBearerToken()(req) ?? undefined : undefined;
+            const revokedReason = await getAccessTokenRevocationReason(this.redisService, payload, rawToken);
+            if (revokedReason) {
+                throw new UnauthorizedException(revokedReason);
             }
         }
 

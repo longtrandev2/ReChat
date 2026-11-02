@@ -6,7 +6,7 @@ import { User } from '../users/entities/user.entity.js';
 import { JwtService } from '@nestjs/jwt';
 import { RedisService } from '../../common/redis/redis.service.js';
 import { MailService } from '../../common/mail/mail.service.js';
-import { BadRequestException, ConflictException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { TokenManagerService } from './token-manager.service.js';
@@ -23,6 +23,7 @@ describe('AuthService', () => {
         mockUserRepository = {
             findOne: vi.fn(),
             create: vi.fn((dto) => dto),
+            update: vi.fn().mockResolvedValue({ affected: 1 }),
             save: vi.fn((user) => Promise.resolve({
                 id: 'uuid-1234',
                 createdAt: new Date('2026-10-05T00:00:00.000Z'),
@@ -58,6 +59,8 @@ describe('AuthService', () => {
             }),
             revokeToken: vi.fn().mockResolvedValue(undefined),
             revokeFamily: vi.fn().mockResolvedValue(undefined),
+            revokeDevice: vi.fn().mockResolvedValue(undefined),
+            revokeAllDevices: vi.fn().mockResolvedValue([]),
         };
 
         mockRedisService = {
@@ -184,13 +187,62 @@ describe('AuthService', () => {
             mockUserRepository.findOne.mockResolvedValue(user);
             mockRedisService.get.mockResolvedValue('123456');
 
-            const result = await service.verifyEmail({ email: 'alex@example.com', otp: '123456' });
+            const result = await service.verifyEmail(
+                { email: 'alex@example.com', otp: '123456' },
+                '10.0.0.1',
+                'Chrome',
+                'dev-web',
+            );
 
             expect(result.message).toBe('Xác thực email thành công');
             expect(result.accessToken).toBe('mock-jwt-token');
+            expect(result.refreshToken).toBe('token-uuid.secret-key');
+            expect(result.user).toMatchObject({ email: 'alex@example.com', isEmailVerified: true, twoFactorEnabled: false });
             expect(user.isEmailVerified).toBe(true);
             expect(mockUserRepository.save).toHaveBeenCalledWith(user);
             expect(mockRedisService.del).toHaveBeenCalled();
+            // Cấp token qua TokenManager (15 phút + refresh) thay vì token 7 ngày không thu hồi được
+            expect(mockTokenManagerService.generateTokenPair).toHaveBeenCalledWith(
+                { id: 'uuid-1', username: 'alex' },
+                'dev-web',
+            );
+            expect(mockRedisService.saveSession).toHaveBeenCalledWith(
+                'uuid-1',
+                'dev-web',
+                { ip: '10.0.0.1', userAgent: 'Chrome' },
+                2592000,
+            );
+        });
+
+        it('should count wrong OTP attempts and invalidate the OTP after 5 failures', async () => {
+            const user = { id: 'uuid-1', email: 'alex@example.com', isEmailVerified: false } as User;
+            mockUserRepository.findOne.mockResolvedValue(user);
+            mockRedisService.get.mockImplementation(async (key: string) => {
+                if (key === 'email_verify:alex@example.com') return '123456';
+                if (key === 'email_verify_attempts:alex@example.com') return '4';
+                return null;
+            });
+
+            await expect(service.verifyEmail({ email: 'alex@example.com', otp: '000000' })).rejects.toThrow(
+                'Nhập sai mã OTP quá 5 lần',
+            );
+            expect(mockRedisService.del).toHaveBeenCalledWith(
+                'email_verify:alex@example.com',
+                'email_verify_attempts:alex@example.com',
+            );
+        });
+
+        it('should increment the attempt counter on a wrong OTP below the limit', async () => {
+            const user = { id: 'uuid-1', email: 'alex@example.com', isEmailVerified: false } as User;
+            mockUserRepository.findOne.mockResolvedValue(user);
+            mockRedisService.get.mockImplementation(async (key: string) =>
+                key === 'email_verify:alex@example.com' ? '123456' : null,
+            );
+
+            await expect(service.verifyEmail({ email: 'alex@example.com', otp: '000000' })).rejects.toThrow(
+                'Mã OTP không chính xác',
+            );
+            expect(mockRedisService.set).toHaveBeenCalledWith('email_verify_attempts:alex@example.com', '1', 900);
         });
 
         it('should throw BadRequestException if OTP expired or invalid', async () => {
@@ -286,6 +338,13 @@ describe('AuthService', () => {
             expect(mockUserRepository.save).toHaveBeenCalled();
             expect(mockRedisService.del).toHaveBeenCalledWith('pwd_reset:valid-token');
             expect(mockRedisService.deleteAllUserSessions).toHaveBeenCalledWith('user-1');
+            // BR-24: thu hồi thật refresh token của mọi thiết bị + chặn access token cấp trước thời điểm reset
+            expect(mockTokenManagerService.revokeAllDevices).toHaveBeenCalledWith('user-1');
+            expect(mockRedisService.set).toHaveBeenCalledWith(
+                'auth:user_min_issued_at:user-1',
+                expect.stringMatching(/^\d+000$/),
+                2592000,
+            );
         });
     });
 
@@ -384,23 +443,52 @@ describe('AuthService', () => {
 
             const result = await service.enable2fa(user, { otp: '654321' });
             expect(result.message).toContain('kích hoạt thành công');
-            expect(user.twoFactorEnabled).toBe(true);
-            expect(mockUserRepository.save).toHaveBeenCalledWith(user);
+            expect(mockUserRepository.update).toHaveBeenCalledWith('user-1', { twoFactorEnabled: true });
+            expect(mockUserRepository.save).not.toHaveBeenCalled();
             expect(mockRedisService.del).toHaveBeenCalledWith('2fa_setup:user-1');
         });
 
-        it('should disable 2FA when correct password is provided', async () => {
+        it('should disable 2FA by re-fetching the password hash (req.user has no password)', async () => {
             const hashedPassword = await bcrypt.hash('CorrectPassword@123', 10);
-            const user = {
-                id: 'user-1',
-                twoFactorEnabled: true,
-                password: hashedPassword,
-            } as User;
+            const reqUser = { id: 'user-1', twoFactorEnabled: true } as User; // giống JwtStrategy: không có password
+            mockUserRepository.findOne.mockResolvedValue({ ...reqUser, password: hashedPassword });
 
-            const result = await service.disable2fa(user, { password: 'CorrectPassword@123' });
+            const result = await service.disable2fa(reqUser, { password: 'CorrectPassword@123' });
             expect(result.message).toContain('Đã tắt tính năng');
-            expect(user.twoFactorEnabled).toBe(false);
-            expect(mockUserRepository.save).toHaveBeenCalledWith(user);
+            expect(mockUserRepository.findOne).toHaveBeenCalledWith({ where: { id: 'user-1' } });
+            expect(mockUserRepository.update).toHaveBeenCalledWith('user-1', { twoFactorEnabled: false });
+        });
+
+        it('should reject disabling 2FA with a wrong password', async () => {
+            const hashedPassword = await bcrypt.hash('CorrectPassword@123', 10);
+            mockUserRepository.findOne.mockResolvedValue({ id: 'user-1', password: hashedPassword });
+
+            await expect(
+                service.disable2fa({ id: 'user-1' } as User, { password: 'Wrong@123' }),
+            ).rejects.toThrow(UnauthorizedException);
+            expect(mockUserRepository.update).not.toHaveBeenCalled();
+        });
+
+        it('should keep the failed-attempt counter when resending the 2FA login OTP', async () => {
+            const mfaData = { userId: 'u1', email: 'a@x.com', username: 'alice', otp: '111111', attempts: 4 };
+            mockRedisService.get.mockResolvedValue(JSON.stringify(mfaData));
+
+            await service.resend2faLoginOtp({ mfaToken: 'mfa-1' });
+
+            const saved = JSON.parse(
+                mockRedisService.set.mock.calls.find((call: any[]) => call[0] === 'mfa_login:mfa-1')[1],
+            );
+            expect(saved.attempts).toBe(4);
+            expect(saved.resends).toBe(1);
+            expect(saved.otp).toMatch(/^\d{6}$/);
+        });
+
+        it('should refuse resending the 2FA login OTP more than 3 times', async () => {
+            const mfaData = { userId: 'u1', email: 'a@x.com', username: 'alice', otp: '111111', attempts: 0, resends: 3 };
+            mockRedisService.get.mockResolvedValue(JSON.stringify(mfaData));
+
+            await expect(service.resend2faLoginOtp({ mfaToken: 'mfa-1' })).rejects.toThrow(BadRequestException);
+            expect(mockMailService.sendTwoFactorOtpEmail).not.toHaveBeenCalled();
         });
     });
 
@@ -420,6 +508,7 @@ describe('AuthService', () => {
         it('should revoke a session and call redisService.deleteSession', async () => {
             const result = await service.revokeSession('user-1', 'dev-2');
             expect(result.message).toContain('Đã kết thúc phiên');
+            expect(mockTokenManagerService.revokeDevice).toHaveBeenCalledWith('user-1', 'dev-2');
             expect(mockRedisService.deleteSession).toHaveBeenCalledWith('user-1', 'dev-2');
         });
 
@@ -428,7 +517,69 @@ describe('AuthService', () => {
             expect(result.message).toContain('Đăng xuất thành công');
             expect(mockRedisService.blacklistToken).toHaveBeenCalled();
             expect(mockTokenManagerService.revokeToken).toHaveBeenCalledWith('token-uuid');
+            expect(mockTokenManagerService.revokeDevice).toHaveBeenCalledWith('user-1', 'dev-1');
             expect(mockRedisService.deleteSession).toHaveBeenCalledWith('user-1', 'dev-1');
+        });
+    });
+
+    describe('changePassword', () => {
+        const reqUser = { id: 'user-1', username: 'alice' } as User; // không có password như req.user thật
+        const validDto = {
+            currentPassword: 'OldPass@123',
+            newPassword: 'NewPass@456',
+            confirmPassword: 'NewPass@456',
+        };
+
+        beforeEach(async () => {
+            mockUserRepository.findOne.mockResolvedValue({
+                id: 'user-1',
+                password: await bcrypt.hash('OldPass@123', 10),
+            });
+        });
+
+        it('should hash and store the new password, then log out every OTHER device', async () => {
+            mockTokenManagerService.revokeAllDevices.mockResolvedValue(['dev-2', 'dev-3']);
+
+            const result = await service.changePassword(reqUser, validDto, 'dev-1');
+
+            expect(result.revokedSessions).toBe(2);
+            expect(result.message).toContain('Đổi mật khẩu thành công');
+            const [userId, patch] = mockUserRepository.update.mock.calls[0];
+            expect(userId).toBe('user-1');
+            expect(await bcrypt.compare('NewPass@456', patch.password)).toBe(true);
+            expect(mockTokenManagerService.revokeAllDevices).toHaveBeenCalledWith('user-1', 'dev-1');
+            expect(mockRedisService.deleteSession).toHaveBeenCalledWith('user-1', 'dev-2');
+            expect(mockRedisService.deleteSession).toHaveBeenCalledWith('user-1', 'dev-3');
+            expect(mockRedisService.deleteSession).not.toHaveBeenCalledWith('user-1', 'dev-1');
+        });
+
+        it('should throw UnauthorizedException when the current password is wrong', async () => {
+            await expect(
+                service.changePassword(reqUser, { ...validDto, currentPassword: 'Wrong@123' }, 'dev-1'),
+            ).rejects.toThrow(UnauthorizedException);
+            expect(mockUserRepository.update).not.toHaveBeenCalled();
+            expect(mockTokenManagerService.revokeAllDevices).not.toHaveBeenCalled();
+        });
+
+        it('should throw BadRequestException when the new password equals the current one', async () => {
+            await expect(
+                service.changePassword(
+                    reqUser,
+                    { currentPassword: 'OldPass@123', newPassword: 'OldPass@123', confirmPassword: 'OldPass@123' },
+                    'dev-1',
+                ),
+            ).rejects.toThrow(BadRequestException);
+        });
+
+        it('should throw BadRequestException when confirmation does not match', async () => {
+            await expect(
+                service.changePassword(reqUser, { ...validDto, confirmPassword: 'Other@456' }, 'dev-1'),
+            ).rejects.toThrow('Mật khẩu xác nhận không khớp');
+        });
+
+        it('should throw NotFoundException when the user no longer exists', async () => {
+            mockUserRepository.findOne.mockResolvedValue(null);
+            await expect(service.changePassword(reqUser, validDto, 'dev-1')).rejects.toThrow(NotFoundException);
         });
     });
 
@@ -443,12 +594,22 @@ describe('AuthService', () => {
             };
             mockUserRepository.findOne.mockResolvedValue(mockUser);
 
-            const result = await service.refreshTokens('valid-token.secret', 'dev-1');
+            const result = await service.refreshTokens('valid-token.secret', 'dev-1', '1.2.3.4', 'Firefox');
 
             expect(mockTokenManagerService.rotateRefreshToken).toHaveBeenCalledWith('valid-token.secret', 'dev-1');
             expect(result).toHaveProperty('accessToken', 'new-jwt-token');
             expect(result).toHaveProperty('refreshToken', 'new-token-uuid.new-secret-key');
             expect(result.user.username).toBe('alice');
+            // Profile đầy đủ để FE không mất trạng thái 2FA sau silent refresh
+            expect(result.user).toHaveProperty('twoFactorEnabled', false);
+            expect(result.user).toHaveProperty('isEmailVerified', false);
+            // Gia hạn session theo TTL refresh token (30 ngày)
+            expect(mockRedisService.saveSession).toHaveBeenCalledWith(
+                'user-1',
+                'dev-1',
+                { ip: '1.2.3.4', userAgent: 'Firefox' },
+                2592000,
+            );
         });
 
         it('should throw UnauthorizedException if user does not exist or was deleted', async () => {

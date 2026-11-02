@@ -8,6 +8,15 @@ import {
     REFRESH_TOKEN_GRACE_PERIOD_SECONDS,
     REFRESH_TOKEN_TTL_SECONDS,
 } from './constants/auth-cookie.constants.js';
+import { getJwtSecret } from '../../common/config/jwt-secret.js';
+import { currentSecondInMs, deviceMinIssuedAtKey } from '../../common/auth/access-token-revocation.js';
+
+/** deviceId -> familyId: cho phép thu hồi đúng chuỗi refresh token của một thiết bị */
+const deviceFamilyKey = (userId: string, deviceId: string) => `auth:device_family:${userId}:${deviceId}`;
+/** Tập deviceId từng được cấp refresh token (độc lập với danh sách session hiển thị trên UI) */
+const userTokenDevicesKey = (userId: string) => `auth:user_token_devices:${userId}`;
+/** deviceId dùng chung khi không xác định được thiết bị: không được hủy chéo family của nhau */
+const SHARED_FALLBACK_DEVICE_ID = 'default-device';
 
 export interface TokenUserPayload {
     id: string;
@@ -87,13 +96,14 @@ export class TokenManagerService {
         const expiresAt = now + REFRESH_TOKEN_TTL_SECONDS * 1000;
 
         // 1. Ký Access Token ngắn hạn (15 phút) kèm JWT ID (jti) phục vụ blacklist khi logout
-        const jwtSecret = this.configService.get<string>('JWT_SECRET') || 'secretKeyChatApp123';
+        const jwtSecret = getJwtSecret(this.configService);
         const accessToken = await this.jwtService.signAsync(
             {
                 sub: user.id,
                 username: user.username,
                 role: user.role,
                 jti,
+                did: deviceId, // Device ID: phục vụ đăng xuất từ xa theo từng thiết bị
             },
             {
                 secret: jwtSecret,
@@ -125,6 +135,7 @@ export class TokenManagerService {
         await this.redisService.sadd(familyKey, tokenId);
         await this.redisService.expire(familyKey, REFRESH_TOKEN_TTL_SECONDS);
         await this.redisService.sadd(userSessionsKey, deviceId);
+        await this.bindFamilyToDevice(user.id, deviceId, familyId, Boolean(existingFamilyId));
 
         return {
             accessToken,
@@ -283,6 +294,67 @@ export class TokenManagerService {
         if (familyId) {
             await this.redisService.srem(`auth:family:${familyId}`, tokenId);
         }
+    }
+
+    /**
+     * Gắn Token Family với thiết bị. Khi thiết bị đăng nhập lại (family mới), family cũ của chính thiết bị đó
+     * bị hủy để không còn refresh token "mồ côi" sống tiếp 30 ngày ngoài tầm kiểm soát.
+     */
+    private async bindFamilyToDevice(
+        userId: string,
+        deviceId: string,
+        familyId: string,
+        isRotation: boolean,
+    ): Promise<void> {
+        const key = deviceFamilyKey(userId, deviceId);
+
+        if (!isRotation && deviceId !== SHARED_FALLBACK_DEVICE_ID) {
+            const previousFamilyId = await this.redisService.get(key);
+            if (previousFamilyId && previousFamilyId !== familyId) {
+                await this.revokeFamily(previousFamilyId);
+            }
+        }
+
+        await this.redisService.set(key, familyId, REFRESH_TOKEN_TTL_SECONDS);
+        await this.redisService.sadd(userTokenDevicesKey(userId), deviceId);
+        await this.redisService.expire(userTokenDevicesKey(userId), REFRESH_TOKEN_TTL_SECONDS);
+    }
+
+    /**
+     * Đăng xuất hoàn toàn một thiết bị (BR-27):
+     * - Hủy Token Family của thiết bị => không thể refresh nữa
+     * - Ghi mốc device_min_issued_at => Access Token (HTTP & WebSocket) đang dùng bị từ chối ngay
+     */
+    async revokeDevice(userId: string, deviceId: string): Promise<void> {
+        const key = deviceFamilyKey(userId, deviceId);
+        const familyId = await this.redisService.get(key);
+        if (familyId) {
+            await this.revokeFamily(familyId);
+        }
+
+        await this.redisService.del(key);
+        await this.redisService.srem(userTokenDevicesKey(userId), deviceId);
+        // TTL dư 60s so với Access Token: sau thời gian đó mọi token cũ của thiết bị đã tự hết hạn
+        await this.redisService.set(
+            deviceMinIssuedAtKey(userId, deviceId),
+            String(currentSecondInMs()),
+            ACCESS_TOKEN_TTL_SECONDS + 60,
+        );
+    }
+
+    /**
+     * Đăng xuất mọi thiết bị của user, tùy chọn giữ lại thiết bị hiện tại (dùng khi đổi / đặt lại mật khẩu).
+     * @returns danh sách deviceId đã bị thu hồi
+     */
+    async revokeAllDevices(userId: string, exceptDeviceId?: string): Promise<string[]> {
+        const deviceIds = await this.redisService.smembers(userTokenDevicesKey(userId));
+        const targets = deviceIds.filter((id) => id !== exceptDeviceId);
+
+        for (const deviceId of targets) {
+            await this.revokeDevice(userId, deviceId);
+        }
+
+        return targets;
     }
 
     /**
