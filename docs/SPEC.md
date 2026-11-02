@@ -601,6 +601,30 @@ Service nghiệp vụ chỉ phát domain event; `ChatGateway` lắng nghe và ch
 | `group.member_event` | ConversationsService | `groupMemberUpdated`, `groupMembershipChanged`; đưa thành viên bị xóa / rời khỏi room |
 | `friend.request_sent` / `_accepted` / `_rejected` / `_cancelled`, `friend.removed` | FriendsService | `friendRequestReceived` / `friendRequestAccepted` / `friendRequestRejected` / `friendRequestCancelled`, `friendRemoved` |
 | `auth.sessions_revoked` | AuthService | Ngắt socket của thiết bị bị thu hồi (`disconnectSockets`) |
+| `user.blocked` / `user.unblocked` | FriendsService | `userBlocked` / `userUnblocked` tới room cá nhân của cả hai người |
+
+## 15. Truy vết Business Rule → Test (Traceability)
+
+Unit test: `be/src/**/*.spec.ts`, `fe/src/**/*.spec.ts(x)`. E2E: `be/test/*.e2e-spec.ts` (MySQL + Redis thật).
+
+| Business Rule | Unit test | E2E |
+|---|---|---|
+| BR-01, BR-02, BR-21, BR-22, BR-23 (đăng ký, OTP, xác thực email) | `auth.service.spec`, `auth.schema.spec`, `otp-attempt-guard.spec` | `auth-lifecycle` |
+| BR-03, BR-04, BR-13 (bạn bè) | `friends.service.spec`, `friends.store.spec` | `milestone5-rich-messaging` |
+| BR-05 (không trùng chat 1-1) | `conversations.service.spec`, `direct-conversation-key.spec` | `conversation-access-pagination` |
+| BR-06 → BR-10, BR-12, BR-14 → BR-20 (hội thoại, nhóm, tin nhắn, unread) | `conversations.service.spec`, `chat.gateway.spec` | `chat.gateway`, `milestone5-rich-messaging` |
+| BR-08 (chỉ thành viên, socket room) | `conversations.service.spec`, `chat.gateway.spec` | `conversation-access-pagination`, `chat.gateway` |
+| BR-11, BR-27 (JWT, thu hồi phiên) | `access-token-revocation.spec`, `jwt.strategies.spec`, `chat.gateway.spec`, `auth.service.spec` | `session-revocation`, `auth-lifecycle` |
+| BR-24 (đặt lại mật khẩu) | `auth.service.spec` | `session-revocation` |
+| BR-25 (2FA, chống brute-force) | `auth.service.spec`, `otp-attempt-guard.spec`, `Security2FaTab.spec` | `two-factor-auth` |
+| BR-26 (rate limit) | cấu hình throttler `auth` (`app.module.ts`) | — (tắt trong e2e để chạy flow liên tiếp) |
+| BR-28, BR-38 (chặn) | `friends.service.spec`, `conversations.service.spec`, `ActiveChatCanvas.actions.spec`, `useSocket.spec` | `business-rules` |
+| BR-29 → BR-32 (quick emoji, search, mute, right panel) | `conversations.service.spec`, `is-emoji.validator.spec`, `conversation-dto-validation.spec` | — |
+| BR-33, BR-34, BR-35 (RTR, device binding, logout) | `token-manager.service.spec`, `auth.controller.spec`, `api.client.spec` | `auth-lifecycle` |
+| BR-36, BR-37 (tin hệ thống, eviction) | `conversations.service.spec`, `chat.gateway.spec` | `business-rules` |
+| BR-39, BR-40 (đổi mật khẩu, Settings Hub) | `auth.service.spec`, `settings.schema.spec`, `ChangePasswordCard.spec`, `ProfileTab.spec`, `SettingsPage.spec` | `session-revocation` |
+| BR-41, BR-42 (ghim, xóa đoạn chat) | `conversation-actions.service.spec`, `conversation.store.spec` | `business-rules` |
+| BR-M5-01 → BR-M5-10 (rich messaging, upload) | `conversations.service.spec`, `media.service.spec`, `MessageBubble.spec` | `milestone5-rich-messaging`, `business-rules` |
 
 ## Self-review trước khi xin approve (Gate 1) — tự tick
 
