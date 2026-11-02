@@ -124,4 +124,46 @@ describe('ChatHeader Component Tests', () => {
     const infoBtn = screen.getByRole('button', { name: 'Thông tin hội thoại' })
     expect(infoBtn).toHaveClass('bg-brand/10')
   })
+
+  it('handles mute button toggle and renders BellOff when isMuted is true', () => {
+    const onToggleMute = vi.fn()
+
+    const { rerender } = render(
+      <ChatHeader
+        conversation={directConv}
+        isMuted={false}
+        onToggleMute={onToggleMute}
+      />
+    )
+
+    const muteBtn = screen.getByTestId('chat-header-mute-btn')
+    expect(muteBtn).toHaveAttribute('aria-label', 'Tắt thông báo')
+
+    fireEvent.click(muteBtn)
+    expect(onToggleMute).toHaveBeenCalledTimes(1)
+
+    rerender(
+      <ChatHeader
+        conversation={directConv}
+        isMuted={true}
+        onToggleMute={onToggleMute}
+      />
+    )
+
+    const mutedBtn = screen.getByTestId('chat-header-mute-btn')
+    expect(mutedBtn).toHaveAttribute('aria-label', 'Bật thông báo')
+    expect(mutedBtn).toHaveClass('text-coral')
+  })
+
+  it('applies active styling to search button when isSearchOpen is true', () => {
+    render(
+      <ChatHeader
+        conversation={directConv}
+        isSearchOpen={true}
+      />
+    )
+
+    const searchBtn = screen.getByTestId('chat-header-search-btn')
+    expect(searchBtn).toHaveClass('bg-brand/10')
+  })
 })

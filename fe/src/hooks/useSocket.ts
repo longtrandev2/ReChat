@@ -158,6 +158,46 @@ export function useSocketInit() {
         },
         isSelf
       )
+
+      // 3. Phát âm thanh thông báo nếu hội thoại không bị tắt tiếng (FR-32, BR-31)
+      if (!isSelf && typeof window !== 'undefined') {
+        const conversation = useConversationStore
+          .getState()
+          .conversations.find((c) => c.id === payload.conversationId)
+
+        let isMuted = conversation?.isMuted
+        if (typeof isMuted !== 'boolean') {
+          try {
+            isMuted = localStorage.getItem(`rechat_muted_${payload.conversationId}`) === 'true'
+          } catch {
+            isMuted = false
+          }
+        }
+
+        if (!isMuted) {
+          try {
+            const AudioContextClass =
+              window.AudioContext ||
+              (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+            if (AudioContextClass) {
+              const audioCtx = new AudioContextClass()
+              const osc = audioCtx.createOscillator()
+              const gain = audioCtx.createGain()
+              osc.connect(gain)
+              gain.connect(audioCtx.destination)
+              osc.type = 'sine'
+              osc.frequency.setValueAtTime(587.33, audioCtx.currentTime)
+              osc.frequency.setValueAtTime(880, audioCtx.currentTime + 0.08)
+              gain.gain.setValueAtTime(0.15, audioCtx.currentTime)
+              gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.35)
+              osc.start()
+              osc.stop(audioCtx.currentTime + 0.35)
+            }
+          } catch {
+            // ignore audio play restriction if not yet interacted
+          }
+        }
+      }
     }
 
     const handleUserTyping = (payload: UserTypingPayload) => {

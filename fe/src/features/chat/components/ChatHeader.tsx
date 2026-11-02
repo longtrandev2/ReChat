@@ -1,4 +1,4 @@
-import { Search, MoreVertical, Users, ArrowLeft } from 'lucide-react'
+import { Search, MoreVertical, Users, ArrowLeft, Bell, BellOff } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage, PresenceDot } from '@/components/ui/avatar'
 import type { Conversation } from '@/features/conversations/types/conversation.types'
 
@@ -7,7 +7,10 @@ interface ChatHeaderProps {
   isOnline?: boolean
   typingUserNames?: string[]
   isInfoOpen?: boolean
+  isSearchOpen?: boolean
+  isMuted?: boolean
   onSearchClick?: () => void
+  onToggleMute?: () => void
   onInfoClick?: () => void
   onBackClick?: () => void
 }
@@ -24,7 +27,10 @@ export function ChatHeader({
   isOnline = false,
   typingUserNames = [],
   isInfoOpen = false,
+  isSearchOpen = false,
+  isMuted = false,
   onSearchClick,
+  onToggleMute,
   onInfoClick,
   onBackClick,
 }: ChatHeaderProps) {
@@ -144,10 +150,31 @@ export function ChatHeader({
           aria-label="Tìm kiếm trong cuộc trò chuyện"
           title="Tìm kiếm tin nhắn"
           onClick={onSearchClick}
-          className="p-2 rounded-xl hover:bg-surface-hover dark:hover:bg-surface-dark-secondary hover:text-ink-primary dark:hover:text-ink-primary-dark transition-all active:scale-95"
+          className={`p-2 rounded-xl transition-all active:scale-95 ${
+            isSearchOpen
+              ? 'bg-brand/10 text-brand dark:bg-white/10 dark:text-brand-accent'
+              : 'hover:bg-surface-hover dark:hover:bg-surface-dark-secondary hover:text-ink-primary dark:hover:text-ink-primary-dark'
+          }`}
+          data-testid="chat-header-search-btn"
         >
           <Search className="w-5 h-5" />
         </button>
+
+        <button
+          type="button"
+          aria-label={isMuted ? 'Bật thông báo' : 'Tắt thông báo'}
+          title={isMuted ? 'Bật thông báo' : 'Tắt thông báo'}
+          onClick={onToggleMute}
+          className={`p-2 rounded-xl transition-all active:scale-95 ${
+            isMuted
+              ? 'text-coral hover:bg-coral/10'
+              : 'hover:bg-surface-hover dark:hover:bg-surface-dark-secondary hover:text-ink-primary dark:hover:text-ink-primary-dark'
+          }`}
+          data-testid="chat-header-mute-btn"
+        >
+          {isMuted ? <BellOff className="w-5 h-5" /> : <Bell className="w-5 h-5" />}
+        </button>
+
         <button
           type="button"
           aria-label="Thông tin hội thoại"
@@ -158,6 +185,7 @@ export function ChatHeader({
               ? 'bg-brand/10 text-brand dark:bg-white/10 dark:text-brand-accent'
               : 'hover:bg-surface-hover dark:hover:bg-surface-dark-secondary hover:text-ink-primary dark:hover:text-ink-primary-dark'
           }`}
+          data-testid="chat-header-info-btn"
         >
           <MoreVertical className="w-5 h-5" />
         </button>

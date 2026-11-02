@@ -144,12 +144,23 @@ export function ChatDetailDrawer({
 
   // Mute notification state
   const [isMuted, setIsMuted] = useState<boolean>(() => {
+    if (typeof conversation.isMuted === 'boolean') {
+      return conversation.isMuted
+    }
     try {
       return localStorage.getItem(`rechat_muted_${conversation.id}`) === 'true'
     } catch {
       return false
     }
   })
+  const [prevMutedProp, setPrevMutedProp] = useState(conversation.isMuted)
+
+  if (conversation.isMuted !== prevMutedProp) {
+    setPrevMutedProp(conversation.isMuted)
+    if (typeof conversation.isMuted === 'boolean') {
+      setIsMuted(conversation.isMuted)
+    }
+  }
 
   const isGroup = conversation.type === 'GROUP'
   const members = useMemo(() => conversation.members || [], [conversation.members])
@@ -217,7 +228,7 @@ export function ChatDetailDrawer({
     .join('')
     .toUpperCase() || 'U'
 
-  const handleToggleMute = () => {
+  const handleToggleMute = async () => {
     const next = !isMuted
     setIsMuted(next)
     try {
@@ -225,7 +236,14 @@ export function ChatDetailDrawer({
     } catch {
       // ignore
     }
-    toast.success(next ? 'Đã tắt thông báo cuộc trò chuyện' : 'Đã bật lại thông báo')
+    try {
+      await conversationApi.toggleMute(conversation.id, next)
+      useConversationStore.getState().updateConversation(conversation.id, { isMuted: next })
+      toast.success(next ? 'Đã tắt thông báo cuộc trò chuyện' : 'Đã bật lại thông báo')
+    } catch {
+      setIsMuted(!next)
+      toast.error('Không thể cập nhật trạng thái thông báo')
+    }
   }
 
   const handleDownloadFile = async (e: React.MouseEvent, url: string, fileName: string) => {
@@ -619,6 +637,28 @@ export function ChatDetailDrawer({
                     </p>
                     <p className="text-[11px] text-ink-muted">
                       {pinnedMessages.length} tin nhắn đã ghim
+                    </p>
+                  </div>
+                </div>
+              </button>
+
+              {/* Tìm kiếm trong cuộc trò chuyện (Messenger style) */}
+              <button
+                type="button"
+                onClick={onSearchClick}
+                className="w-full flex items-center justify-between p-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer text-left"
+                data-testid="search-in-conversation-accordion-button"
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-brand/10 dark:bg-brand/20 text-brand flex items-center justify-center shrink-0">
+                    <Search className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-ink-primary dark:text-white">
+                      Tìm kiếm trong cuộc trò chuyện
+                    </p>
+                    <p className="text-[11px] text-ink-muted">
+                      Tra cứu tin nhắn theo từ khóa
                     </p>
                   </div>
                 </div>

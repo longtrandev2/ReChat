@@ -358,6 +358,41 @@ describe('MessageBubble Component Tests', () => {
     expect(screen.queryByLabelText('Đã gửi')).not.toBeInTheDocument()
     expect(screen.queryByTitle('Tùy chọn khác')).not.toBeInTheDocument()
   })
+
+  it('highlights matching search keyword in message content with mark tag', () => {
+    render(
+      <MessageBubble
+        message={baseMessage}
+        isOutgoing={true}
+        searchKeyword="chào"
+      />
+    )
+
+    const highlight = screen.getByTestId('search-highlight')
+    expect(highlight).toBeInTheDocument()
+    expect(highlight).toHaveTextContent('chào')
+    expect(highlight.tagName.toLowerCase()).toBe('mark')
+  })
+
+  it('renders normal text without mark tag when searchKeyword is empty or does not match', () => {
+    const { rerender } = render(
+      <MessageBubble
+        message={baseMessage}
+        isOutgoing={true}
+        searchKeyword=""
+      />
+    )
+    expect(screen.queryByTestId('search-highlight')).not.toBeInTheDocument()
+
+    rerender(
+      <MessageBubble
+        message={baseMessage}
+        isOutgoing={true}
+        searchKeyword="không khớp"
+      />
+    )
+    expect(screen.queryByTestId('search-highlight')).not.toBeInTheDocument()
+  })
 })
 
 

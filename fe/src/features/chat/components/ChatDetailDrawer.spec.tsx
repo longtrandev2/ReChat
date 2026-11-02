@@ -22,6 +22,7 @@ vi.mock('@/features/conversations/services/conversation.api', () => ({
     kickMember: vi.fn(),
     leaveGroup: vi.fn(),
     blockUser: vi.fn(),
+    toggleMute: vi.fn().mockResolvedValue({ conversationId: 'conv-direct-1', isMuted: true }),
     getPinnedMessages: vi.fn().mockResolvedValue([]),
     getConversationById: vi.fn(),
   },
@@ -631,6 +632,64 @@ describe('ChatDetailDrawer Component Tests', () => {
       expect(onConversationUpdated).toHaveBeenCalledWith({
         avatarUrl: 'https://res.cloudinary.com/test/image/upload/new_group_avatar.png',
       })
+    })
+  })
+
+  it('triggers onSearchClick when clicking the quick action search button', () => {
+    const onSearchClick = vi.fn()
+
+    render(
+      <MemoryRouter>
+        <ChatDetailDrawer
+          isOpen={true}
+          onClose={vi.fn()}
+          conversation={directConv}
+          onSearchClick={onSearchClick}
+        />
+      </MemoryRouter>
+    )
+
+    const searchBtn = screen.getByRole('button', { name: 'Tìm kiếm tin nhắn' })
+    fireEvent.click(searchBtn)
+    expect(onSearchClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('triggers onSearchClick when clicking search in conversation in accordion', () => {
+    const onSearchClick = vi.fn()
+
+    render(
+      <MemoryRouter>
+        <ChatDetailDrawer
+          isOpen={true}
+          onClose={vi.fn()}
+          conversation={directConv}
+          onSearchClick={onSearchClick}
+        />
+      </MemoryRouter>
+    )
+
+    // chat_info mở mặc định
+    const searchAccordionBtn = screen.getByTestId('search-in-conversation-accordion-button')
+    fireEvent.click(searchAccordionBtn)
+    expect(onSearchClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('calls conversationApi.toggleMute when clicking the quick action mute button', async () => {
+    render(
+      <MemoryRouter>
+        <ChatDetailDrawer
+          isOpen={true}
+          onClose={vi.fn()}
+          conversation={directConv}
+        />
+      </MemoryRouter>
+    )
+
+    const muteBtn = screen.getByRole('button', { name: 'Tắt thông báo' })
+    fireEvent.click(muteBtn)
+
+    await waitFor(() => {
+      expect(conversationApi.toggleMute).toHaveBeenCalledWith(directConv.id, true)
     })
   })
 })

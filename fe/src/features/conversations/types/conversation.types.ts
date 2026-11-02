@@ -34,6 +34,7 @@ export interface ConversationMember {
   joinedAt?: string
   user: ConversationMemberUser
   lastReadMessageId?: string | null
+  isMuted?: boolean
 }
 
 export interface Conversation {
@@ -43,6 +44,7 @@ export interface Conversation {
   avatarUrl: string | null
   quickEmoji?: string
   unreadCount: number
+  isMuted?: boolean
   lastMessage: LastMessage | null
   lastMessageAt: string
   createdAt: string

@@ -243,4 +243,34 @@ describe('conversationApi Unit Tests (AAA Methodology)', () => {
     expect(apiClient.delete).toHaveBeenCalledWith('/conversations/conv-123/leave')
     expect(result).toEqual(mockRes)
   })
+
+  it('searchMessages triggers GET /conversations/:id/messages/search with query param', async () => {
+    // Arrange
+    const mockMessages = [{ id: 'msg-1', content: 'test message' }]
+    vi.mocked(apiClient.get).mockResolvedValueOnce({ data: mockMessages })
+
+    // Act
+    const result = await conversationApi.searchMessages('conv-123', 'test')
+
+    // Assert
+    expect(apiClient.get).toHaveBeenCalledWith('/conversations/conv-123/messages/search', {
+      params: { q: 'test' },
+    })
+    expect(result).toEqual(mockMessages)
+  })
+
+  it('toggleMute triggers PATCH /conversations/:id/mute with isMuted', async () => {
+    // Arrange
+    const mockRes = { conversationId: 'conv-123', isMuted: true }
+    vi.mocked(apiClient.patch).mockResolvedValueOnce({ data: mockRes })
+
+    // Act
+    const result = await conversationApi.toggleMute('conv-123', true)
+
+    // Assert
+    expect(apiClient.patch).toHaveBeenCalledWith('/conversations/conv-123/mute', {
+      isMuted: true,
+    })
+    expect(result).toEqual(mockRes)
+  })
 })

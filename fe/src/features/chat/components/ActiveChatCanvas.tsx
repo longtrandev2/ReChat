@@ -2,6 +2,7 @@ import { useEffect, useCallback, useMemo, useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { UploadCloud } from 'lucide-react'
 import { ChatHeader } from './ChatHeader'
+import { InChatSearchBar } from './InChatSearchBar'
 import { PinnedMessageBar } from './PinnedMessageBar'
 import { MessageFeed } from './MessageFeed'
 import { MessageComposer, type MessageComposerHandle } from './MessageComposer'
@@ -48,10 +49,16 @@ export function ActiveChatCanvas() {
   const [pinnedMessages, setPinnedMessages] = useState<Message[]>([])
   const [prevConversationId, setPrevConversationId] = useState(conversationId)
 
+  // Trạng thái mở thanh tìm kiếm tin nhắn trong hội thoại & từ khóa tìm kiếm
+  const [isSearchOpen, setIsSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+
   // Điều chỉnh state khi conversationId thay đổi chuẩn React (tránh setState trong effect)
   if (prevConversationId !== conversationId) {
     setPrevConversationId(conversationId)
     setPinnedMessages([])
+    setIsSearchOpen(false)
+    setSearchQuery('')
   }
 
   // Thông tin đối phương trong cuộc trò chuyện trực tiếp (Direct)
@@ -484,6 +491,29 @@ export function ActiveChatCanvas() {
     [conversationId, handleMessageUnpinned]
   )
 
+  // Bật/tắt thanh tìm kiếm tin nhắn trong cuộc trò chuyện
+  const handleToggleSearch = useCallback(() => {
+    setIsSearchOpen((prev) => {
+      if (prev) {
+        setSearchQuery('')
+      }
+      return !prev
+    })
+  }, [])
+
+  // Bật/tắt thông báo cuộc trò chuyện qua API
+  const handleToggleMute = useCallback(async () => {
+    if (!conversationId || !conversation) return
+    const next = !conversation.isMuted
+    try {
+      await conversationApi.toggleMute(conversationId, next)
+      useConversationStore.getState().updateConversation(conversationId, { isMuted: next })
+      toast.success(next ? 'Đã tắt thông báo cuộc trò chuyện' : 'Đã bật lại thông báo')
+    } catch {
+      toast.error('Không thể cập nhật trạng thái thông báo')
+    }
+  }, [conversationId, conversation])
+
   // Cuộn tới tin nhắn được reply với hiệu ứng Flash Highlight và tự động tải thêm nếu chưa có trong DOM
   const handleScrollToReply = useCallback(
     async (replyToId: string) => {
@@ -606,8 +636,25 @@ export function ActiveChatCanvas() {
         isOnline={isPartnerOnline}
         typingUserNames={typingNames}
         isInfoOpen={isDetailOpen}
+        isSearchOpen={isSearchOpen}
+        isMuted={conversation.isMuted}
+        onSearchClick={handleToggleSearch}
+        onToggleMute={handleToggleMute}
         onInfoClick={() => setIsDetailOpen((prev) => !prev)}
       />
+
+      {/* Thanh tìm kiếm tin nhắn trong hội thoại */}
+      {isSearchOpen && (
+        <InChatSearchBar
+          conversationId={conversation.id}
+          onJumpToMessage={handleScrollToReply}
+          onQueryChange={setSearchQuery}
+          onClose={() => {
+            setIsSearchOpen(false)
+            setSearchQuery('')
+          }}
+        />
+      )}
 
       {/* Thanh tin nhắn đã ghim chuẩn Telegram/Messenger */}
       <PinnedMessageBar
@@ -629,6 +676,7 @@ export function ActiveChatCanvas() {
             isLoadingOlder={isLoadingMessages}
             lastReadMessageId={lastReadId}
             typingUserNames={typingNames}
+            searchKeyword={isSearchOpen ? searchQuery : ''}
             onLoadMore={handleLoadMore}
             onReact={handleReact}
             onReply={(msg) => useMessagesStore.getState().setReplyingMessage(msg)}
@@ -662,6 +710,7 @@ export function ActiveChatCanvas() {
           onUnpinMessage={handleUnpinMessage}
           onJumpToMessage={handleScrollToReply}
           onImageClick={(url, alt) => setLightboxImage({ url, alt })}
+          onSearchClick={() => setIsSearchOpen(true)}
         />
       </div>
 

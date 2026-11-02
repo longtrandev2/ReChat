@@ -148,4 +148,26 @@ export const conversationApi = {
     const res = await apiClient.delete<{ message: string }>(`/conversations/${conversationId}/leave`)
     return res.data
   },
+
+  /**
+   * GET /api/v1/conversations/:id/messages/search?q={keyword}
+   * Tìm kiếm tin nhắn trong cuộc hội thoại theo từ khóa (FR-31, BR-30)
+   */
+  searchMessages: async (conversationId: string, query: string): Promise<Message[]> => {
+    const res = await apiClient.get<Message[]>(`/conversations/${conversationId}/messages/search`, {
+      params: { q: query },
+    })
+    return res.data
+  },
+
+  /**
+   * PATCH /api/v1/conversations/:id/mute
+   * Tắt/bật thông báo cuộc hội thoại (FR-32, BR-31)
+   */
+  toggleMute: async (conversationId: string, isMuted: boolean): Promise<{ conversationId: string; isMuted: boolean }> => {
+    const res = await apiClient.patch<{ conversationId: string; isMuted: boolean }>(`/conversations/${conversationId}/mute`, {
+      isMuted,
+    })
+    return res.data
+  },
 }

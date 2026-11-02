@@ -13,6 +13,7 @@ interface MessageFeedProps {
   hasMore?: boolean
   lastReadMessageId?: string
   typingUserNames?: string[]
+  searchKeyword?: string
   onLoadMore?: () => void
   onReact?: (message: Message, emoji: string) => void
   onReply?: (message: Message) => void
@@ -39,6 +40,7 @@ export function MessageFeed({
   hasMore = false,
   lastReadMessageId,
   typingUserNames = [],
+  searchKeyword,
   onLoadMore,
   onReact,
   onReply,
@@ -199,6 +201,7 @@ export function MessageFeed({
                 showSenderName={showSenderName}
                 showAvatar={showAvatar}
                 isRead={isRead}
+                searchKeyword={searchKeyword}
                 onReact={onReact}
                 onReply={onReply}
                 onEdit={onEdit}

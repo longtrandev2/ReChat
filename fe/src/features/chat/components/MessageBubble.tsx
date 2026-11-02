@@ -145,6 +145,37 @@ import { Button } from '@/components/ui/button'
 import type { Message } from '../types/message.types'
 import { cn, formatFileSize } from '@/lib/utils'
 
+/**
+ * Hàm phân tách và bôi sáng từ khóa tìm kiếm (Telegram Search Highlight)
+ * - Tạm thời xuất hiện khi thanh tìm kiếm có query
+ * - Giữ nguyên chữ hoa/thường nguyên bản của tin nhắn
+ */
+function renderHighlightedText(text: string, searchKeyword?: string) {
+  const trimmed = searchKeyword?.trim()
+  if (!trimmed) return text
+
+  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const regex = new RegExp(`(${escaped})`, 'gi')
+  const parts = text.split(regex)
+
+  if (parts.length <= 1) return text
+
+  return parts.map((part, index) => {
+    if (part.toLowerCase() === trimmed.toLowerCase()) {
+      return (
+        <mark
+          key={index}
+          className="bg-amber-300 dark:bg-amber-400 text-ink-primary font-semibold px-0.5 rounded-xs"
+          data-testid="search-highlight"
+        >
+          {part}
+        </mark>
+      )
+    }
+    return part
+  })
+}
+
 interface MessageBubbleProps {
   message: Message
   isOutgoing: boolean
@@ -152,6 +183,7 @@ interface MessageBubbleProps {
   showSenderName?: boolean
   showAvatar?: boolean
   isRead?: boolean
+  searchKeyword?: string
   onReply?: (message: Message) => void
   onReact?: (message: Message, emoji: string) => void
   onEdit?: (message: Message) => void
@@ -181,6 +213,7 @@ export function MessageBubble({
   showSenderName = false,
   showAvatar = true,
   isRead = false,
+  searchKeyword,
   onReply,
   onReact,
   onEdit,
@@ -616,7 +649,7 @@ export function MessageBubble({
                               className="text-xs font-semibold truncate text-ink-primary dark:text-ink-primary-dark group-hover/file:text-brand transition-colors"
                               title={message.content}
                             >
-                              {message.content || 'Tệp đính kèm'}
+                              {renderHighlightedText(message.content || 'Tệp đính kèm', searchKeyword)}
                             </p>
                             <p className="text-[11px] text-ink-muted select-none mt-0.5 flex items-center gap-1.5">
                               <span>{getFileDetails(message.content).extLabel}</span>
@@ -658,7 +691,7 @@ export function MessageBubble({
                         (message.type !== 'IMAGE' || hasImageCaption) &&
                         message.content && (
                           <div className="flex-1 min-w-[40px] text-sm leading-relaxed whitespace-pre-wrap break-words">
-                            {message.content}
+                            {renderHighlightedText(message.content, searchKeyword)}
                           </div>
                         )}
 
