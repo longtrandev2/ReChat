@@ -491,7 +491,7 @@ describe('AuthService', () => {
 
             const result = await service.disable2fa(reqUser, { password: 'CorrectPassword@123' });
             expect(result.message).toContain('Đã tắt tính năng');
-            expect(mockUserRepository.findOne).toHaveBeenCalledWith({ where: { id: 'user-1' } });
+            expect(mockUserRepository.findOne).toHaveBeenCalledWith({ where: { id: 'user-1' }, select: { id: true, password: true } });
             expect(mockUserRepository.update).toHaveBeenCalledWith('user-1', { twoFactorEnabled: false });
         });
 
