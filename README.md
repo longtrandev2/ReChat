@@ -160,7 +160,7 @@ Không commit `.env` — chỉ commit `.env.example`.
 <!-- QUALITY-NUMBERS:START -->
 | Chỉ số (02/11/2026) | Backend | Frontend |
 |---|---|---|
-| Unit / component test | 529 test · 30 file | 466 test · 60 file |
+| Unit / component test | 530 test · 30 file | 484 test · 62 file |
 | E2E (MySQL + Redis thật) | 34 test · 8 file | — |
 | Coverage statements / branches | 89.8% / 80.3% | 74.7% / 66.8% |
 | Lint · type-check · build | sạch | sạch |

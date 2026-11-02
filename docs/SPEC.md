@@ -506,6 +506,7 @@ erDiagram
   - **Async Job Queue**: BullMQ kết nối Redis worker xử lý gửi email ngầm (Nodemailer)
   - **Real-time Engine**: Socket.io + `@nestjs/websockets`
   - **Client**: React 19 + Vite 8 + TypeScript + Zustand + Tailwind CSS + Socket.io-client.
+- **Responsive**: Desktop (≥ `md`) hiển thị Navigation Rail + Inbox + khung chat; màn hình nhỏ (< `md`, ví dụ 390px) hiển thị một pane: `/chat` là inbox, `/chat/:id` là khung chat toàn màn hình có nút quay lại, thanh điều hướng chuyển xuống đáy.
 
 ---
 
