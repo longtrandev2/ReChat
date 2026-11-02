@@ -2,6 +2,7 @@ import { useEffect, useCallback, useMemo, useState, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { UploadCloud } from 'lucide-react'
 import { ChatHeader } from './ChatHeader'
+import { PinnedMessageBar } from './PinnedMessageBar'
 import { MessageFeed } from './MessageFeed'
 import { MessageComposer, type MessageComposerHandle } from './MessageComposer'
 import { ImageLightboxModal } from './ImageLightboxModal'
@@ -14,6 +15,7 @@ import { socketClient } from '@/services/socket.client'
 import { conversationApi } from '@/features/conversations/services/conversation.api'
 import { toast } from 'sonner'
 import type { ConversationMemberUser } from '@/features/conversations/types/conversation.types'
+import type { Message, MessageSender } from '../types/message.types'
 
 /**
  * ActiveChatCanvas: Vùng hiển thị cuộc hội thoại đang hoạt động chuẩn Telegram Web
@@ -36,8 +38,13 @@ export function ActiveChatCanvas() {
     handleMessageRecalled,
     handleMessageEdited,
     handleReactionUpdated,
+    handleMessagePinned,
+    handleMessageUnpinned,
   } = useMessagesStore()
   const { isUserOnline } = useSocket()
+
+  // Danh sách tin nhắn đã ghim trong cuộc hội thoại
+  const [pinnedMessages, setPinnedMessages] = useState<Message[]>([])
 
   // Thông tin đối phương trong cuộc trò chuyện trực tiếp (Direct)
   const [partner, setPartner] = useState<ConversationMemberUser | null>(null)
@@ -147,6 +154,22 @@ export function ActiveChatCanvas() {
         // Fallback: nếu lỗi API detail thì vẫn giữ state bình thường
       })
 
+    conversationApi
+      .getPinnedMessages(conversationId)
+      .then((pins) => {
+        if (isMounted && Array.isArray(pins)) {
+          setPinnedMessages((prev) => {
+            if (prev.length === 0) return pins
+            const prevIds = new Set(prev.map((m) => m.id))
+            const remaining = pins.filter((p) => !prevIds.has(p.id))
+            return [...prev, ...remaining]
+          })
+        }
+      })
+      .catch(() => {
+        // Fallback: nếu lỗi API pinned messages
+      })
+
     return () => {
       isMounted = false
     }
@@ -209,10 +232,65 @@ export function ActiveChatCanvas() {
       }
     }
 
+    const onMessagePinned = (payload: {
+      conversationId: string
+      messageId: string
+      message?: Message
+      pinnedBy?: MessageSender
+    }) => {
+      if (payload.conversationId === conversationId) {
+        handleMessagePinned(
+          payload.conversationId,
+          payload.messageId,
+          payload.pinnedBy,
+          new Date().toISOString()
+        )
+        setPinnedMessages((prev) => {
+          if (payload.message) {
+            const exists = prev.some((m) => m.id === payload.messageId)
+            if (exists) {
+              return prev.map((m) =>
+                m.id === payload.messageId ? { ...m, ...payload.message, isPinned: true } : m
+              )
+            }
+            return [{ ...payload.message, isPinned: true }, ...prev]
+          }
+          const existingInFeed = (
+            useMessagesStore.getState().messagesByConversation[conversationId] || []
+          ).find((m) => m.id === payload.messageId)
+          if (existingInFeed) {
+            const exists = prev.some((m) => m.id === payload.messageId)
+            if (exists) {
+              return prev.map((m) =>
+                m.id === payload.messageId
+                  ? { ...m, isPinned: true, pinnedBy: payload.pinnedBy }
+                  : m
+              )
+            }
+            return [{ ...existingInFeed, isPinned: true, pinnedBy: payload.pinnedBy }, ...prev]
+          }
+          conversationApi
+            .getPinnedMessages(conversationId)
+            .then((pins) => setPinnedMessages(pins || []))
+            .catch(() => {})
+          return prev
+        })
+      }
+    }
+
+    const onMessageUnpinned = (payload: { conversationId: string; messageId: string }) => {
+      if (payload.conversationId === conversationId) {
+        handleMessageUnpinned(payload.conversationId, payload.messageId)
+        setPinnedMessages((prev) => prev.filter((m) => m.id !== payload.messageId))
+      }
+    }
+
     if (socket && typeof socket.on === 'function') {
       socket.on('messageRecalled', onRecalled)
       socket.on('messageEdited', onEdited)
       socket.on('messageReactionUpdated', onReactionUpdated)
+      socket.on('messagePinned', onMessagePinned)
+      socket.on('messageUnpinned', onMessageUnpinned)
     }
 
     return () => {
@@ -221,6 +299,8 @@ export function ActiveChatCanvas() {
           socket.off('messageRecalled', onRecalled)
           socket.off('messageEdited', onEdited)
           socket.off('messageReactionUpdated', onReactionUpdated)
+          socket.off('messagePinned', onMessagePinned)
+          socket.off('messageUnpinned', onMessageUnpinned)
         }
         if (socket.connected && typeof socket.emit === 'function') {
           socket.emit('leaveConversation', { conversationId })
@@ -234,6 +314,8 @@ export function ActiveChatCanvas() {
     handleMessageRecalled,
     handleMessageEdited,
     handleReactionUpdated,
+    handleMessagePinned,
+    handleMessageUnpinned,
     user?.id,
   ])
 
@@ -306,6 +388,48 @@ export function ActiveChatCanvas() {
       }
     },
     [conversationId]
+  )
+
+  // Ghim tin nhắn qua API
+  const handlePinMessage = useCallback(
+    async (message: Message) => {
+      if (!conversationId) return
+      try {
+        await conversationApi.pinMessage(conversationId, message.id)
+        handleMessagePinned(conversationId, message.id, {
+          id: user?.id || '',
+          username: user?.username || '',
+          displayName: user?.displayName || '',
+          avatarUrl: user?.avatarUrl || null,
+        })
+        setPinnedMessages((prev) => {
+          if (prev.some((m) => m.id === message.id)) return prev
+          return [{ ...message, isPinned: true }, ...prev]
+        })
+        toast.success('Đã ghim tin nhắn')
+      } catch (err: unknown) {
+        const error = err as { response?: { data?: { message?: string } } }
+        toast.error(error.response?.data?.message || 'Không thể ghim tin nhắn')
+      }
+    },
+    [conversationId, handleMessagePinned, user]
+  )
+
+  // Bỏ ghim tin nhắn qua API
+  const handleUnpinMessage = useCallback(
+    async (message: Message) => {
+      if (!conversationId) return
+      try {
+        await conversationApi.unpinMessage(conversationId, message.id)
+        handleMessageUnpinned(conversationId, message.id)
+        setPinnedMessages((prev) => prev.filter((m) => m.id !== message.id))
+        toast.success('Đã bỏ ghim tin nhắn')
+      } catch (err: unknown) {
+        const error = err as { response?: { data?: { message?: string } } }
+        toast.error(error.response?.data?.message || 'Không thể bỏ ghim tin nhắn')
+      }
+    },
+    [conversationId, handleMessageUnpinned]
   )
 
   // Cuộn tới tin nhắn được reply với hiệu ứng Flash Highlight và tự động tải thêm nếu chưa có trong DOM
@@ -433,6 +557,14 @@ export function ActiveChatCanvas() {
         onInfoClick={() => setIsDetailOpen((prev) => !prev)}
       />
 
+      {/* Thanh tin nhắn đã ghim chuẩn Telegram/Messenger */}
+      <PinnedMessageBar
+        pinnedMessages={pinnedMessages}
+        onJumpToMessage={handleScrollToReply}
+        onUnpin={handleUnpinMessage}
+        onOpenPinnedList={() => setIsDetailOpen(true)}
+      />
+
       {/* Vùng nội dung chính: Cột luồng chat và Bảng thông tin chi tiết bên phải */}
       <div className="flex-1 flex overflow-hidden relative">
         {/* Cột luồng chat mở rộng căn giữa thoải mái trên desktop */}
@@ -452,6 +584,8 @@ export function ActiveChatCanvas() {
             onEdit={(msg) => useMessagesStore.getState().setEditingMessage({ id: msg.id, content: msg.content })}
             onScrollToReply={handleScrollToReply}
             onImageClick={(url, alt) => setLightboxImage({ url, alt })}
+            onPin={handlePinMessage}
+            onUnpin={handleUnpinMessage}
           />
 
           <MessageComposer

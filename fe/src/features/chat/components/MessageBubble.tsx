@@ -16,6 +16,8 @@ import {
   FileCode,
   FileAudio,
   File,
+  Pin,
+  PinOff,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
@@ -156,6 +158,8 @@ interface MessageBubbleProps {
   onRecall?: (message: Message) => void
   onScrollToReply?: (replyToId: string) => void
   onImageClick?: (imageUrl: string, altText?: string) => void
+  onPin?: (message: Message) => void
+  onUnpin?: (message: Message) => void
 }
 
 const QUICK_EMOJIS = ['❤️', '👍', '😂', '🔥', '😮', '😢']
@@ -183,6 +187,8 @@ export function MessageBubble({
   onRecall,
   onScrollToReply,
   onImageClick,
+  onPin,
+  onUnpin,
 }: MessageBubbleProps) {
   const [isRecallDialogOpen, setIsRecallDialogOpen] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
@@ -339,6 +345,30 @@ export function MessageBubble({
                 <Copy className="w-3.5 h-3.5" />
                 <span>Sao chép</span>
               </DropdownMenu.Item>
+
+              {message.isPinned ? (
+                onUnpin && (
+                  <DropdownMenu.Item
+                    onClick={() => onUnpin(message)}
+                    className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 dark:hover:bg-white/10 outline-none transition-colors"
+                    data-testid={`unpin-message-${message.id}`}
+                  >
+                    <PinOff className="w-3.5 h-3.5 text-amber-500" />
+                    <span>Bỏ ghim tin nhắn</span>
+                  </DropdownMenu.Item>
+                )
+              ) : (
+                onPin && (
+                  <DropdownMenu.Item
+                    onClick={() => onPin(message)}
+                    className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer hover:bg-black/5 dark:hover:bg-white/10 outline-none transition-colors"
+                    data-testid={`pin-message-${message.id}`}
+                  >
+                    <Pin className="w-3.5 h-3.5 text-brand" />
+                    <span>Ghim tin nhắn</span>
+                  </DropdownMenu.Item>
+                )
+              )}
 
               {message.type === 'FILE' && message.fileUrl && (
                 <DropdownMenu.Item
@@ -624,6 +654,16 @@ export function MessageBubble({
                         {message.isEdited && (
                           <span className="text-[10px] text-ink-muted italic mr-0.5">
                             (đã sửa)
+                          </span>
+                        )}
+                        {message.isPinned && (
+                          <span
+                            className="inline-flex items-center text-brand dark:text-brand-accent ml-0.5"
+                            title="Tin nhắn đã ghim"
+                            aria-label="Tin nhắn đã ghim"
+                            data-testid={`pinned-indicator-${message.id}`}
+                          >
+                            <Pin className="w-3 h-3 fill-current rotate-45" />
                           </span>
                         )}
                         {timeString && <span>{timeString}</span>}

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MessageBubble } from './MessageBubble'
 import type { Message } from '../types/message.types'
 
@@ -278,6 +279,65 @@ describe('MessageBubble Component Tests', () => {
     render(<MessageBubble message={recalledMsg} isOutgoing={true} />)
 
     expect(screen.queryByTestId(`message-toolbar-${recalledMsg.id}`)).not.toBeInTheDocument()
+  })
+
+  it('renders pinned indicator badge when isPinned is true', () => {
+    const pinnedMsg: Message = {
+      ...baseMessage,
+      isPinned: true,
+    }
+
+    render(<MessageBubble message={pinnedMsg} isOutgoing={true} />)
+
+    expect(screen.getByTestId(`pinned-indicator-${pinnedMsg.id}`)).toBeInTheDocument()
+  })
+
+  it('renders pin option in dropdown and triggers onPin callback', async () => {
+    const user = userEvent.setup()
+    const handlePin = vi.fn()
+
+    render(
+      <MessageBubble
+        message={baseMessage}
+        isOutgoing={true}
+        onPin={handlePin}
+      />
+    )
+
+    const moreButton = screen.getByTitle('Tùy chọn khác')
+    await user.click(moreButton)
+
+    const pinMenuItem = await screen.findByTestId(`pin-message-${baseMessage.id}`)
+    expect(pinMenuItem).toBeInTheDocument()
+
+    await user.click(pinMenuItem)
+    expect(handlePin).toHaveBeenCalledWith(baseMessage)
+  })
+
+  it('renders unpin option in dropdown when message is pinned and triggers onUnpin callback', async () => {
+    const user = userEvent.setup()
+    const handleUnpin = vi.fn()
+    const pinnedMsg: Message = {
+      ...baseMessage,
+      isPinned: true,
+    }
+
+    render(
+      <MessageBubble
+        message={pinnedMsg}
+        isOutgoing={true}
+        onUnpin={handleUnpin}
+      />
+    )
+
+    const moreButton = screen.getByTitle('Tùy chọn khác')
+    await user.click(moreButton)
+
+    const unpinMenuItem = await screen.findByTestId(`unpin-message-${pinnedMsg.id}`)
+    expect(unpinMenuItem).toBeInTheDocument()
+
+    await user.click(unpinMenuItem)
+    expect(handleUnpin).toHaveBeenCalledWith(pinnedMsg)
   })
 })
 

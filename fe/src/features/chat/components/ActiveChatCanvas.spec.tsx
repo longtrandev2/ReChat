@@ -16,6 +16,15 @@ vi.mock('@/services/socket.client', () => ({
   },
 }))
 
+vi.mock('@/features/conversations/services/conversation.api', () => ({
+  conversationApi: {
+    getConversationById: vi.fn().mockResolvedValue(null),
+    getPinnedMessages: vi.fn().mockResolvedValue([]),
+    pinMessage: vi.fn().mockResolvedValue(undefined),
+    unpinMessage: vi.fn().mockResolvedValue(undefined),
+  },
+}))
+
 describe('ActiveChatCanvas Component Tests', () => {
   const mockSocket = {
     connected: true,
@@ -254,6 +263,87 @@ describe('ActiveChatCanvas Component Tests', () => {
       },
     })
     expect(screen.queryByTestId('drag-drop-overlay')).not.toBeInTheDocument()
+  })
+
+  it('fetches and renders PinnedMessageBar when pinned messages exist', async () => {
+    const { conversationApi } = await import('@/features/conversations/services/conversation.api')
+    const pinnedMsg: Message = {
+      ...mockMsg,
+      id: 'pinned-1',
+      content: 'Nội dung đã được ghim',
+      isPinned: true,
+    }
+    vi.mocked(conversationApi.getPinnedMessages).mockResolvedValueOnce([pinnedMsg])
+
+    render(
+      <MemoryRouter initialEntries={['/chat/conv-test-1']}>
+        <Routes>
+          <Route path="/chat/:conversationId" element={<ActiveChatCanvas />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    const pinnedBar = await screen.findByTestId('pinned-message-bar')
+    expect(pinnedBar).toBeInTheDocument()
+    expect(screen.getByText('Nội dung đã được ghim')).toBeInTheDocument()
+  })
+
+  it('updates pinned messages on messagePinned and messageUnpinned socket events', async () => {
+    let messagePinnedCallback: ((payload: unknown) => void) | undefined
+    let messageUnpinnedCallback: ((payload: unknown) => void) | undefined
+
+    mockSocket.on.mockImplementation((event: string, cb: (...args: unknown[]) => void) => {
+      if (event === 'messagePinned') {
+        messagePinnedCallback = cb as (payload: unknown) => void
+      }
+      if (event === 'messageUnpinned') {
+        messageUnpinnedCallback = cb as (payload: unknown) => void
+      }
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/chat/conv-test-1']}>
+        <Routes>
+          <Route path="/chat/:conversationId" element={<ActiveChatCanvas />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(screen.queryByTestId('pinned-message-bar')).not.toBeInTheDocument()
+
+    // Trigger messagePinned socket event
+    const newPin: Message = {
+      ...mockMsg,
+      id: 'socket-pin-1',
+      content: 'Tin ghim từ socket',
+      isPinned: true,
+    }
+    await act(async () => {
+      messagePinnedCallback?.({
+        conversationId: 'conv-test-1',
+        messageId: 'socket-pin-1',
+        message: newPin,
+        pinnedBy: { id: 'sender-1', displayName: 'Nguyễn Văn A' },
+      })
+    })
+
+    const pinnedBar = await screen.findByTestId('pinned-message-bar')
+    expect(pinnedBar).toBeInTheDocument()
+    expect(screen.getByText('Tin ghim từ socket')).toBeInTheDocument()
+
+    // Trigger messageUnpinned socket event
+    act(() => {
+      messageUnpinnedCallback?.({
+        conversationId: 'conv-test-1',
+        messageId: 'socket-pin-1',
+      })
+    })
+
+    expect(screen.queryByTestId('pinned-message-bar')).not.toBeInTheDocument()
   })
 })
 

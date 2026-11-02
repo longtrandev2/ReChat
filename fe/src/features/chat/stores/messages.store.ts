@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { messagesApi } from '../services/messages.api'
-import type { Message } from '../types/message.types'
+import type { Message, MessageSender } from '../types/message.types'
 
 export interface MessagesState {
   messagesByConversation: Record<string, Message[]>
@@ -31,6 +31,16 @@ export interface MessagesState {
     action: 'ADDED' | 'REMOVED' | 'CHANGED',
     user: { id: string; displayName?: string; username?: string },
     currentUserId?: string
+  ) => void
+  handleMessagePinned: (
+    conversationId: string,
+    messageId: string,
+    pinnedBy?: MessageSender | null,
+    pinnedAt?: string | null
+  ) => void
+  handleMessageUnpinned: (
+    conversationId: string,
+    messageId: string
   ) => void
   setTypingStatus: (
     conversationId: string,
@@ -212,6 +222,57 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
       updated[index] = {
         ...msg,
         reactions,
+      }
+
+      return {
+        messagesByConversation: {
+          ...state.messagesByConversation,
+          [conversationId]: updated,
+        },
+      }
+    })
+  },
+
+  handleMessagePinned: (
+    conversationId: string,
+    messageId: string,
+    pinnedBy?: MessageSender | null,
+    pinnedAt?: string | null
+  ) => {
+    set((state) => {
+      const currentList = state.messagesByConversation[conversationId] || []
+      const index = currentList.findIndex((m) => m.id === messageId)
+      if (index === -1) return state
+
+      const updated = [...currentList]
+      updated[index] = {
+        ...updated[index],
+        isPinned: true,
+        pinnedBy: pinnedBy !== undefined ? pinnedBy : updated[index].pinnedBy,
+        pinnedAt: pinnedAt || new Date().toISOString(),
+      }
+
+      return {
+        messagesByConversation: {
+          ...state.messagesByConversation,
+          [conversationId]: updated,
+        },
+      }
+    })
+  },
+
+  handleMessageUnpinned: (conversationId: string, messageId: string) => {
+    set((state) => {
+      const currentList = state.messagesByConversation[conversationId] || []
+      const index = currentList.findIndex((m) => m.id === messageId)
+      if (index === -1) return state
+
+      const updated = [...currentList]
+      updated[index] = {
+        ...updated[index],
+        isPinned: false,
+        pinnedBy: null,
+        pinnedAt: null,
       }
 
       return {
