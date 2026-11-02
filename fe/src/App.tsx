@@ -14,6 +14,7 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { ChatLayout } from '@/features/conversations/components/ChatLayout'
 import { WelcomeEmptyCanvas } from '@/components/layout/WelcomeEmptyCanvas'
 import { ActiveChatCanvas } from '@/features/chat/components/ActiveChatCanvas'
+import { FriendsPage } from '@/features/friends/pages/FriendsPage'
 
 export function App() {
   const { checkAuth } = useAuthStore()
@@ -50,14 +51,7 @@ export function App() {
             <Route index element={<WelcomeEmptyCanvas />} />
             <Route path=":conversationId" element={<ActiveChatCanvas />} />
           </Route>
-          <Route
-            path="/friends"
-            element={
-              <div className="flex h-full w-full items-center justify-center p-6 text-ink-secondary">
-                <p className="text-lg font-medium">Danh sách Bạn bè (Friends)</p>
-              </div>
-            }
-          />
+          <Route path="/friends" element={<FriendsPage />} />
           <Route
             path="/settings"
             element={

@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { Avatar, AvatarFallback, AvatarImage, PresenceDot } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { useAuthStore } from '@/stores/auth.store'
+import { useFriendsStore } from '@/features/friends/stores/friends.store'
 import { useSocket } from '@/hooks/useSocket'
 import { cn } from '@/lib/utils'
 
@@ -28,6 +29,7 @@ export function NavigationRail() {
   const navigate = useNavigate()
   const { user, logout: logoutStore } = useAuthStore()
   const { isConnected } = useSocket()
+  const receivedRequestsCount = useFriendsStore((s) => s.receivedRequestsCount)
 
   // State quản lý theme sáng / tối đồng bộ với AuthLayout
   const [isDark, setIsDark] = useState(() => {
@@ -128,6 +130,14 @@ export function NavigationRail() {
                 aria-hidden="true"
               />
               <Icon className="w-5 h-5 transition-transform duration-150 group-hover:scale-110" />
+              {item.id === 'friends' && receivedRequestsCount > 0 && (
+                <span
+                  className="absolute -top-1 -right-1 min-w-4 h-4 px-1 bg-coral text-white rounded-full text-[10px] font-bold flex items-center justify-center shadow-xs animate-in zoom-in-75 duration-150 pointer-events-none"
+                  data-testid="friends-nav-badge"
+                >
+                  {receivedRequestsCount > 99 ? '99+' : receivedRequestsCount}
+                </span>
+              )}
             </Link>
           )
         })}

@@ -5,6 +5,8 @@ import { useAuthStore } from '@/stores/auth.store'
 import { postAuthBroadcast } from '@/lib/auth-broadcast'
 import { useConversationStore } from '@/features/conversations/stores/conversation.store'
 import { useMessagesStore } from '@/features/chat/stores/messages.store'
+import { useFriendsStore } from '@/features/friends/stores/friends.store'
+import type { FriendUser } from '@/features/friends/types/friends.types'
 import { conversationApi } from '@/features/conversations/services/conversation.api'
 import type { Conversation, LastMessage } from '@/features/conversations/types/conversation.types'
 import type { Message } from '@/features/chat/types/message.types'
@@ -256,6 +258,25 @@ export function useSocketInit() {
       })
     }
 
+    const handleFriendAccepted = (payload: { friend?: FriendUser }) => {
+      if (payload?.friend) {
+        useFriendsStore.getState().handleFriendAdded(payload.friend)
+      } else {
+        useFriendsStore.getState().fetchFriends()
+      }
+      useFriendsStore.getState().fetchReceivedRequestsCount()
+    }
+
+    const handleFriendRemoved = (payload: { friendId: string }) => {
+      if (payload?.friendId) {
+        useFriendsStore.getState().handleFriendRemoved(payload.friendId)
+      }
+    }
+
+    const handleFriendRequestsChanged = () => {
+      useFriendsStore.getState().fetchReceivedRequestsCount()
+    }
+
     // Đăng ký listeners
     socket.on('connect', handleConnect)
     socket.on('disconnect', handleDisconnect)
@@ -271,6 +292,11 @@ export function useSocketInit() {
     socket.on('messageRead', handleMessageRead)
     socket.on('groupMembershipChanged', handleGroupMembershipChanged)
     socket.on('conversationCustomized', handleConversationCustomized)
+    socket.on('friendRequestAccepted', handleFriendAccepted)
+    socket.on('friendRemoved', handleFriendRemoved)
+    socket.on('friendRequestReceived', handleFriendRequestsChanged)
+    socket.on('friendRequestCancelled', handleFriendRequestsChanged)
+    socket.on('friendRequestRejected', handleFriendRequestsChanged)
 
     // Cập nhật trạng thái nếu socket đã kết nối trước đó
     if (socket.connected) {
@@ -293,6 +319,11 @@ export function useSocketInit() {
       socket.off('messageRead', handleMessageRead)
       socket.off('groupMembershipChanged', handleGroupMembershipChanged)
       socket.off('conversationCustomized', handleConversationCustomized)
+      socket.off('friendRequestAccepted', handleFriendAccepted)
+      socket.off('friendRemoved', handleFriendRemoved)
+      socket.off('friendRequestReceived', handleFriendRequestsChanged)
+      socket.off('friendRequestCancelled', handleFriendRequestsChanged)
+      socket.off('friendRequestRejected', handleFriendRequestsChanged)
     }
   }, [token, isAuthenticated, setStatus, updateUserStatus, reset])
 }
@@ -312,5 +343,6 @@ export function useSocket() {
     isConnected,
     onlineUsers,
     isUserOnline,
+    socket: socketClient.getSocket(),
   }
 }
