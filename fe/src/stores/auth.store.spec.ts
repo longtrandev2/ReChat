@@ -258,4 +258,28 @@ describe('useAuthStore (In-Memory Token & App Initialization Gate)', () => {
       expect(state.isAuthenticated).toBe(true)
     })
   })
+  describe('AUTH_USER_UPDATED broadcast (multi-tab profile sync)', () => {
+    it('updates the user in RAM without network call when authenticated', () => {
+      useAuthStore.setState({ token: 't', user: mockUser, isAuthenticated: true })
+      const subscriber = mocks.getSubscriber()
+
+      subscriber!({
+        type: 'AUTH_USER_UPDATED',
+        payload: { user: { ...mockUser, displayName: 'Tên Mới' } },
+      })
+
+      expect(useAuthStore.getState().user?.displayName).toBe('Tên Mới')
+      expect(useAuthStore.getState().token).toBe('t')
+      expect(authApi.refresh).not.toHaveBeenCalled()
+    })
+
+    it('ignores AUTH_USER_UPDATED when this tab is not authenticated', () => {
+      useAuthStore.setState({ token: null, user: null, isAuthenticated: false })
+      const subscriber = mocks.getSubscriber()
+
+      subscriber!({ type: 'AUTH_USER_UPDATED', payload: { user: mockUser } })
+
+      expect(useAuthStore.getState().user).toBeNull()
+    })
+  })
 })

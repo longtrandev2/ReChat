@@ -1,4 +1,4 @@
-import { Users, MoreHorizontal } from 'lucide-react'
+import { Users, MoreHorizontal, Pin } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage, PresenceDot } from '@/components/ui/avatar'
 import { formatConversationTime } from '../utils/format-time'
 import type { Conversation } from '../types/conversation.types'
@@ -164,6 +164,15 @@ export function ConversationItem({
             >
               <MoreHorizontal className="w-3.5 h-3.5" />
             </span>
+
+            {/* Biểu tượng ghim (FR-48) */}
+            {conversation.isPinned && (
+              <Pin
+                data-testid="pin-indicator"
+                aria-label="Đã ghim"
+                className="w-3.5 h-3.5 text-ink-muted rotate-45 fill-current"
+              />
+            )}
 
             {/* Unread Counter Badge */}
             {hasUnread && (

@@ -10,6 +10,7 @@ vi.mock('../services/conversation.api', () => ({
     createGroup: vi.fn(),
     getConversationById: vi.fn(),
     markAsRead: vi.fn(),
+    togglePin: vi.fn(),
   },
 }))
 
@@ -208,5 +209,83 @@ describe('useConversationStore Tests (ZOMBIES & AAA Methodology)', () => {
     expect(state.activeConversationId).toBeNull()
     expect(state.searchQuery).toBe('')
     expect(state.filterTab).toBe('all')
+  })
+  describe('pinned conversations (FR-48)', () => {
+    const older = { ...mockConv1, id: 'old', lastMessageAt: '2026-10-01T00:00:00.000Z' }
+    const newer = { ...mockConv2, id: 'new', lastMessageAt: '2026-10-30T00:00:00.000Z' }
+
+    it('fetchInbox puts pinned conversations first, newest pin first', async () => {
+      vi.mocked(conversationApi.getInbox).mockResolvedValueOnce([
+        newer,
+        { ...older, isPinned: true, pinnedAt: '2026-10-05T00:00:00.000Z' },
+        { ...mockConv1, id: 'pin2', isPinned: true, pinnedAt: '2026-10-10T00:00:00.000Z' },
+      ])
+
+      await useConversationStore.getState().fetchInbox()
+
+      expect(useConversationStore.getState().conversations.map((c) => c.id)).toEqual(['pin2', 'old', 'new'])
+    })
+
+    it('handleNewMessage keeps a pinned conversation above unpinned ones', () => {
+      useConversationStore.setState({
+        conversations: [{ ...older, isPinned: true, pinnedAt: '2026-10-05T00:00:00.000Z' }, newer],
+      })
+
+      useConversationStore.getState().handleNewMessage('new', {
+        id: 'm',
+        content: 'hi',
+        type: 'TEXT',
+        createdAt: '2026-11-01T00:00:00.000Z',
+      })
+
+      expect(useConversationStore.getState().conversations.map((c) => c.id)).toEqual(['old', 'new'])
+    })
+
+    it('setPinned updates optimistically, re-sorts and stores server pinnedAt', async () => {
+      useConversationStore.setState({ conversations: [newer, older] })
+      let resolveApi!: (v: { conversationId: string; isPinned: boolean; pinnedAt: string }) => void
+      vi.mocked(conversationApi.togglePin).mockReturnValueOnce(
+        new Promise((r) => {
+          resolveApi = r
+        })
+      )
+
+      const promise = useConversationStore.getState().setPinned('old', true)
+
+      // Optimistic: đã lên đầu trước khi API trả về
+      expect(useConversationStore.getState().conversations[0]).toMatchObject({ id: 'old', isPinned: true })
+
+      resolveApi({ conversationId: 'old', isPinned: true, pinnedAt: '2026-11-01T00:00:00.000Z' })
+      await promise
+
+      expect(useConversationStore.getState().conversations[0].pinnedAt).toBe('2026-11-01T00:00:00.000Z')
+    })
+
+    it('setPinned unpin re-sorts by recency', async () => {
+      useConversationStore.setState({
+        conversations: [{ ...older, isPinned: true, pinnedAt: '2026-10-05T00:00:00.000Z' }, newer],
+      })
+      vi.mocked(conversationApi.togglePin).mockResolvedValueOnce({
+        conversationId: 'old',
+        isPinned: false,
+        pinnedAt: null,
+      })
+
+      await useConversationStore.getState().setPinned('old', false)
+
+      expect(useConversationStore.getState().conversations.map((c) => c.id)).toEqual(['new', 'old'])
+    })
+
+    it('setPinned rolls back and rethrows when API fails (e.g. 400 > 5 pinned)', async () => {
+      useConversationStore.setState({ conversations: [newer, older] })
+      const error = { response: { status: 400, data: { message: 'Tối đa 5' } } }
+      vi.mocked(conversationApi.togglePin).mockRejectedValueOnce(error)
+
+      await expect(useConversationStore.getState().setPinned('old', true)).rejects.toBe(error)
+
+      const list = useConversationStore.getState().conversations
+      expect(list.map((c) => c.id)).toEqual(['new', 'old'])
+      expect(list.find((c) => c.id === 'old')?.isPinned).toBeFalsy()
+    })
   })
 })

@@ -108,4 +108,11 @@ describe('ConversationItem Component Tests', () => {
     await user.click(row)
     expect(handleClick).toHaveBeenCalledTimes(1)
   })
+  it('shows a pin indicator only for pinned conversations', () => {
+    const { rerender } = render(<ConversationItem conversation={mockDirectConv} />)
+    expect(screen.queryByTestId('pin-indicator')).not.toBeInTheDocument()
+
+    rerender(<ConversationItem conversation={{ ...mockDirectConv, isPinned: true }} />)
+    expect(screen.getByTestId('pin-indicator')).toBeInTheDocument()
+  })
 })

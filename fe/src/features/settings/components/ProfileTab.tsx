@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { toast } from 'sonner'
@@ -33,6 +34,13 @@ export function ProfileTab({ user }: ProfileTabProps) {
     resolver: zodResolver(displayNameSchema),
     defaultValues: { displayName },
   })
+
+  // Đồng bộ ô nhập khi tên hiển thị đổi từ bên ngoài (GET /auth/me, tab khác) và form chưa bị sửa
+  useEffect(() => {
+    if (!isDirty) {
+      reset({ displayName })
+    }
+  }, [displayName, isDirty, reset])
 
   const onSubmit = async (data: DisplayNameFormData) => {
     try {

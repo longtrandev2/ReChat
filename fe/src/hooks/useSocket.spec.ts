@@ -5,6 +5,8 @@ import { socketClient } from '@/services/socket.client'
 import { useAuthStore } from '@/stores/auth.store'
 import { useSocketStore } from '@/stores/socket.store'
 import { postAuthBroadcast } from '@/lib/auth-broadcast'
+import { resetNotificationSoundForTest } from '@/lib/notification-sound'
+import { useConversationStore } from '@/features/conversations/stores/conversation.store'
 import type { Socket } from 'socket.io-client'
 
 vi.mock('@/services/socket.client', () => ({
@@ -213,5 +215,112 @@ describe('useSocket & useSocketInit (Task 7.2)', () => {
     expect(result.current.status).toBe('connected')
     expect(result.current.isConnected).toBe(true)
     expect(result.current.isUserOnline('u1')).toBe(true)
+  })
+  describe('block events & notification sound', () => {
+    const baseConv = {
+      id: 'c1',
+      type: 'DIRECT' as const,
+      name: 'Partner',
+      avatarUrl: null,
+      unreadCount: 0,
+      lastMessage: null,
+      lastMessageAt: '2026-10-26T00:00:00.000Z',
+      createdAt: '2026-10-20T00:00:00.000Z',
+      updatedAt: '2026-10-26T00:00:00.000Z',
+      partnerId: 'other',
+      isOnline: true,
+    }
+
+    const attach = () => {
+      useAuthStore.setState({
+        token: 'jwt',
+        isAuthenticated: true,
+        user: { id: 'me' } as never,
+      })
+      useConversationStore.setState({ conversations: [baseConv] })
+      renderHook(() => useSocketInit())
+    }
+
+    it('userBlocked where I am the blocker -> BLOCKED_BY_ME and partner offline', () => {
+      attach()
+      act(() => {
+        mockSocketListeners['userBlocked']?.({ blockerId: 'me', blockedId: 'other', conversationId: 'c1' })
+      })
+      const conv = useConversationStore.getState().conversations[0]
+      expect(conv.blockStatus).toBe('BLOCKED_BY_ME')
+      expect(conv.isOnline).toBe(false)
+    })
+
+    it('userBlocked where I am blocked -> BLOCKED_ME, then userUnblocked -> NONE', () => {
+      attach()
+      act(() => {
+        mockSocketListeners['userBlocked']?.({ blockerId: 'other', blockedId: 'me', conversationId: 'c1' })
+      })
+      expect(useConversationStore.getState().conversations[0].blockStatus).toBe('BLOCKED_ME')
+
+      act(() => {
+        mockSocketListeners['userUnblocked']?.({ blockerId: 'other', blockedId: 'me', conversationId: 'c1' })
+      })
+      expect(useConversationStore.getState().conversations[0].blockStatus).toBe('NONE')
+    })
+
+    it('resolves the DIRECT conversation by partner id when conversationId is null', () => {
+      attach()
+      act(() => {
+        mockSocketListeners['userBlocked']?.({ blockerId: 'me', blockedId: 'other', conversationId: null })
+      })
+      expect(useConversationStore.getState().conversations[0].blockStatus).toBe('BLOCKED_BY_ME')
+    })
+
+    it('ignores block events for unknown conversations', () => {
+      attach()
+      act(() => {
+        mockSocketListeners['userBlocked']?.({ blockerId: 'me', blockedId: 'stranger', conversationId: 'nope' })
+      })
+      expect(useConversationStore.getState().conversations[0].blockStatus).toBeUndefined()
+    })
+
+    it('reuses a single AudioContext across incoming messages', () => {
+      const makeCtx = () => ({
+        state: 'running',
+        currentTime: 0,
+        destination: {},
+        resume: vi.fn().mockResolvedValue(undefined),
+        createOscillator: () => ({
+          connect: vi.fn(),
+          frequency: { setValueAtTime: vi.fn() },
+          start: vi.fn(),
+          stop: vi.fn(),
+          type: 'sine',
+        }),
+        createGain: () => ({
+          connect: vi.fn(),
+          gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+        }),
+      })
+      const Ctor = vi.fn(function () {
+        return makeCtx()
+      })
+      Object.defineProperty(window, 'AudioContext', { value: Ctor, configurable: true, writable: true })
+      resetNotificationSoundForTest()
+
+      attach()
+      const incoming = (id: string) => ({
+        id,
+        conversationId: 'c1',
+        content: 'hello',
+        type: 'TEXT',
+        createdAt: '2026-11-01T00:00:00.000Z',
+        sender: { id: 'other', username: 'o', displayName: 'O', avatarUrl: null },
+      })
+      act(() => {
+        mockSocketListeners['newMessage']?.(incoming('m1'))
+        mockSocketListeners['newMessage']?.(incoming('m2'))
+        mockSocketListeners['newMessage']?.(incoming('m3'))
+      })
+
+      expect(Ctor).toHaveBeenCalledTimes(1)
+      resetNotificationSoundForTest()
+    })
   })
 })

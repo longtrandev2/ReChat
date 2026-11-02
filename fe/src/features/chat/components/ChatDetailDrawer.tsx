@@ -30,7 +30,10 @@ import { toast } from 'sonner'
 import { Avatar, AvatarFallback, AvatarImage, PresenceDot } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { formatFileSize, cn } from '@/lib/utils'
+import { isSafeHttpUrl, openSafeUrl } from '@/lib/safe-url'
 import { useSharedMedia } from '../hooks/useSharedMedia'
+import { useConversationActions } from '../hooks/useConversationActions'
+import { BlockUserConfirmDialog } from './ConversationConfirmDialogs'
 import { useConversationStore } from '@/features/conversations/stores/conversation.store'
 import { useAuthStore } from '@/stores/auth.store'
 import { conversationApi } from '@/features/conversations/services/conversation.api'
@@ -92,6 +95,12 @@ export function ChatDetailDrawer({
   const navigate = useNavigate()
   const { user } = useAuthStore()
   const { addOrUpdateConversation, removeConversation } = useConversationStore()
+  const { blockStatus, isBlocking, blockPartner, unblockPartner } = useConversationActions(
+    conversation,
+    partner?.id
+  )
+  // Khi hai bên đang chặn nhau, ẩn trạng thái hoạt động của đối phương (BR-38)
+  const showOnline = isOnline && blockStatus === 'NONE'
 
   // State các Accordion mở/đóng
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
@@ -248,6 +257,10 @@ export function ChatDetailDrawer({
 
   const handleDownloadFile = async (e: React.MouseEvent, url: string, fileName: string) => {
     e.stopPropagation()
+    if (!isSafeHttpUrl(url)) {
+      toast.error('Liên kết tệp không hợp lệ')
+      return
+    }
     try {
       let downloadUrl = url
       if (downloadUrl.includes('/upload/') && !downloadUrl.includes('/fl_attachment')) {
@@ -266,7 +279,7 @@ export function ChatDetailDrawer({
       window.URL.revokeObjectURL(blobUrl)
       toast.success('Đang tải tệp xuống...')
     } catch {
-      window.open(url, '_blank')
+      openSafeUrl(url)
     }
   }
 
@@ -546,7 +559,7 @@ export function ChatDetailDrawer({
             </Avatar>
             {!isGroup && (
               <span className="absolute bottom-1 right-1">
-                <PresenceDot isOnline={isOnline} />
+                <PresenceDot isOnline={showOnline} />
               </span>
             )}
             {isUploadingAvatar && (
@@ -565,7 +578,7 @@ export function ChatDetailDrawer({
               ? `${members.length || conversation.memberCount || 2} thành viên`
               : partner?.username
               ? `@${partner.username}`
-              : isOnline
+              : showOnline
               ? 'Đang trực tuyến'
               : 'Ngoại tuyến'}
           </p>
@@ -1179,16 +1192,25 @@ export function ChatDetailDrawer({
               ) : (
                 <button
                   type="button"
-                  onClick={() => setIsBlockUserConfirmOpen(true)}
-                  className="w-full flex items-center gap-2.5 p-2 rounded-xl text-coral hover:bg-coral-soft/40 dark:hover:bg-coral/10 transition-colors cursor-pointer text-left"
+                  disabled={isBlocking}
+                  onClick={() =>
+                    blockStatus === 'BLOCKED_BY_ME' ? void unblockPartner() : setIsBlockUserConfirmOpen(true)
+                  }
+                  className="w-full flex items-center gap-2.5 p-2 rounded-xl text-coral hover:bg-coral-soft/40 dark:hover:bg-coral/10 transition-colors cursor-pointer text-left disabled:opacity-50"
                   data-testid="block-user-button"
                 >
                   <div className="w-8 h-8 rounded-lg bg-coral/10 flex items-center justify-center shrink-0">
                     <Ban className="w-4 h-4" />
                   </div>
                   <div>
-                    <p className="text-xs font-semibold">Chặn người dùng</p>
-                    <p className="text-[10px] text-ink-muted">Chặn người này gửi tin nhắn hoặc gọi điện cho bạn</p>
+                    <p className="text-xs font-semibold">
+                      {blockStatus === 'BLOCKED_BY_ME' ? 'Bỏ chặn người dùng' : 'Chặn người dùng'}
+                    </p>
+                    <p className="text-[10px] text-ink-muted">
+                      {blockStatus === 'BLOCKED_BY_ME'
+                        ? 'Cho phép hai bên nhắn tin trở lại'
+                        : 'Chặn người này gửi tin nhắn hoặc gọi điện cho bạn'}
+                    </p>
                   </div>
                 </button>
               )}
@@ -1551,40 +1573,14 @@ export function ChatDetailDrawer({
         </Dialog.Portal>
       </Dialog.Root>
 
-      {/* Modal 7: Xác nhận Chặn người dùng (Direct) */}
-      <Dialog.Root open={isBlockUserConfirmOpen} onOpenChange={setIsBlockUserConfirmOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 animate-in fade-in duration-150" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm bg-white dark:bg-[#17212B] text-ink-primary dark:text-white border border-border dark:border-white/10 p-5 rounded-2xl shadow-2xl z-50 animate-in zoom-in-95 duration-150 focus:outline-none">
-            <Dialog.Title className="text-base font-bold text-ink-primary dark:text-white">
-              Chặn người dùng này?
-            </Dialog.Title>
-            <Dialog.Description className="text-xs text-ink-muted mt-2 leading-relaxed">
-              Bạn và{' '}
-              <strong className="text-ink-primary dark:text-white">
-                {partner?.displayName || conversation.name}
-              </strong>{' '}
-              sẽ không thể nhắn tin hay gọi điện cho nhau.
-            </Dialog.Description>
-            <div className="flex items-center justify-end gap-2 mt-5">
-              <Dialog.Close asChild>
-                <Button variant="ghost">Hủy</Button>
-              </Dialog.Close>
-              <Button
-                variant="destructive"
-                onClick={() => {
-                  setIsBlockUserConfirmOpen(false)
-                  toast.success('Đã chặn người dùng thành công')
-                }}
-                className="bg-coral hover:bg-coral/90 text-white cursor-pointer"
-                data-testid="confirm-block-user-submit"
-              >
-                Chặn
-              </Button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      {/* Modal 7: Xác nhận Chặn người dùng (Direct) - dùng chung với menu header */}
+      <BlockUserConfirmDialog
+        open={isBlockUserConfirmOpen}
+        onOpenChange={setIsBlockUserConfirmOpen}
+        name={partner?.displayName || conversation.name}
+        onConfirm={blockPartner}
+        isLoading={isBlocking}
+      />
     </aside>
   )
 }

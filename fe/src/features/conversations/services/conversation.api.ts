@@ -161,6 +161,33 @@ export const conversationApi = {
   },
 
   /**
+   * PATCH /api/v1/conversations/:id/pin
+   * Ghim/bỏ ghim cuộc hội thoại trên Inbox (FR-48, tối đa 5)
+   */
+  togglePin: async (
+    conversationId: string,
+    isPinned: boolean
+  ): Promise<{ conversationId: string; isPinned: boolean; pinnedAt: string | null }> => {
+    const res = await apiClient.patch<{
+      conversationId: string
+      isPinned: boolean
+      pinnedAt: string | null
+    }>(`/conversations/${conversationId}/pin`, { isPinned })
+    return res.data
+  },
+
+  /**
+   * DELETE /api/v1/conversations/:id/history
+   * Xóa lịch sử đoạn chat phía người dùng hiện tại (FR-48)
+   */
+  clearHistory: async (conversationId: string): Promise<{ conversationId: string; clearedAt: string }> => {
+    const res = await apiClient.delete<{ conversationId: string; clearedAt: string }>(
+      `/conversations/${conversationId}/history`
+    )
+    return res.data
+  },
+
+  /**
    * PATCH /api/v1/conversations/:id/mute
    * Tắt/bật thông báo cuộc hội thoại (FR-32, BR-31)
    */

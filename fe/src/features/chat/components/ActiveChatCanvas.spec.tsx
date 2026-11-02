@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { ActiveChatCanvas } from './ActiveChatCanvas'
 import { useConversationStore } from '@/features/conversations/stores/conversation.store'
@@ -195,7 +196,8 @@ describe('ActiveChatCanvas Component Tests', () => {
     expect(mockSocket.off).toHaveBeenCalledWith('messageReactionUpdated', expect.any(Function))
   })
 
-  it('toggles ChatDetailDrawer when clicking info button and closes when clicking close', () => {
+  it('toggles ChatDetailDrawer when choosing menu info item and closes when clicking close', async () => {
+    const user = userEvent.setup()
     render(
       <MemoryRouter initialEntries={['/chat/conv-test-1']}>
         <Routes>
@@ -208,8 +210,8 @@ describe('ActiveChatCanvas Component Tests', () => {
     expect(screen.queryByTestId('chat-detail-drawer')).not.toBeInTheDocument()
 
     // Click info button in header
-    const infoBtn = screen.getByRole('button', { name: 'Thông tin hội thoại' })
-    fireEvent.click(infoBtn)
+    await user.click(screen.getByRole('button', { name: 'Tùy chọn hội thoại' }))
+    await user.click(await screen.findByRole('menuitem', { name: /Xem thông tin/ }))
 
     // Drawer opens
     expect(screen.getByTestId('chat-detail-drawer')).toBeInTheDocument()

@@ -6,6 +6,7 @@ export type AuthBroadcastMessage =
   | { type: 'AUTH_LOGOUT' }
   | { type: 'AUTH_LOGIN'; payload: { token: string; user: UserProfile } }
   | { type: 'AUTH_TOKEN_REFRESHED'; payload: { token: string; user: UserProfile } }
+  | { type: 'AUTH_USER_UPDATED'; payload: { user: UserProfile } }
 
 let broadcastChannelInstance: BroadcastChannel | null = null
 

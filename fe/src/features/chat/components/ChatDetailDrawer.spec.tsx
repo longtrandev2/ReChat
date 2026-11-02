@@ -8,6 +8,7 @@ import { friendsApi } from '@/features/friends/services/friends.api'
 import { messagesApi } from '../services/messages.api'
 import { mediaApi } from '../services/media.api'
 import { useAuthStore } from '@/stores/auth.store'
+import { useConversationStore } from '@/features/conversations/stores/conversation.store'
 import type { UserProfile } from '@/types/auth.types'
 import type { Conversation } from '@/features/conversations/types/conversation.types'
 import type { Message } from '../types/message.types'
@@ -31,6 +32,9 @@ vi.mock('@/features/conversations/services/conversation.api', () => ({
 vi.mock('@/features/friends/services/friends.api', () => ({
   friendsApi: {
     getFriends: vi.fn(),
+    blockUser: vi.fn(),
+    unblockUser: vi.fn(),
+    getBlockedUsers: vi.fn(),
   },
 }))
 
@@ -690,6 +694,56 @@ describe('ChatDetailDrawer Component Tests', () => {
 
     await waitFor(() => {
       expect(conversationApi.toggleMute).toHaveBeenCalledWith(directConv.id, true)
+    })
+  })
+  describe('block / unblock (FR-29, BR-38)', () => {
+    const renderDrawer = (conversation: Conversation, isOnline = true) =>
+      render(
+        <MemoryRouter>
+          <ChatDetailDrawer
+            isOpen={true}
+            onClose={vi.fn()}
+            conversation={conversation}
+            partner={partnerUser}
+            isOnline={isOnline}
+          />
+        </MemoryRouter>
+      )
+
+    it('confirm "Chặn" calls the real block API with the partner id and marks the chat BLOCKED_BY_ME', async () => {
+      const user = userEvent.setup()
+      vi.mocked(friendsApi.blockUser).mockResolvedValue({ message: 'ok' })
+      vi.mocked(friendsApi.getBlockedUsers).mockResolvedValue([])
+      useConversationStore.setState({ conversations: [directConv] })
+      renderDrawer(directConv)
+
+      await user.click(screen.getByTestId('accordion-privacy'))
+      await user.click(screen.getByTestId('block-user-button'))
+      expect(friendsApi.blockUser).not.toHaveBeenCalled()
+      await user.click(await screen.findByTestId('confirm-block-user-submit'))
+
+      await waitFor(() => expect(friendsApi.blockUser).toHaveBeenCalledWith(partnerUser.id))
+      expect(useConversationStore.getState().conversations[0].blockStatus).toBe('BLOCKED_BY_ME')
+    })
+
+    it('shows "Bỏ chặn người dùng" when blocked by me and unblocks without confirm', async () => {
+      const user = userEvent.setup()
+      vi.mocked(friendsApi.unblockUser).mockResolvedValue({ message: 'ok' })
+      const blockedConv = { ...directConv, blockStatus: 'BLOCKED_BY_ME' as const }
+      useConversationStore.setState({ conversations: [blockedConv] })
+      renderDrawer(blockedConv)
+
+      await user.click(screen.getByTestId('accordion-privacy'))
+      expect(screen.getByText('Bỏ chặn người dùng')).toBeInTheDocument()
+      await user.click(screen.getByTestId('block-user-button'))
+
+      await waitFor(() => expect(friendsApi.unblockUser).toHaveBeenCalledWith(partnerUser.id))
+      expect(useConversationStore.getState().conversations[0].blockStatus).toBe('NONE')
+    })
+
+    it('hides the online dot/title when the chat is blocked', () => {
+      renderDrawer({ ...directConv, blockStatus: 'BLOCKED_ME' }, true)
+      expect(screen.queryByTitle('Đang trực tuyến')).not.toBeInTheDocument()
     })
   })
 })

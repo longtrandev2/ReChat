@@ -393,6 +393,51 @@ describe('MessageBubble Component Tests', () => {
     )
     expect(screen.queryByTestId('search-highlight')).not.toBeInTheDocument()
   })
+  describe('safe file links', () => {
+    it('does not open or fetch a javascript: file URL when downloading', async () => {
+      const user = userEvent.setup()
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      const evilMsg: Message = {
+        ...baseMessage,
+        id: 'msg-evil',
+        type: 'FILE',
+        fileUrl: 'javascript:alert(1)',
+        content: 'evil.txt',
+      }
+
+      render(<MessageBubble message={evilMsg} isOutgoing={false} />)
+      await user.click(screen.getByRole('button', { name: 'Tải tệp xuống' }))
+
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(openSpy).not.toHaveBeenCalled()
+      openSpy.mockRestore()
+      fetchSpy.mockRestore()
+    })
+
+    it('opens http(s) image URL in a new tab when no lightbox handler is given', async () => {
+      const user = userEvent.setup()
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+      const okMsg: Message = {
+        ...baseMessage,
+        id: 'msg-ok',
+        type: 'IMAGE',
+        fileUrl: 'https://example.com/ok.png',
+        content: '',
+      }
+
+      render(<MessageBubble message={okMsg} isOutgoing={false} />)
+      await user.click(screen.getByTestId('image-attachment-msg-ok'))
+      expect(openSpy).toHaveBeenCalledWith('https://example.com/ok.png', '_blank', 'noopener,noreferrer')
+
+      openSpy.mockClear()
+      const evilImg = { ...okMsg, id: 'msg-evil-img', fileUrl: 'data:text/html,<script>1</script>' }
+      render(<MessageBubble message={evilImg} isOutgoing={false} />)
+      await user.click(screen.getByTestId('image-attachment-msg-evil-img'))
+      expect(openSpy).not.toHaveBeenCalled()
+      openSpy.mockRestore()
+    })
+  })
 })
 
 

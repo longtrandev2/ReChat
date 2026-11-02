@@ -20,6 +20,7 @@ export interface ConversationState {
   addOrUpdateConversation: (conversation: Conversation) => void
   updateConversation: (id: string, partial: Partial<Conversation>) => void
   removeConversation: (conversationId: string) => void
+  setPinned: (conversationId: string, isPinned: boolean) => Promise<void>
   handleNewMessage: (conversationId: string, message: LastMessage, isSelf?: boolean) => void
   markConversationAsRead: (conversationId: string) => Promise<void>
   getFilteredConversations: () => Conversation[]
@@ -34,6 +35,17 @@ const sortByRecency = (convs: Conversation[]): Conversation[] => {
   })
 }
 
+/** Ghim lên đầu (mới ghim trước), phần còn lại giữ thứ tự hiện có (FR-48) */
+const pinnedFirst = (convs: Conversation[]): Conversation[] => {
+  const pinned = convs
+    .filter((c) => c.isPinned)
+    .sort((a, b) => new Date(b.pinnedAt || 0).getTime() - new Date(a.pinnedAt || 0).getTime())
+  return [...pinned, ...convs.filter((c) => !c.isPinned)]
+}
+
+const sortConversations = (convs: Conversation[]): Conversation[] =>
+  pinnedFirst(sortByRecency(convs))
+
 export const useConversationStore = create<ConversationState>((set, get) => ({
   conversations: [],
   activeConversationId: null,
@@ -47,7 +59,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       set({ isLoading: true, error: null })
       const data = await conversationApi.getInbox()
       set({
-        conversations: sortByRecency(data),
+        conversations: sortConversations(data),
         isLoading: false,
       })
     } catch (err: unknown) {
@@ -89,7 +101,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       }
 
       return {
-        conversations: sortByRecency(nextList),
+        conversations: sortConversations(nextList),
       }
     })
   },
@@ -127,9 +139,52 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
 
       const rest = state.conversations.filter((c) => c.id !== conversationId)
       return {
-        conversations: [updated, ...rest],
+        conversations: pinnedFirst([updated, ...rest]),
       }
     })
+  },
+
+  /**
+   * Ghim/bỏ ghim lạc quan: cập nhật UI ngay, rollback khi API lỗi (vd 400 khi quá 5 ghim) và ném lại lỗi
+   */
+  setPinned: async (conversationId: string, isPinned: boolean) => {
+    const previous = get().conversations
+    const target = previous.find((c) => c.id === conversationId)
+    if (!target) return
+
+    const optimisticPinnedAt = isPinned ? new Date().toISOString() : null
+    set({
+      conversations: sortConversations(
+        previous.map((c) =>
+          c.id === conversationId ? { ...c, isPinned, pinnedAt: optimisticPinnedAt } : c
+        )
+      ),
+    })
+
+    try {
+      const res = await conversationApi.togglePin(conversationId, isPinned)
+      set((state) => ({
+        conversations: sortConversations(
+          state.conversations.map((c) =>
+            c.id === conversationId
+              ? { ...c, isPinned: res.isPinned, pinnedAt: res.pinnedAt }
+              : c
+          )
+        ),
+      }))
+    } catch (err) {
+      // Rollback đúng trạng thái ghim cũ của hội thoại này (giữ nguyên thay đổi khác từ socket)
+      set((state) => ({
+        conversations: sortConversations(
+          state.conversations.map((c) =>
+            c.id === conversationId
+              ? { ...c, isPinned: target.isPinned, pinnedAt: target.pinnedAt }
+              : c
+          )
+        ),
+      }))
+      throw err
+    }
   },
 
   markConversationAsRead: async (conversationId: string) => {

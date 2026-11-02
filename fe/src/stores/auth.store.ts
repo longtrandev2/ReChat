@@ -166,6 +166,11 @@ subscribeToAuthBroadcast((message) => {
   } else if (message.type === 'AUTH_TOKEN_REFRESHED') {
     useAuthStore.getState().setAuth(message.payload.token, message.payload.user, false)
     socketClient.updateToken(message.payload.token)
+  } else if (message.type === 'AUTH_USER_UPDATED') {
+    // Chỉ cập nhật hồ sơ trong RAM, không gọi network; bỏ qua nếu tab này chưa đăng nhập
+    if (useAuthStore.getState().isAuthenticated) {
+      useAuthStore.getState().setUser(message.payload.user)
+    }
   } else if (message.type === 'AUTH_LOGIN') {
     useAuthStore.getState().setAuth(message.payload.token, message.payload.user, false)
     socketClient.updateToken(message.payload.token)

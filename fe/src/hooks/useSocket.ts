@@ -3,12 +3,13 @@ import { socketClient } from '@/services/socket.client'
 import { useSocketStore } from '@/stores/socket.store'
 import { useAuthStore } from '@/stores/auth.store'
 import { postAuthBroadcast } from '@/lib/auth-broadcast'
+import { playNotificationSound } from '@/lib/notification-sound'
 import { useConversationStore } from '@/features/conversations/stores/conversation.store'
 import { useMessagesStore } from '@/features/chat/stores/messages.store'
 import { useFriendsStore } from '@/features/friends/stores/friends.store'
 import type { FriendUser } from '@/features/friends/types/friends.types'
 import { conversationApi } from '@/features/conversations/services/conversation.api'
-import type { Conversation, LastMessage } from '@/features/conversations/types/conversation.types'
+import type { BlockStatus, Conversation, LastMessage } from '@/features/conversations/types/conversation.types'
 import type { Message } from '@/features/chat/types/message.types'
 
 interface UserStatusEventPayload {
@@ -35,6 +36,12 @@ interface UserTypingPayload {
   displayName: string
   avatarUrl?: string | null
   isTyping: boolean
+}
+
+interface UserBlockEventPayload {
+  blockerId: string
+  blockedId: string
+  conversationId: string | null
 }
 
 interface MessageReadPayload {
@@ -177,27 +184,7 @@ export function useSocketInit() {
         }
 
         if (!isMuted) {
-          try {
-            const AudioContextClass =
-              window.AudioContext ||
-              (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-            if (AudioContextClass) {
-              const audioCtx = new AudioContextClass()
-              const osc = audioCtx.createOscillator()
-              const gain = audioCtx.createGain()
-              osc.connect(gain)
-              gain.connect(audioCtx.destination)
-              osc.type = 'sine'
-              osc.frequency.setValueAtTime(587.33, audioCtx.currentTime)
-              osc.frequency.setValueAtTime(880, audioCtx.currentTime + 0.08)
-              gain.gain.setValueAtTime(0.15, audioCtx.currentTime)
-              gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.35)
-              osc.start()
-              osc.stop(audioCtx.currentTime + 0.35)
-            }
-          } catch {
-            // ignore audio play restriction if not yet interacted
-          }
+          playNotificationSound()
         }
       }
     }
@@ -273,6 +260,31 @@ export function useSocketInit() {
       }
     }
 
+    // Chặn / bỏ chặn realtime: cả hai phía cùng khóa/mở khóa composer (BR-38)
+    const applyBlockEvent = (payload: UserBlockEventPayload, blocked: boolean) => {
+      const myId = useAuthStore.getState().user?.id
+      if (!payload || !myId) return
+      const iAmBlocker = payload.blockerId === myId
+      const otherId = iAmBlocker ? payload.blockedId : payload.blockerId
+      const status: BlockStatus = !blocked ? 'NONE' : iAmBlocker ? 'BLOCKED_BY_ME' : 'BLOCKED_ME'
+
+      const store = useConversationStore.getState()
+      const target = payload.conversationId
+        ? store.conversations.find((c) => c.id === payload.conversationId)
+        : store.conversations.find(
+            (c) =>
+              c.type === 'DIRECT' &&
+              (c.partnerId === otherId || c.members?.some((m) => m.user?.id === otherId))
+          )
+      if (!target) return
+      store.updateConversation(target.id, {
+        blockStatus: status,
+        ...(blocked ? { isOnline: false } : {}),
+      })
+    }
+    const handleUserBlocked = (payload: UserBlockEventPayload) => applyBlockEvent(payload, true)
+    const handleUserUnblocked = (payload: UserBlockEventPayload) => applyBlockEvent(payload, false)
+
     const handleFriendRequestsChanged = () => {
       useFriendsStore.getState().fetchReceivedRequestsCount()
     }
@@ -294,6 +306,8 @@ export function useSocketInit() {
     socket.on('conversationCustomized', handleConversationCustomized)
     socket.on('friendRequestAccepted', handleFriendAccepted)
     socket.on('friendRemoved', handleFriendRemoved)
+    socket.on('userBlocked', handleUserBlocked)
+    socket.on('userUnblocked', handleUserUnblocked)
     socket.on('friendRequestReceived', handleFriendRequestsChanged)
     socket.on('friendRequestCancelled', handleFriendRequestsChanged)
     socket.on('friendRequestRejected', handleFriendRequestsChanged)
@@ -321,6 +335,8 @@ export function useSocketInit() {
       socket.off('conversationCustomized', handleConversationCustomized)
       socket.off('friendRequestAccepted', handleFriendAccepted)
       socket.off('friendRemoved', handleFriendRemoved)
+      socket.off('userBlocked', handleUserBlocked)
+      socket.off('userUnblocked', handleUserUnblocked)
       socket.off('friendRequestReceived', handleFriendRequestsChanged)
       socket.off('friendRequestCancelled', handleFriendRequestsChanged)
       socket.off('friendRequestRejected', handleFriendRequestsChanged)

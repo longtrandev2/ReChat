@@ -144,6 +144,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import type { Message } from '../types/message.types'
 import { cn, formatFileSize } from '@/lib/utils'
+import { isSafeHttpUrl, openSafeUrl } from '@/lib/safe-url'
 
 /**
  * Hàm phân tách và bôi sáng từ khóa tìm kiếm (Telegram Search Highlight)
@@ -287,6 +288,11 @@ export function MessageBubble({
     fileName: string
   ) => {
     e.stopPropagation()
+    // Chỉ cho phép http/https (chặn javascript:, data:, file:...)
+    if (!isSafeHttpUrl(fileUrl)) {
+      toast.error('Liên kết tệp không hợp lệ')
+      return
+    }
     try {
       let downloadUrl = fileUrl
       if (downloadUrl.includes('/upload/') && !downloadUrl.includes('/fl_attachment')) {
@@ -309,7 +315,7 @@ export function MessageBubble({
       if (fallbackUrl.includes('/upload/') && !fallbackUrl.includes('/fl_attachment')) {
         fallbackUrl = fallbackUrl.replace('/upload/', '/upload/fl_attachment/')
       }
-      window.open(fallbackUrl, '_blank')
+      openSafeUrl(fallbackUrl)
     }
   }
 
@@ -593,7 +599,7 @@ export function MessageBubble({
                           if (onImageClick) {
                             onImageClick(message.fileUrl!, message.content || undefined)
                           } else {
-                            window.open(message.fileUrl || '', '_blank')
+                            openSafeUrl(message.fileUrl)
                           }
                         }}
                       >

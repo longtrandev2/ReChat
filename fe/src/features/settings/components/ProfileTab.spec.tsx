@@ -89,4 +89,25 @@ describe('ProfileTab', () => {
     expect(toast.error).toHaveBeenCalledWith('Chỉ hỗ trợ ảnh JPG, PNG, WEBP hoặc GIF')
     expect(settingsApi.uploadAvatar).not.toHaveBeenCalled()
   })
+  it('resets the field when displayName changes externally and the form is not dirty', () => {
+    const { rerender } = render(<ProfileTab user={mockUser} />)
+    expect(screen.getByLabelText('Tên hiển thị')).toHaveValue('Alex Tran')
+
+    rerender(<ProfileTab user={{ ...mockUser, displayName: 'Tên Từ Server' }} />)
+
+    expect(screen.getByLabelText('Tên hiển thị')).toHaveValue('Tên Từ Server')
+  })
+
+  it('keeps the user typing when displayName changes externally while the form is dirty', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(<ProfileTab user={mockUser} />)
+
+    const input = screen.getByLabelText('Tên hiển thị')
+    await user.clear(input)
+    await user.type(input, 'Đang gõ dở')
+
+    rerender(<ProfileTab user={{ ...mockUser, displayName: 'Tên Từ Server' }} />)
+
+    expect(screen.getByLabelText('Tên hiển thị')).toHaveValue('Đang gõ dở')
+  })
 })

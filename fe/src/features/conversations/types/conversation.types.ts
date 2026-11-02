@@ -37,6 +37,9 @@ export interface ConversationMember {
   isMuted?: boolean
 }
 
+/** Trạng thái chặn của hội thoại DIRECT theo góc nhìn người dùng hiện tại (BR-38) */
+export type BlockStatus = 'NONE' | 'BLOCKED_BY_ME' | 'BLOCKED_ME'
+
 export interface Conversation {
   id: string
   type: ConversationType
@@ -45,6 +48,9 @@ export interface Conversation {
   quickEmoji?: string
   unreadCount: number
   isMuted?: boolean
+  isPinned?: boolean
+  pinnedAt?: string | null
+  blockStatus?: BlockStatus
   lastMessage: LastMessage | null
   lastMessageAt: string
   createdAt: string

@@ -273,4 +273,23 @@ describe('conversationApi Unit Tests (AAA Methodology)', () => {
     })
     expect(result).toEqual(mockRes)
   })
+  it('togglePin triggers PATCH /conversations/:id/pin with isPinned', async () => {
+    const mockRes = { conversationId: 'conv-123', isPinned: true, pinnedAt: '2026-11-01T00:00:00.000Z' }
+    vi.mocked(apiClient.patch).mockResolvedValueOnce({ data: mockRes })
+
+    const result = await conversationApi.togglePin('conv-123', true)
+
+    expect(apiClient.patch).toHaveBeenCalledWith('/conversations/conv-123/pin', { isPinned: true })
+    expect(result).toEqual(mockRes)
+  })
+
+  it('clearHistory triggers DELETE /conversations/:id/history', async () => {
+    const mockRes = { conversationId: 'conv-123', clearedAt: '2026-11-01T00:00:00.000Z' }
+    vi.mocked(apiClient.delete).mockResolvedValueOnce({ data: mockRes })
+
+    const result = await conversationApi.clearHistory('conv-123')
+
+    expect(apiClient.delete).toHaveBeenCalledWith('/conversations/conv-123/history')
+    expect(result).toEqual(mockRes)
+  })
 })

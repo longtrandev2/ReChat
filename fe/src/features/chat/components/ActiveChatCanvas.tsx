@@ -8,6 +8,9 @@ import { MessageFeed } from './MessageFeed'
 import { MessageComposer, type MessageComposerHandle } from './MessageComposer'
 import { ImageLightboxModal } from './ImageLightboxModal'
 import { ChatDetailDrawer } from './ChatDetailDrawer'
+import { BlockedComposerBar } from './BlockedComposerBar'
+import { BlockUserConfirmDialog, ClearHistoryConfirmDialog } from './ConversationConfirmDialogs'
+import { useConversationActions } from '../hooks/useConversationActions'
 import { useConversationStore } from '@/features/conversations/stores/conversation.store'
 import { useMessagesStore } from '../stores/messages.store'
 import { useSocket } from '@/hooks/useSocket'
@@ -117,6 +120,11 @@ export function ActiveChatCanvas() {
     return conversations.find((c) => c.id === conversationId)
   }, [conversations, conversationId])
 
+  const actions = useConversationActions(conversation, partner?.id)
+  const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false)
+  const [isBlockConfirmOpen, setIsBlockConfirmOpen] = useState(false)
+  const blockStatus = conversation?.type === 'DIRECT' ? actions.blockStatus : 'NONE'
+
   const messages = useMemo(() => {
     return conversationId ? messagesByConversation[conversationId] || [] : []
   }, [messagesByConversation, conversationId])
@@ -137,6 +145,8 @@ export function ActiveChatCanvas() {
   // Trạng thái online của đối phương qua socket presence hoặc initial detail
   const isPartnerOnline = useMemo(() => {
     if (!conversation || conversation.type === 'GROUP' || !partner?.id) return false
+    // Hai bên chặn nhau: ẩn trạng thái hoạt động (BR-38)
+    if (conversation.blockStatus && conversation.blockStatus !== 'NONE') return false
     try {
       if (typeof isUserOnline === 'function' && isUserOnline(partner.id)) {
         return true
@@ -194,9 +204,33 @@ export function ActiveChatCanvas() {
     setActiveConversation(conversationId)
 
     const socket = socketClient.getSocket()
+
+    // Join room ở lần kết nối đầu và mọi lần reconnect (server mất room membership khi rớt kết nối)
+    const joinRoom = () => {
+      socket?.emit('joinConversation', { conversationId })
+      socket?.emit('markAsRead', { conversationId })
+    }
     if (socket && socket.connected) {
-      socket.emit('joinConversation', { conversationId })
-      socket.emit('markAsRead', { conversationId })
+      joinRoom()
+    }
+    if (socket && typeof socket.on === 'function') {
+      socket.on('connect', joinRoom)
+    }
+
+    // Gửi vào hội thoại bị chặn -> 403 CONVERSATION_BLOCKED: chuyển sang trạng thái khóa (BR-38)
+    const onSocketException = (payload?: { errorCode?: string; message?: string }) => {
+      const isBlockedError =
+        payload?.errorCode === 'CONVERSATION_BLOCKED' ||
+        Boolean(payload?.message?.includes('CONVERSATION_BLOCKED'))
+      if (!isBlockedError) return
+      const current = useConversationStore.getState().conversations.find((c) => c.id === conversationId)
+      if (current?.type === 'DIRECT' && (!current.blockStatus || current.blockStatus === 'NONE')) {
+        useConversationStore.getState().updateConversation(conversationId, {
+          blockStatus: 'BLOCKED_ME',
+          isOnline: false,
+        })
+      }
+      toast.error('Không thể gửi tin nhắn: cuộc trò chuyện đã bị chặn')
     }
 
     // Tải 30 tin nhắn mới nhất
@@ -346,6 +380,7 @@ export function ActiveChatCanvas() {
       socket.on('conversationCustomized', onConversationCustomized)
       socket.on('groupMemberUpdated', onGroupMemberUpdated)
       socket.on('groupMembershipChanged', onGroupMembershipChanged)
+      socket.on('exception', onSocketException)
     }
 
     return () => {
@@ -359,6 +394,8 @@ export function ActiveChatCanvas() {
           socket.off('conversationCustomized', onConversationCustomized)
           socket.off('groupMemberUpdated', onGroupMemberUpdated)
           socket.off('groupMembershipChanged', onGroupMembershipChanged)
+          socket.off('exception', onSocketException)
+          socket.off('connect', joinRoom)
         }
         if (socket.connected && typeof socket.emit === 'function') {
           socket.emit('leaveConversation', { conversationId })
@@ -641,6 +678,12 @@ export function ActiveChatCanvas() {
         onSearchClick={handleToggleSearch}
         onToggleMute={handleToggleMute}
         onInfoClick={() => setIsDetailOpen((prev) => !prev)}
+        isPinned={actions.isPinned}
+        blockStatus={blockStatus}
+        onTogglePin={actions.togglePin}
+        onClearHistory={() => setIsClearConfirmOpen(true)}
+        onBlock={() => setIsBlockConfirmOpen(true)}
+        onUnblock={actions.unblockPartner}
       />
 
       {/* Thanh tìm kiếm tin nhắn trong hội thoại */}
@@ -688,13 +731,21 @@ export function ActiveChatCanvas() {
             onUnpin={handleUnpinMessage}
           />
 
-          <MessageComposer
-            ref={composerRef}
-            conversationId={conversation.id}
-            quickEmoji={conversation.quickEmoji || '👍'}
-            onSendMessage={handleSendMessage}
-            onEditMessage={handleEditMessage}
-          />
+          {blockStatus !== 'NONE' ? (
+            <BlockedComposerBar
+              blockStatus={blockStatus}
+              isUnblocking={actions.isBlocking}
+              onUnblock={() => void actions.unblockPartner()}
+            />
+          ) : (
+            <MessageComposer
+              ref={composerRef}
+              conversationId={conversation.id}
+              quickEmoji={conversation.quickEmoji || '👍'}
+              onSendMessage={handleSendMessage}
+              onEditMessage={handleEditMessage}
+            />
+          )}
         </div>
 
         {/* Bảng chi tiết bên phải (Telegram / Messenger Drawer) */}
@@ -713,6 +764,20 @@ export function ActiveChatCanvas() {
           onSearchClick={() => setIsSearchOpen(true)}
         />
       </div>
+
+      <ClearHistoryConfirmDialog
+        open={isClearConfirmOpen}
+        onOpenChange={setIsClearConfirmOpen}
+        onConfirm={actions.clearHistory}
+        isLoading={actions.isClearing}
+      />
+      <BlockUserConfirmDialog
+        open={isBlockConfirmOpen}
+        onOpenChange={setIsBlockConfirmOpen}
+        name={partner?.displayName || conversation.name}
+        onConfirm={actions.blockPartner}
+        isLoading={actions.isBlocking}
+      />
 
       {/* Lightbox modal xem ảnh phóng to toàn màn hình */}
       <ImageLightboxModal
