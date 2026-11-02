@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { corsOriginCallback, getAllowedOrigins } from './cors-origins.js';
+import { corsOriginCallback, getAllowedOrigins, getPrimaryClientUrl } from './cors-origins.js';
 import { getJwtSecret } from './jwt-secret.js';
 import { generateOtp } from '../utils/generate-otp.js';
 
@@ -26,6 +26,11 @@ describe('Security config helpers', () => {
             process.env.CLIENT_URL = 'https://app.rechat.vn';
             expect(check('https://app.rechat.vn')).toEqual([null, true]);
             expect(check(undefined)).toEqual([null, true]);
+        });
+
+        it('uses only the first origin as the primary client URL for email links (M5)', () => {
+            expect(getPrimaryClientUrl('https://app.rechat.vn/, http://localhost:5173')).toBe('https://app.rechat.vn');
+            expect(getPrimaryClientUrl(undefined)).toBe('http://localhost:5173');
         });
 
         it('rejects any origin outside the whitelist (no more reflecting every origin)', () => {

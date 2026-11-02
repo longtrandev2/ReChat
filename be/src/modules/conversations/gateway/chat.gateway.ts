@@ -33,6 +33,10 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { RedisService } from '../../../common/redis/redis.service.js';
 import { getAccessTokenRevocationReason } from '../../../common/auth/access-token-revocation.js';
 import { corsOriginCallback } from '../../../common/config/cors-origins.js';
+import { AUTH_SESSIONS_REVOKED, AuthSessionsRevokedEvent } from '../../../common/events/auth-session.events.js';
+
+/** Room riêng của từng thiết bị: cho phép ngắt đúng các socket của thiết bị bị đăng xuất từ xa */
+export const deviceRoom = (userId: string, deviceId: string) => `device_${userId}_${deviceId}`;
 import {
     FriendRequestSentEvent,
     FriendRequestAcceptedEvent,
@@ -129,9 +133,14 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                 displayName: dbUser?.displayName || payload.username,
                 avatarUrl: dbUser?.avatarUrl || null,
             };
+            client.data.deviceId = payload.did;
 
             // 5. Gia nhập personal room để nhận event broadcast riêng (multi-tab/device)
             await client.join(`user_${userId}`);
+            // 5b. Room theo thiết bị (token mới có claim did) để thu hồi phiên ngắt được socket đang mở
+            if (payload.did) {
+                await client.join(deviceRoom(userId, payload.did));
+            }
 
             // 6. Đăng ký socket vào ConnectionManager (RAM registry)
             const { isFirstConnection, totalConnections } = this.connectionManager.addConnection(
@@ -554,6 +563,27 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     /**
      * Thông báo lời mời kết bạn mới tới người nhận (user_${addresseeId})
      */
+    /**
+     * Thu hồi phiên (đăng xuất từ xa, đổi / đặt lại mật khẩu): ngắt ngay socket đang mở của thiết bị bị thu hồi.
+     * Kiểm tra token chỉ chạy lúc handshake, nên không ngắt thì thiết bị đó vẫn nhận tin nhắn realtime.
+     * Redis adapter đảm bảo disconnectSockets có hiệu lực trên mọi pod.
+     */
+    @OnEvent(AUTH_SESSIONS_REVOKED)
+    handleSessionsRevoked(event: AuthSessionsRevokedEvent) {
+        if (!this.server) return;
+        const { userId, scope } = event;
+
+        if (scope.type === 'all') {
+            this.server.in(`user_${userId}`).disconnectSockets(true);
+        } else if (scope.type === 'allExcept') {
+            this.server.in(`user_${userId}`).except(deviceRoom(userId, scope.deviceId)).disconnectSockets(true);
+        } else {
+            for (const deviceId of scope.deviceIds) {
+                this.server.in(deviceRoom(userId, deviceId)).disconnectSockets(true);
+            }
+        }
+    }
+
     @OnEvent('friend.request_sent')
     handleFriendRequestSent(event: FriendRequestSentEvent) {
         if (!this.server) return;

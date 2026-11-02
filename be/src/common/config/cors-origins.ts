@@ -6,11 +6,21 @@ const DEFAULT_CLIENT_URL = 'http://localhost:5173';
  * Đọc lazy tại runtime vì decorator @WebSocketGateway được đánh giá trước khi ConfigModule nạp .env.
  */
 export function getAllowedOrigins(): string[] {
-    const raw = process.env.CLIENT_URL || DEFAULT_CLIENT_URL;
-    return raw
+    return parseOrigins(process.env.CLIENT_URL);
+}
+
+/** Tách CLIENT_URL (có thể nhiều origin, phân tách bằng dấu phẩy) thành danh sách origin chuẩn hóa. */
+export function parseOrigins(raw?: string | null): string[] {
+    const origins = (raw || DEFAULT_CLIENT_URL)
         .split(',')
         .map((origin) => origin.trim().replace(/\/+$/, ''))
         .filter(Boolean);
+    return origins.length > 0 ? origins : [DEFAULT_CLIENT_URL];
+}
+
+/** Origin chính của web client (origin đầu tiên): dùng để dựng link trong email (đặt lại mật khẩu...). */
+export function getPrimaryClientUrl(raw?: string | null): string {
+    return parseOrigins(raw)[0];
 }
 
 /**

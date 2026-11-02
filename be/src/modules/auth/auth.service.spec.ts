@@ -10,6 +10,8 @@ import { BadRequestException, ConflictException, ForbiddenException, NotFoundExc
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { TokenManagerService } from './token-manager.service.js';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { AUTH_SESSIONS_REVOKED } from '../../common/events/auth-session.events.js';
 
 describe('AuthService', () => {
     let service: AuthService;
@@ -18,6 +20,7 @@ describe('AuthService', () => {
     let mockRedisService: any;
     let mockMailService: any;
     let mockTokenManagerService: any;
+    let mockEventEmitter: { emit: ReturnType<typeof vi.fn> };
 
     beforeEach(async () => {
         mockUserRepository = {
@@ -68,6 +71,8 @@ describe('AuthService', () => {
             set: vi.fn().mockResolvedValue('OK'),
             del: vi.fn().mockResolvedValue(1),
             exists: vi.fn().mockResolvedValue(0),
+            incr: vi.fn().mockResolvedValue(1),
+            expire: vi.fn().mockResolvedValue(1),
             saveSession: vi.fn().mockResolvedValue(undefined),
             getSession: vi.fn().mockResolvedValue(null),
             getUserSessions: vi.fn().mockResolvedValue([]),
@@ -105,6 +110,10 @@ describe('AuthService', () => {
                 {
                     provide: TokenManagerService,
                     useValue: mockTokenManagerService,
+                },
+                {
+                    provide: EventEmitter2,
+                    useValue: (mockEventEmitter = { emit: vi.fn() }),
                 },
                 {
                     provide: ConfigService,
@@ -217,11 +226,10 @@ describe('AuthService', () => {
         it('should count wrong OTP attempts and invalidate the OTP after 5 failures', async () => {
             const user = { id: 'uuid-1', email: 'alex@example.com', isEmailVerified: false } as User;
             mockUserRepository.findOne.mockResolvedValue(user);
-            mockRedisService.get.mockImplementation(async (key: string) => {
-                if (key === 'email_verify:alex@example.com') return '123456';
-                if (key === 'email_verify_attempts:alex@example.com') return '4';
-                return null;
-            });
+            mockRedisService.get.mockImplementation(async (key: string) =>
+                key === 'email_verify:alex@example.com' ? '123456' : null,
+            );
+            mockRedisService.incr.mockResolvedValue(5);
 
             await expect(service.verifyEmail({ email: 'alex@example.com', otp: '000000' })).rejects.toThrow(
                 'Nhập sai mã OTP quá 5 lần',
@@ -242,7 +250,16 @@ describe('AuthService', () => {
             await expect(service.verifyEmail({ email: 'alex@example.com', otp: '000000' })).rejects.toThrow(
                 'Mã OTP không chính xác',
             );
-            expect(mockRedisService.set).toHaveBeenCalledWith('email_verify_attempts:alex@example.com', '1', 900);
+            // Đếm nguyên tử bằng INCR (không read-modify-write)
+            expect(mockRedisService.incr).toHaveBeenCalledWith('email_verify_attempts:alex@example.com', 900);
+        });
+
+        it('should cap email OTP resends per hour', async () => {
+            mockUserRepository.findOne.mockResolvedValue({ id: 'uuid-1', email: 'alex@example.com', isEmailVerified: false });
+            mockRedisService.incr.mockResolvedValue(6);
+
+            await expect(service.resendVerification({ email: 'alex@example.com' })).rejects.toThrow('quá nhiều lần');
+            expect(mockMailService.sendVerificationEmail).not.toHaveBeenCalled();
         });
 
         it('should throw BadRequestException if OTP expired or invalid', async () => {
@@ -320,7 +337,11 @@ describe('AuthService', () => {
             const result = await service.forgotPassword({ email: 'alex@example.com' });
             expect(result.message).toContain('hướng dẫn đặt lại mật khẩu');
             expect(mockRedisService.set).toHaveBeenCalled();
-            expect(mockMailService.sendPasswordResetEmail).toHaveBeenCalled();
+            expect(mockMailService.sendPasswordResetEmail).toHaveBeenCalledWith(
+                'alex@example.com',
+                'alex',
+                expect.stringMatching(/^http:\/\/localhost:5173\/reset-password\?token=/),
+            );
         });
 
         it('should reset password successfully when reset token is valid', async () => {
@@ -342,8 +363,13 @@ describe('AuthService', () => {
             expect(mockTokenManagerService.revokeAllDevices).toHaveBeenCalledWith('user-1');
             expect(mockRedisService.set).toHaveBeenCalledWith(
                 'auth:user_min_issued_at:user-1',
-                expect.stringMatching(/^\d+000$/),
+                expect.stringMatching(/^\d{13}$/),
                 2592000,
+            );
+            // H2: ngắt mọi socket đang mở của user
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                AUTH_SESSIONS_REVOKED,
+                expect.objectContaining({ userId: 'user-1', scope: { type: 'all' } }),
             );
         });
     });
@@ -445,7 +471,17 @@ describe('AuthService', () => {
             expect(result.message).toContain('kích hoạt thành công');
             expect(mockUserRepository.update).toHaveBeenCalledWith('user-1', { twoFactorEnabled: true });
             expect(mockUserRepository.save).not.toHaveBeenCalled();
+            expect(mockRedisService.incr).toHaveBeenCalledWith('2fa_setup_attempts:user-1', 300);
             expect(mockRedisService.del).toHaveBeenCalledWith('2fa_setup:user-1');
+        });
+
+        it('should burn the 2FA setup OTP after 5 wrong attempts', async () => {
+            mockRedisService.get.mockResolvedValue('654321');
+            mockRedisService.incr.mockResolvedValue(5);
+
+            await expect(service.enable2fa({ id: 'user-1' } as User, { otp: '000000' })).rejects.toThrow('quá 5 lần');
+            expect(mockRedisService.del).toHaveBeenCalledWith('2fa_setup:user-1', '2fa_setup_attempts:user-1');
+            expect(mockUserRepository.update).not.toHaveBeenCalled();
         });
 
         it('should disable 2FA by re-fetching the password hash (req.user has no password)', async () => {
@@ -470,7 +506,7 @@ describe('AuthService', () => {
         });
 
         it('should keep the failed-attempt counter when resending the 2FA login OTP', async () => {
-            const mfaData = { userId: 'u1', email: 'a@x.com', username: 'alice', otp: '111111', attempts: 4 };
+            const mfaData = { userId: 'u1', email: 'a@x.com', username: 'alice', otp: '111111' };
             mockRedisService.get.mockResolvedValue(JSON.stringify(mfaData));
 
             await service.resend2faLoginOtp({ mfaToken: 'mfa-1' });
@@ -478,9 +514,20 @@ describe('AuthService', () => {
             const saved = JSON.parse(
                 mockRedisService.set.mock.calls.find((call: any[]) => call[0] === 'mfa_login:mfa-1')[1],
             );
-            expect(saved.attempts).toBe(4);
             expect(saved.resends).toBe(1);
             expect(saved.otp).toMatch(/^\d{6}$/);
+            // Bộ đếm lượt sai không bị xóa, chỉ được gia hạn cùng phiên MFA
+            expect(mockRedisService.del).not.toHaveBeenCalledWith('mfa_login_attempts:mfa-1');
+            expect(mockRedisService.expire).toHaveBeenCalledWith('mfa_login_attempts:mfa-1', 300);
+        });
+
+        it('should cancel the 2FA login session after 5 wrong OTPs via the atomic counter', async () => {
+            const mfaData = { userId: 'u1', email: 'a@x.com', username: 'alice', otp: '123456' };
+            mockRedisService.get.mockResolvedValue(JSON.stringify(mfaData));
+            mockRedisService.incr.mockResolvedValue(5);
+
+            await expect(service.verify2faLogin({ mfaToken: 'mfa-1', otp: '999999' })).rejects.toThrow('quá 5 lần');
+            expect(mockRedisService.del).toHaveBeenCalledWith('mfa_login:mfa-1', 'mfa_login_attempts:mfa-1');
         });
 
         it('should refuse resending the 2FA login OTP more than 3 times', async () => {
@@ -510,6 +557,10 @@ describe('AuthService', () => {
             expect(result.message).toContain('Đã kết thúc phiên');
             expect(mockTokenManagerService.revokeDevice).toHaveBeenCalledWith('user-1', 'dev-2');
             expect(mockRedisService.deleteSession).toHaveBeenCalledWith('user-1', 'dev-2');
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                AUTH_SESSIONS_REVOKED,
+                expect.objectContaining({ userId: 'user-1', scope: { type: 'devices', deviceIds: ['dev-2'] } }),
+            );
         });
 
         it('should blacklist token and revoke refresh token on logout', async () => {
@@ -551,6 +602,10 @@ describe('AuthService', () => {
             expect(mockRedisService.deleteSession).toHaveBeenCalledWith('user-1', 'dev-2');
             expect(mockRedisService.deleteSession).toHaveBeenCalledWith('user-1', 'dev-3');
             expect(mockRedisService.deleteSession).not.toHaveBeenCalledWith('user-1', 'dev-1');
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                AUTH_SESSIONS_REVOKED,
+                expect.objectContaining({ userId: 'user-1', scope: { type: 'allExcept', deviceId: 'dev-1' } }),
+            );
         });
 
         it('should throw UnauthorizedException when the current password is wrong', async () => {

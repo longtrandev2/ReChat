@@ -9,7 +9,11 @@ import {
     REFRESH_TOKEN_TTL_SECONDS,
 } from './constants/auth-cookie.constants.js';
 import { getJwtSecret } from '../../common/config/jwt-secret.js';
-import { currentSecondInMs, deviceMinIssuedAtKey } from '../../common/auth/access-token-revocation.js';
+import {
+    deviceMinIssuedAtKey,
+    isIssuedBeforeMarker,
+    userMinIssuedAtKey,
+} from '../../common/auth/access-token-revocation.js';
 
 /** deviceId -> familyId: cho phép thu hồi đúng chuỗi refresh token của một thiết bị */
 const deviceFamilyKey = (userId: string, deviceId: string) => `auth:device_family:${userId}:${deviceId}`;
@@ -104,6 +108,7 @@ export class TokenManagerService {
                 role: user.role,
                 jti,
                 did: deviceId, // Device ID: phục vụ đăng xuất từ xa theo từng thiết bị
+                iatMs: now, // Thời điểm cấp theo ms: so sánh chính xác với mốc thu hồi (iat chỉ có độ phân giải giây)
             },
             {
                 secret: jwtSecret,
@@ -258,6 +263,9 @@ export class TokenManagerService {
             throw new UnauthorizedException('Phiên đăng nhập không thuộc thiết bị này');
         }
 
+        // 3b. Family đã bị thu hồi (reset/đổi mật khẩu, đăng xuất từ xa) hoặc bị thay thế bởi lần đăng nhập mới
+        await this.assertFamilyStillActive(record);
+
         // 4. Tạo cặp token mới kế thừa Token Family
         const effectiveDeviceId = deviceId || record.deviceId;
         const newPair = await this.generateTokenPair(
@@ -269,6 +277,9 @@ export class TokenManagerService {
             effectiveDeviceId,
             record.familyId,
         );
+
+        // 4b. Kiểm tra lại sau khi ghi token mới: chặn race "refresh song song với thu hồi" làm sống lại family
+        await this.assertFamilyStillActive(record);
 
         // 4. Vô hiệu hóa token cũ:
         // - Xóa key active refresh token
@@ -307,12 +318,16 @@ export class TokenManagerService {
         isRotation: boolean,
     ): Promise<void> {
         const key = deviceFamilyKey(userId, deviceId);
+        const boundFamilyId = await this.redisService.get(key);
 
-        if (!isRotation && deviceId !== SHARED_FALLBACK_DEVICE_ID) {
-            const previousFamilyId = await this.redisService.get(key);
-            if (previousFamilyId && previousFamilyId !== familyId) {
-                await this.revokeFamily(previousFamilyId);
+        if (isRotation) {
+            // Xoay vòng không được ghi đè family khác (vd: thiết bị vừa đăng nhập lại song song) -> family cũ
+            // sẽ bị assertFamilyStillActive() từ chối; chỉ gắn khi chưa có (token cấp trước khi có chỉ mục) hoặc trùng
+            if (boundFamilyId && boundFamilyId !== familyId) {
+                return;
             }
+        } else if (deviceId !== SHARED_FALLBACK_DEVICE_ID && boundFamilyId && boundFamilyId !== familyId) {
+            await this.revokeFamily(boundFamilyId);
         }
 
         await this.redisService.set(key, familyId, REFRESH_TOKEN_TTL_SECONDS);
@@ -334,11 +349,11 @@ export class TokenManagerService {
 
         await this.redisService.del(key);
         await this.redisService.srem(userTokenDevicesKey(userId), deviceId);
-        // TTL dư 60s so với Access Token: sau thời gian đó mọi token cũ của thiết bị đã tự hết hạn
+        // Mốc theo ms, sống bằng Refresh Token (30 ngày) vì /auth/refresh cũng đối chiếu mốc này
         await this.redisService.set(
             deviceMinIssuedAtKey(userId, deviceId),
-            String(currentSecondInMs()),
-            ACCESS_TOKEN_TTL_SECONDS + 60,
+            String(Date.now()),
+            REFRESH_TOKEN_TTL_SECONDS,
         );
     }
 
@@ -347,14 +362,45 @@ export class TokenManagerService {
      * @returns danh sách deviceId đã bị thu hồi
      */
     async revokeAllDevices(userId: string, exceptDeviceId?: string): Promise<string[]> {
-        const deviceIds = await this.redisService.smembers(userTokenDevicesKey(userId));
-        const targets = deviceIds.filter((id) => id !== exceptDeviceId);
+        // Gộp cả tập thiết bị cũ (auth:user_sessions) để không bỏ sót token cấp trước khi có chỉ mục thiết bị
+        const [indexedDevices, legacyDevices] = await Promise.all([
+            this.redisService.smembers(userTokenDevicesKey(userId)),
+            this.redisService.smembers(`auth:user_sessions:${userId}`),
+        ]);
+        const targets = [...new Set([...indexedDevices, ...legacyDevices])].filter((id) => id !== exceptDeviceId);
 
         for (const deviceId of targets) {
             await this.revokeDevice(userId, deviceId);
         }
 
         return targets;
+    }
+
+    /**
+     * Từ chối refresh nếu family đã bị thu hồi gián tiếp:
+     * - Token được cấp trước mốc thu hồi của user (reset mật khẩu) hoặc của thiết bị (đăng xuất / đổi mật khẩu)
+     * - Thiết bị đã gắn sang family khác (đăng nhập lại) => family này đã bị thay thế
+     * Khi vi phạm: hủy toàn bộ family (kể cả token vừa cấp trong race) và trả 401.
+     */
+    private async assertFamilyStillActive(record: RefreshTokenMetadata): Promise<void> {
+        const [userMarker, deviceMarker, boundFamilyId] = await Promise.all([
+            this.redisService.get(userMinIssuedAtKey(record.userId)),
+            this.redisService.get(deviceMinIssuedAtKey(record.userId, record.deviceId)),
+            this.redisService.get(deviceFamilyKey(record.userId, record.deviceId)),
+        ]);
+
+        const isRevokedByMarker =
+            isIssuedBeforeMarker(record.createdAt, userMarker) || isIssuedBeforeMarker(record.createdAt, deviceMarker);
+        const isSuperseded =
+            record.deviceId !== SHARED_FALLBACK_DEVICE_ID && Boolean(boundFamilyId) && boundFamilyId !== record.familyId;
+
+        if (isRevokedByMarker || isSuperseded) {
+            this.logger.warn(
+                `[Revocation] Từ chối refresh family ${record.familyId} của thiết bị ${record.deviceId} (User: ${record.userId})`,
+            );
+            await this.revokeFamily(record.familyId);
+            throw new UnauthorizedException('Phiên đăng nhập đã bị thu hồi. Vui lòng đăng nhập lại.');
+        }
     }
 
     /**

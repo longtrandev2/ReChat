@@ -34,15 +34,26 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { TokenManagerService } from "./token-manager.service.js";
 import { toAuthUser } from "./auth-user.mapper.js";
+import { assertOtpAttempt } from "./otp-attempt-guard.js";
 import { REFRESH_TOKEN_TTL_SECONDS } from "./constants/auth-cookie.constants.js";
 import { generateOtp } from "../../common/utils/generate-otp.js";
-import { currentSecondInMs, userMinIssuedAtKey } from "../../common/auth/access-token-revocation.js";
+import { userMinIssuedAtKey } from "../../common/auth/access-token-revocation.js";
+import { getPrimaryClientUrl } from "../../common/config/cors-origins.js";
+import { EventEmitter2 } from "@nestjs/event-emitter";
+import {
+    AUTH_SESSIONS_REVOKED,
+    AuthSessionsRevokedEvent,
+    type RevokedSessionScope,
+} from "../../common/events/auth-session.events.js";
 
-/** Số lần nhập sai OTP tối đa trước khi hủy mã (BR-25) */
-const MAX_OTP_ATTEMPTS = 5;
 /** Số lần gửi lại OTP 2FA đăng nhập tối đa cho một mfaToken */
 const MAX_2FA_LOGIN_RESENDS = 3;
+/** Số lần gửi lại OTP xác thực email tối đa mỗi giờ (mỗi lần gửi lại cấp thêm 5 lượt thử) */
+const MAX_EMAIL_OTP_RESENDS_PER_HOUR = 5;
 const emailVerifyAttemptsKey = (email: string) => `email_verify_attempts:${email}`;
+const emailVerifyResendsKey = (email: string) => `email_verify_resends:${email}`;
+const mfaLoginAttemptsKey = (mfaToken: string) => `mfa_login_attempts:${mfaToken}`;
+const twoFactorSetupAttemptsKey = (userId: string) => `2fa_setup_attempts:${userId}`;
 /**
  * 401 do sai mật khẩu xác nhận (không phải do token hết hạn): FE dựa vào mã này để KHÔNG kích hoạt silent refresh.
  */
@@ -58,6 +69,7 @@ export class AuthService {
         private readonly mailService: MailService,
         private readonly configService: ConfigService,
         private readonly tokenManagerService: TokenManagerService,
+        private readonly eventEmitter: EventEmitter2,
     ) { }
 
     async register(dto: RegisterDto): Promise<{ message: string; email?: string }> {
@@ -149,10 +161,14 @@ export class AuthService {
             throw new BadRequestException('Mã OTP đã hết hạn hoặc không tồn tại');
         }
 
-        if (cachedOtp !== dto.otp.trim()) {
-            await this.registerFailedEmailOtpAttempt(normalizedEmail);
-            throw new BadRequestException('Mã OTP không chính xác');
-        }
+        await assertOtpAttempt(this.redisService, {
+            otpKey: `email_verify:${normalizedEmail}`,
+            counterKey: emailVerifyAttemptsKey(normalizedEmail),
+            ttlSeconds: 900,
+            isMatch: cachedOtp === dto.otp.trim(),
+            exceededMessage: 'Nhập sai mã OTP quá 5 lần. Vui lòng yêu cầu gửi lại mã mới.',
+            wrongMessage: 'Mã OTP không chính xác',
+        });
 
         // Kích hoạt tài khoản
         user.isEmailVerified = true;
@@ -177,22 +193,6 @@ export class AuthService {
         };
     }
 
-    /**
-     * Đếm số lần nhập sai OTP xác thực email. Quá MAX_OTP_ATTEMPTS lần thì hủy OTP, buộc gửi lại mã mới
-     * (chống brute-force mã 6 chữ số trong 15 phút).
-     */
-    private async registerFailedEmailOtpAttempt(normalizedEmail: string): Promise<void> {
-        const key = emailVerifyAttemptsKey(normalizedEmail);
-        const attempts = Number((await this.redisService.get(key)) || 0) + 1;
-
-        if (attempts >= MAX_OTP_ATTEMPTS) {
-            await this.redisService.del(`email_verify:${normalizedEmail}`, key);
-            throw new BadRequestException('Nhập sai mã OTP quá 5 lần. Vui lòng yêu cầu gửi lại mã mới.');
-        }
-
-        await this.redisService.set(key, String(attempts), 900);
-    }
-
     async resendVerification(dto: ResendVerificationDto): Promise<{ message: string }> {
         const normalizedEmail = dto.email.trim().toLowerCase();
         const user = await this.userRepository.findOne({ where: { email: normalizedEmail } });
@@ -208,6 +208,12 @@ export class AuthService {
         const isLimited = await this.redisService.exists(`resend_limit:${normalizedEmail}`);
         if (isLimited) {
             throw new HttpException('Vui lòng đợi 60 giây trước khi yêu cầu gửi lại mã mới', HttpStatus.TOO_MANY_REQUESTS);
+        }
+
+        // Mỗi lần gửi lại cấp 5 lượt thử mới => giới hạn số lần gửi lại để tổng số lượt đoán có trần
+        const resends = await this.redisService.incr(emailVerifyResendsKey(normalizedEmail), 3600);
+        if (resends > MAX_EMAIL_OTP_RESENDS_PER_HOUR) {
+            throw new HttpException('Bạn đã yêu cầu gửi lại mã quá nhiều lần. Vui lòng thử lại sau 1 giờ.', HttpStatus.TOO_MANY_REQUESTS);
         }
 
         const otp = generateOtp();
@@ -313,6 +319,7 @@ export class AuthService {
 
         const otp = generateOtp();
         await this.redisService.set(`2fa_setup:${user.id}`, otp, 300); // 5 phút
+        await this.redisService.del(twoFactorSetupAttemptsKey(user.id));
 
         await this.mailService.sendTwoFactorOtpEmail(user.email, user.username, otp, 'setup');
 
@@ -328,9 +335,14 @@ export class AuthService {
             throw new BadRequestException('Mã xác thực đã hết hạn hoặc không tồn tại. Vui lòng thử lại');
         }
 
-        if (cachedOtp !== dto.otp.trim()) {
-            throw new BadRequestException('Mã xác thực không chính xác');
-        }
+        await assertOtpAttempt(this.redisService, {
+            otpKey: `2fa_setup:${user.id}`,
+            counterKey: twoFactorSetupAttemptsKey(user.id),
+            ttlSeconds: 300,
+            isMatch: cachedOtp === dto.otp.trim(),
+            exceededMessage: 'Nhập sai mã quá 5 lần. Vui lòng yêu cầu gửi mã mới.',
+            wrongMessage: 'Mã xác thực không chính xác',
+        });
 
         // Chỉ cập nhật đúng cột twoFactorEnabled (req.user không chứa password, không save cả entity)
         await this.userRepository.update(user.id, { twoFactorEnabled: true });
@@ -370,16 +382,15 @@ export class AuthService {
 
         const mfaData = JSON.parse(cachedRaw);
 
-        if (mfaData.attempts >= MAX_OTP_ATTEMPTS) {
-            await this.redisService.del(`mfa_login:${dto.mfaToken}`);
-            throw new BadRequestException('Nhập sai mã OTP quá 5 lần. Vui lòng đăng nhập lại.');
-        }
-
-        if (mfaData.otp !== dto.otp.trim()) {
-            mfaData.attempts += 1;
-            await this.redisService.set(`mfa_login:${dto.mfaToken}`, JSON.stringify(mfaData), 300);
-            throw new BadRequestException('Mã xác thực không chính xác');
-        }
+        // Bộ đếm riêng (INCR) thay vì ghi lại JSON: tránh vượt giới hạn khi gửi song song và tránh ghi đè OTP mới
+        await assertOtpAttempt(this.redisService, {
+            otpKey: `mfa_login:${dto.mfaToken}`,
+            counterKey: mfaLoginAttemptsKey(dto.mfaToken),
+            ttlSeconds: 300,
+            isMatch: mfaData.otp === dto.otp.trim(),
+            exceededMessage: 'Nhập sai mã OTP quá 5 lần. Vui lòng đăng nhập lại.',
+            wrongMessage: 'Mã xác thực không chính xác',
+        });
 
         // Xác thực thành công -> xóa phiên MFA tạm
         await this.redisService.del(`mfa_login:${dto.mfaToken}`);
@@ -421,7 +432,7 @@ export class AuthService {
         }
 
         const mfaData = JSON.parse(cachedRaw);
-        // KHÔNG reset attempts: nếu reset, kẻ tấn công đoán OTP vô hạn bằng cách gửi lại mã liên tục (BR-25)
+        // KHÔNG reset bộ đếm lượt sai: nếu reset, kẻ tấn công đoán OTP vô hạn bằng cách gửi lại mã liên tục (BR-25)
         const resends = Number(mfaData.resends || 0);
         if (resends >= MAX_2FA_LOGIN_RESENDS) {
             throw new BadRequestException('Đã vượt quá số lần gửi lại mã. Vui lòng đăng nhập lại.');
@@ -431,6 +442,8 @@ export class AuthService {
         mfaData.resends = resends + 1;
 
         await this.redisService.set(`mfa_login:${dto.mfaToken}`, JSON.stringify(mfaData), 300);
+        // Gia hạn bộ đếm lượt sai cùng phiên MFA để bộ đếm không hết hạn trước (tránh reset lượt thử)
+        await this.redisService.expire(mfaLoginAttemptsKey(dto.mfaToken), 300);
         await this.redisService.set(`resend_2fa_limit:${dto.mfaToken}`, '1', 60);
 
         await this.mailService.sendTwoFactorOtpEmail(mfaData.email, mfaData.username, newOtp, 'login');
@@ -452,6 +465,7 @@ export class AuthService {
         // Thu hồi thật: hủy refresh token family + chặn access token đang dùng của thiết bị (BR-27)
         await this.tokenManagerService.revokeDevice(userId, targetDeviceId);
         await this.redisService.deleteSession(userId, targetDeviceId);
+        this.emitSessionsRevoked(userId, { type: 'devices', deviceIds: [targetDeviceId] });
         return {
             message: `Đã kết thúc phiên đăng nhập của thiết bị ${targetDeviceId}`,
         };
@@ -513,6 +527,7 @@ export class AuthService {
         if (userId && deviceId) {
             await this.tokenManagerService.revokeDevice(userId, deviceId);
             await this.redisService.deleteSession(userId, deviceId);
+            this.emitSessionsRevoked(userId, { type: 'devices', deviceIds: [deviceId] });
         }
 
         return {
@@ -529,7 +544,8 @@ export class AuthService {
             const resetToken = randomUUID();
             await this.redisService.set(`pwd_reset:${resetToken}`, user.id, 900); // 15 phút
 
-            const clientUrl = (this.configService.get<string>('CLIENT_URL') || 'http://localhost:5173').replace(/\/+$/, '');
+            // CLIENT_URL có thể chứa nhiều origin (CORS whitelist) => link email dùng origin chính
+            const clientUrl = getPrimaryClientUrl(this.configService.get<string>('CLIENT_URL'));
             const resetLink = `${clientUrl}/reset-password?token=${resetToken}`;
             await this.mailService.sendPasswordResetEmail(normalizedEmail, user.username, resetLink);
         }
@@ -565,11 +581,9 @@ export class AuthService {
         await this.tokenManagerService.revokeAllDevices(user.id);
         await this.redisService.deleteAllUserSessions(user.id);
         // Chặn cả token cấp trước khi có chỉ mục thiết bị (không nằm trong user_token_devices)
-        await this.redisService.set(
-            userMinIssuedAtKey(user.id),
-            String(currentSecondInMs()),
-            REFRESH_TOKEN_TTL_SECONDS,
-        );
+        // Mốc ms dùng cho cả Access Token (claim iatMs) và /auth/refresh (metadata.createdAt)
+        await this.redisService.set(userMinIssuedAtKey(user.id), String(Date.now()), REFRESH_TOKEN_TTL_SECONDS);
+        this.emitSessionsRevoked(user.id, { type: 'all' });
 
         return {
             message: 'Đặt lại mật khẩu thành công. Vui lòng đăng nhập lại với mật khẩu mới.',
@@ -610,11 +624,20 @@ export class AuthService {
         for (const deviceId of revokedDeviceIds) {
             await this.redisService.deleteSession(user.id, deviceId);
         }
+        this.emitSessionsRevoked(
+            user.id,
+            currentDeviceId ? { type: 'allExcept', deviceId: currentDeviceId } : { type: 'all' },
+        );
 
         return {
             message: 'Đổi mật khẩu thành công. Các thiết bị khác đã được đăng xuất.',
             revokedSessions: revokedDeviceIds.length,
         };
+    }
+
+    /** Phát domain event để ChatGateway ngắt các kết nối WebSocket của thiết bị bị thu hồi */
+    private emitSessionsRevoked(userId: string, scope: RevokedSessionScope): void {
+        this.eventEmitter.emit(AUTH_SESSIONS_REVOKED, new AuthSessionsRevokedEvent(userId, scope));
     }
 
     private async findUserWithPasswordOrFail(userId: string): Promise<User> {

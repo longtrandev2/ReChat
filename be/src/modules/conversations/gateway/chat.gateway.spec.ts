@@ -12,6 +12,7 @@ import { User } from '../../users/entities/user.entity.js';
 import { Friendship, FriendshipStatus } from '../../friends/entities/friendship.entity.js';
 import { Socket } from 'socket.io';
 import { RedisService } from '../../../common/redis/redis.service.js';
+import { AuthSessionsRevokedEvent } from '../../../common/events/auth-session.events.js';
 import {
     FriendRequestSentEvent,
     FriendRequestAcceptedEvent,
@@ -297,6 +298,16 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
 
             expect(client.join).toHaveBeenCalledWith(`user_${userId}`);
             expect(mockConnectionManager.addConnection).toHaveBeenCalledWith(userId, client.id);
+        });
+
+        it('should also join a per-device room when the token carries a device id (did)', async () => {
+            mockJwtService.verifyAsync.mockResolvedValue({ sub: userId, username: 'john_doe', did: 'laptop-1' });
+            const client = createMockSocket(clientToken) as Socket;
+
+            await gateway.handleConnection(client);
+
+            expect(client.join).toHaveBeenCalledWith(`device_${userId}_laptop-1`);
+            expect(client.data.deviceId).toBe('laptop-1');
         });
 
         it('should mark user ONLINE in DB and broadcast userPresence when isFirstConnection is true', async () => {
@@ -686,6 +697,51 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
     describe('Notification Event Listeners (In-App Event Bus)', () => {
         beforeEach(() => {
             gateway.server = mockServer as any;
+        });
+
+        describe('handleSessionsRevoked (H2: cut live sockets of revoked sessions)', () => {
+            const setupServer = () => {
+                const operator = {
+                    except: vi.fn().mockReturnThis(),
+                    disconnectSockets: vi.fn(),
+                };
+                const server = { in: vi.fn().mockReturnValue(operator) };
+                gateway.server = server as any;
+                return { server, operator };
+            };
+
+            it('disconnects only the sockets of the listed devices (remote logout)', () => {
+                const { server, operator } = setupServer();
+
+                gateway.handleSessionsRevoked(
+                    new AuthSessionsRevokedEvent('u1', { type: 'devices', deviceIds: ['phone', 'tablet'] }),
+                );
+
+                expect(server.in).toHaveBeenCalledWith('device_u1_phone');
+                expect(server.in).toHaveBeenCalledWith('device_u1_tablet');
+                expect(operator.disconnectSockets).toHaveBeenCalledTimes(2);
+                expect(operator.disconnectSockets).toHaveBeenCalledWith(true);
+            });
+
+            it('disconnects every socket of the user except the current device (change password)', () => {
+                const { server, operator } = setupServer();
+
+                gateway.handleSessionsRevoked(new AuthSessionsRevokedEvent('u1', { type: 'allExcept', deviceId: 'laptop' }));
+
+                expect(server.in).toHaveBeenCalledWith('user_u1');
+                expect(operator.except).toHaveBeenCalledWith('device_u1_laptop');
+                expect(operator.disconnectSockets).toHaveBeenCalledWith(true);
+            });
+
+            it('disconnects every socket of the user (password reset)', () => {
+                const { server, operator } = setupServer();
+
+                gateway.handleSessionsRevoked(new AuthSessionsRevokedEvent('u1', { type: 'all' }));
+
+                expect(server.in).toHaveBeenCalledWith('user_u1');
+                expect(operator.except).not.toHaveBeenCalled();
+                expect(operator.disconnectSockets).toHaveBeenCalledWith(true);
+            });
         });
 
         it('handleFriendRequestSent should emit friendRequestReceived to recipient room', () => {
