@@ -97,6 +97,10 @@ describe('Conversation access control & cursor pagination (e2e)', () => {
 
         const pagedIds = await readAllPages(5);
         expect(pagedIds).toEqual(sentIds);
+
+        // Không bao giờ lộ hash mật khẩu của người gửi (regression: sender được join nguyên entity User)
+        const page = await ctx.http().get(`${API}/conversations/${conversationId}/messages`).set(asUser('alice')).expect(200);
+        expect(JSON.stringify(page.body)).not.toContain('"password"');
     });
 
     it('keeps messages that share the exact same createdAt when they straddle a page boundary', async () => {
