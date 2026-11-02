@@ -38,6 +38,8 @@ describe('ConversationsController', () => {
             recallMessage: vi.fn(),
             editMessage: vi.fn(),
             reactMessage: vi.fn(),
+            searchMessages: vi.fn(),
+            toggleMute: vi.fn(),
         };
 
         const module: TestingModule = await Test.createTestingModule({
@@ -304,6 +306,37 @@ describe('ConversationsController', () => {
                 'conv-1',
                 'msg-1',
                 dto.emoji,
+            );
+            expect(result).toEqual(mockResult);
+        });
+    });
+
+    describe('searchMessages', () => {
+        it('should delegate to service.searchMessages with user id, conversation id, and query', async () => {
+            const mockMessages = [{ id: 'msg-1', content: 'test message' }];
+            mockConversationsService.searchMessages.mockResolvedValue(mockMessages);
+
+            const result = await controller.searchMessages(mockCurrentUser, 'conv-1', 'test');
+            expect(mockConversationsService.searchMessages).toHaveBeenCalledWith(
+                mockCurrentUser.id,
+                'conv-1',
+                'test',
+            );
+            expect(result).toEqual(mockMessages);
+        });
+    });
+
+    describe('toggleMute', () => {
+        it('should delegate to service.toggleMute with user id, conversation id, and isMuted', async () => {
+            const dto = { isMuted: true };
+            const mockResult = { conversationId: 'conv-1', isMuted: true };
+            mockConversationsService.toggleMute.mockResolvedValue(mockResult);
+
+            const result = await controller.toggleMute(mockCurrentUser, 'conv-1', dto);
+            expect(mockConversationsService.toggleMute).toHaveBeenCalledWith(
+                mockCurrentUser.id,
+                'conv-1',
+                true,
             );
             expect(result).toEqual(mockResult);
         });

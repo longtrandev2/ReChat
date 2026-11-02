@@ -1726,6 +1726,59 @@ describe('ConversationsService', () => {
             });
         });
     });
+
+    describe('searchMessages (FR-31, BR-30)', () => {
+        it('should return empty array if keyword is empty or whitespace', async () => {
+            const result = await service.searchMessages('u1', 'c1', '   ');
+            expect(result).toEqual([]);
+        });
+
+        it('should throw NotFoundException if conversation does not exist', async () => {
+            mockConversationRepo.findOne.mockResolvedValue(null);
+            await expect(service.searchMessages('u1', 'c1', 'hello')).rejects.toThrow(NotFoundException);
+        });
+
+        it('should throw ForbiddenException if user is not a member', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: 'c1' });
+            mockMemberRepo.findOne.mockResolvedValue(null);
+            await expect(service.searchMessages('u1', 'c1', 'hello')).rejects.toThrow(ForbiddenException);
+        });
+
+        it('should search messages matching keyword, excluding recalled messages', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: 'c1' });
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'm1' });
+            const mockMessages = [{ id: 'msg-1', content: 'hello world', isRecalled: false }];
+            mockMessageRepo.createQueryBuilder.mockReturnValue(createMockQueryBuilder(mockMessages));
+
+            const result = await service.searchMessages('u1', 'c1', 'hello');
+            expect(result).toEqual(mockMessages);
+        });
+    });
+
+    describe('toggleMute (FR-32, BR-31)', () => {
+        it('should throw NotFoundException if conversation does not exist', async () => {
+            mockConversationRepo.findOne.mockResolvedValue(null);
+            await expect(service.toggleMute('u1', 'c1', true)).rejects.toThrow(NotFoundException);
+        });
+
+        it('should throw ForbiddenException if user is not a member', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: 'c1' });
+            mockMemberRepo.findOne.mockResolvedValue(null);
+            await expect(service.toggleMute('u1', 'c1', true)).rejects.toThrow(ForbiddenException);
+        });
+
+        it('should update member isMuted and save', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: 'c1' });
+            const member = { id: 'm1', isMuted: false };
+            mockMemberRepo.findOne.mockResolvedValue(member);
+            mockMemberRepo.save.mockResolvedValue({ ...member, isMuted: true });
+
+            const result = await service.toggleMute('u1', 'c1', true);
+            expect(member.isMuted).toBe(true);
+            expect(mockMemberRepo.save).toHaveBeenCalledWith(member);
+            expect(result).toEqual({ conversationId: 'c1', isMuted: true });
+        });
+    });
 });
 
 

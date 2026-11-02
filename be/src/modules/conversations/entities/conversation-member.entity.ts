@@ -45,6 +45,9 @@ export class ConversationMember {
     @Column({ type: 'int', default: 0 })
     unreadCount: number;
 
+    @Column({ type: 'boolean', default: false })
+    isMuted: boolean;
+
     @CreateDateColumn()
     joinedAt: Date;
 }

@@ -36,6 +36,7 @@ import {
     EditMessageDto,
     ReactMessageDto,
     UpdateQuickEmojiDto,
+    ToggleMuteDto,
 } from './dto/index.js';
 
 @ApiTags('conversations')
@@ -415,6 +416,29 @@ export class ConversationsController {
     }
 
     /**
+     * Tìm kiếm tin nhắn theo từ khóa trong cuộc trò chuyện (FR-31, BR-30)
+     * GET /api/v1/conversations/:id/messages/search?q={keyword}
+     */
+    @Get(':id/messages/search')
+    @ApiOperation({ summary: 'Tìm kiếm tin nhắn trong cuộc trò chuyện (FR-31, BR-30)' })
+    @ApiParam({ name: 'id', description: 'UUID của cuộc hội thoại', format: 'uuid', example: 'e4b5a2e1-884d-4b71-a477-0c7f0db49211' })
+    @ApiResponse({
+        status: 200,
+        description: 'Tìm kiếm tin nhắn thành công',
+    })
+    @ApiResponse({
+        status: 403,
+        description: 'Người dùng không phải thành viên của cuộc hội thoại',
+    })
+    async searchMessages(
+        @CurrentUser() user: User,
+        @Param('id', ParseUUIDPipe) conversationId: string,
+        @Query('q') query: string,
+    ) {
+        return this.conversationsService.searchMessages(user.id, conversationId, query);
+    }
+
+    /**
      * Lấy lịch sử tin nhắn (hỗ trợ before={messageId}&limit=30) (FR-13, BR-08)
      * GET /api/v1/conversations/:id/messages
      */
@@ -536,6 +560,35 @@ export class ConversationsController {
         @Param('id', ParseUUIDPipe) conversationId: string,
     ) {
         return this.conversationsService.markAsRead(user.id, conversationId);
+    }
+
+    /**
+     * Tắt/bật thông báo cuộc hội thoại (FR-32, BR-31)
+     * PATCH /api/v1/conversations/:id/mute
+     */
+    @Patch(':id/mute')
+    @ApiOperation({ summary: 'Tắt/bật thông báo cuộc hội thoại (FR-32, BR-31)' })
+    @ApiParam({ name: 'id', description: 'UUID của cuộc hội thoại', format: 'uuid', example: 'e4b5a2e1-884d-4b71-a477-0c7f0db49211' })
+    @ApiResponse({
+        status: 200,
+        description: 'Cập nhật trạng thái thông báo thành công',
+        schema: {
+            example: {
+                conversationId: 'e4b5a2e1-884d-4b71-a477-0c7f0db49211',
+                isMuted: true,
+            },
+        },
+    })
+    @ApiResponse({
+        status: 403,
+        description: 'Người dùng không phải thành viên của cuộc hội thoại',
+    })
+    async toggleMute(
+        @CurrentUser() user: User,
+        @Param('id', ParseUUIDPipe) conversationId: string,
+        @Body() dto: ToggleMuteDto,
+    ) {
+        return this.conversationsService.toggleMute(user.id, conversationId, dto.isMuted);
     }
 
     /**

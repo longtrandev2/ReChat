@@ -23,6 +23,7 @@ import {
     GetMediaQueryDto,
     SendMessageDto,
     UpdateQuickEmojiDto,
+    ToggleMuteDto,
 } from './dto/index.js';
 
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -549,6 +550,7 @@ export class ConversationsService {
                     ? c.members.find((m) => m.user.id !== currentUserId)?.user?.isOnline
                     : undefined,
                 unreadCount: myMember ? myMember.unreadCount : 0,
+                isMuted: myMember ? Boolean(myMember.isMuted) : false,
                 lastMessage: lastMsg
                     ? {
                         id: lastMsg.id,
@@ -816,10 +818,12 @@ export class ConversationsService {
             quickEmoji: conversation.quickEmoji || '👍',
             currentUserRole: currentMember.role,
             unreadCount: currentMember.unreadCount,
+            isMuted: Boolean(currentMember.isMuted),
             members: conversation.members.map((m) => ({
                 id: m.id,
                 role: m.role,
                 joinedAt: m.joinedAt,
+                isMuted: Boolean(m.isMuted),
                 user: {
                     id: m.user.id,
                     username: m.user.username,
@@ -2028,6 +2032,93 @@ export class ConversationsService {
         }
 
         return list;
+    }
+
+    /**
+     * Tìm kiếm tin nhắn trong cuộc trò chuyện theo từ khóa (FR-31, BR-30)
+     * Không phân biệt hoa thường, loại trừ tin nhắn đã thu hồi.
+     */
+    async searchMessages(
+        currentUserId: string,
+        conversationId: string,
+        keyword: string,
+    ): Promise<Message[]> {
+        if (!keyword || !keyword.trim()) {
+            return [];
+        }
+
+        // 1. Kiểm tra cuộc trò chuyện tồn tại
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+        });
+
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        // 2. Kiểm tra quyền thành viên (BR-08)
+        const isMember = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+        });
+
+        if (!isMember) {
+            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
+        }
+
+        // 3. Tìm kiếm tin nhắn khớp từ khóa (không phân biệt hoa thường, loại trừ isRecalled)
+        const searchPattern = `%${keyword.trim()}%`;
+        const messages = await this.messageRepository
+            .createQueryBuilder('m')
+            .leftJoinAndSelect('m.sender', 'sender')
+            .where('m.conversationId = :conversationId', { conversationId })
+            .andWhere('m.isRecalled = :isRecalled', { isRecalled: false })
+            .andWhere('LOWER(m.content) LIKE LOWER(:searchPattern)', { searchPattern })
+            .orderBy('m.createdAt', 'ASC')
+            .getMany();
+
+        return messages;
+    }
+
+    /**
+     * Tắt/bật thông báo cuộc hội thoại (FR-32, BR-31)
+     */
+    async toggleMute(
+        currentUserId: string,
+        conversationId: string,
+        isMuted: boolean,
+    ): Promise<{ conversationId: string; isMuted: boolean }> {
+        // 1. Kiểm tra cuộc trò chuyện tồn tại
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+        });
+
+        if (!conversation) {
+            throw new NotFoundException('Cuộc hội thoại không tồn tại');
+        }
+
+        // 2. Tìm bản ghi thành viên của user
+        const member = await this.memberRepository.findOne({
+            where: {
+                conversation: { id: conversationId },
+                user: { id: currentUserId },
+            },
+        });
+
+        if (!member) {
+            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
+        }
+
+        // 3. Cập nhật trạng thái tắt thông báo
+        member.isMuted = isMuted;
+        await this.memberRepository.save(member);
+
+        return {
+            conversationId,
+            isMuted: member.isMuted,
+        };
     }
 }
 
