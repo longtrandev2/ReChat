@@ -73,6 +73,8 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 | **FR-46** | Messages | Tin nhắn thông báo hệ thống (System Action Messages): Tự động phát sinh bản ghi tin nhắn hệ thống (`type: SYSTEM`) khi diễn ra các sự kiện trong hội thoại (Tạo nhóm, Thêm thành viên, Xóa thành viên, Rời nhóm, Chuyển quyền Trưởng nhóm, Phân quyền Admin, Đổi tên/ảnh nhóm, Đổi Quick Emoji, Ghim/Bỏ ghim tin nhắn). Client hiển thị căn giữa dạng capsule badge, không có khung bong bóng (speech bubble), không avatar, không tick thời gian hay menu phản ứng. |
 | **FR-47** | Group Chat | Đồng bộ tư cách thành viên thời gian thực (Real-time Group Eviction): Khi thành viên bị xóa khỏi nhóm hoặc nhóm bị giải tán, socket server gửi thông báo `groupMembershipChanged`, client tự động toast cảnh báo, đóng active chat và chuyển hướng về `/chat`. |
 | **FR-48** | Conversations | Menu tùy chọn cuộc hội thoại (Conversation Actions Menu): Menu 3 chấm trên thanh tiêu đề hỗ trợ Ghim cuộc trò chuyện, Xóa đoạn chat, Chặn / Bỏ chặn người dùng với hộp thoại xác nhận an toàn. |
+| **FR-49** | Profile & Auth | Đổi mật khẩu tài khoản trực tiếp trong Cài đặt (`POST /api/v1/auth/change-password`) yêu cầu xác thực mật khẩu hiện tại, kiểm tra chuẩn mật khẩu mới và mật khẩu xác nhận. |
+| **FR-50** | Settings | Trung tâm Cài đặt & Quản lý Bảo mật (Settings Hub `/settings`) tích hợp 3 tab: Hồ sơ & Đổi mật khẩu, Xác thực 2 bước (2FA), và Quản lý phiên đăng nhập đa thiết bị (Sessions Management). |
 
 ---
 
@@ -128,6 +130,8 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 | **BR-M5-08** | **Ràng buộc cảm xúc duy nhất (Single Reaction per User):** Mỗi người dùng chỉ được có tối đa 1 biểu tượng cảm xúc trên cùng một tin nhắn tại một thời điểm (Unique constraint `[messageId, userId]`). | FR-37 | `409 Conflict` |
 | **BR-M5-09** | **Định dạng & Giới hạn dung lượng tải lên (Upload Limits):** Ảnh (`IMAGE`): tối đa 5MB, hỗ trợ `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`. Tệp tài liệu & đa phương tiện (`FILE`): tối đa 25MB, hỗ trợ tài liệu (`.pdf`, `.doc`, `.docx`, `.xls`, `.xlsx`, `.ppt`, `.pptx`, `.csv`, `.txt`, `.md`, `.rtf`), tệp cấu hình/dữ liệu an toàn (`.json`, `.xml`, `.yaml`, `.yml`, `.log`), tệp nén (`.zip`, `.rar`, `.7z`, `.tar`, `.gz`), âm thanh (`.mp3`, `.wav`, `.m4a`, `.ogg`, `.aac`). Nghiêm cấm hoàn toàn các file thực thi hoặc script nguy hiểm (`.exe`, `.bat`, `.cmd`, `.sh`, `.php`, `.js`, `.ts`, `.mjs`, `.py`, `.dll`, `.bin`, `.msi`, `.vbs`, `.ps1`, `.scr`, `.com`, `.pif`, `.app`, `.dmg`, `.pkg`, `.iso`, `.html`, `.htm`). | FR-40 | `400 Bad Request` |
 | **BR-M5-10** | **Tự động phát sóng khi tải lên (Auto-publish on Upload):** Khi gọi endpoint `POST /api/v1/media/upload`, nếu có truyền tham số `conversationId`, hệ thống tự động tạo một tin nhắn loại `IMAGE` hoặc `FILE` trong cuộc hội thoại và phát sóng realtime event `newMessage` tới tất cả thành viên trong phòng chat. | FR-40 | `400 Bad Request` / `403 Forbidden` |
+| **BR-39** | **Đổi mật khẩu tài khoản (Change Password):** Người dùng đang đăng nhập có quyền đổi mật khẩu tài khoản qua `POST /auth/change-password`. Bắt buộc xác thực mật khẩu hiện tại (`currentPassword`) bằng `bcrypt.compare`. Mật khẩu mới (`newPassword`) phải tối thiểu 8 ký tự, bao gồm ít nhất 1 chữ hoa, 1 chữ thường, 1 chữ số và 1 ký tự đặc biệt, không được trùng với mật khẩu hiện tại, và phải khớp chính xác với `confirmPassword`. | FR-49 | `400 Bad Request` / `401 Unauthorized` |
+| **BR-40** | **Quản lý Cài đặt & Hồ sơ cá nhân (Settings Hub & Profile Sync):** Giao diện Cài đặt `/settings` cấu trúc 3 tab (Hồ sơ & Mật khẩu, Bảo mật & 2FA, Quản lý thiết bị & Phiên). Khi tải lên ảnh đại diện (`POST /media/upload`) và lưu URL (`PATCH /users/me`), hệ thống đồng bộ ngay lập tức vào `useAuthStore` để cập nhật avatar trên Navigation Rail. Khi đổi mật khẩu thành công, reset form và hiển thị toast. Thao tác bật/tắt 2FA cập nhật `twoFactorEnabled` trong store. Đăng xuất thiết bị từ xa qua `DELETE /auth/sessions/:deviceId` thu hồi session trên Redis. | FR-04, FR-25, FR-27, FR-49, FR-50 | `400 Bad Request` / `401 Unauthorized` |
 
 ---
 
@@ -150,6 +154,7 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 | `DELETE` | `/api/v1/auth/sessions/:deviceId` | Thu hồi phiên đăng xuất từ xa một thiết bị cụ thể | Bearer JWT | BR-11, BR-27 |
 | `POST` | `/api/v1/auth/forgot-password` | Yêu cầu gửi email hướng dẫn đặt lại mật khẩu | None | BR-24, BR-26 |
 | `POST` | `/api/v1/auth/reset-password` | Đặt lại mật khẩu mới bằng token nhận từ email | None | BR-02, BR-24, BR-26 |
+| `POST` | `/api/v1/auth/change-password` | Đổi mật khẩu tài khoản (yêu cầu mật khẩu hiện tại) | Bearer JWT | BR-11, BR-39 |
 | `GET` | `/api/v1/auth/me` | Lấy thông tin tài khoản đang đăng nhập | Bearer JWT | BR-11, BR-27 |
 | `POST` | `/api/v1/auth/logout` | Đăng xuất, xóa HttpOnly cookie, đưa token vào blacklist và xóa session | Optional JWT | BR-11, BR-27, BR-35 |
 | `PATCH` | `/api/v1/users/me` | Cập nhật Profile cá nhân (`displayName`, `avatarUrl`) | Bearer JWT | BR-11 |
