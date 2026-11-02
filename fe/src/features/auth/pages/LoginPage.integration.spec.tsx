@@ -148,9 +148,9 @@ describe('LoginPage Integration Tests', () => {
 
     await waitFor(() => {
       expect(toast.info).toHaveBeenCalledWith('Tài khoản yêu cầu mã xác thực 2 lớp (2FA)')
-      expect(screen.getByTestId('location-display')).toHaveTextContent(
-        '/verify-2fa?mfaToken=mfa-temp-token-999'
-      )
+      // mfaToken không nằm trên URL (L9): chỉ pathname, token nằm ở router state + sessionStorage
+      expect(screen.getByTestId('location-display').textContent).toBe('/verify-2fa')
+      expect(sessionStorage.getItem('rechat_mfa_token')).toBe('mfa-temp-token-999')
       // Store must not have token yet
       expect(useAuthStore.getState().token).toBeNull()
     })

@@ -259,6 +259,32 @@ describe('ChatDetailDrawer Component Tests', () => {
     expect(screen.getByTestId('block-user-button')).toBeInTheDocument()
   })
 
+  it('closes on Escape (L12)', () => {
+    const onClose = vi.fn()
+    render(
+      <MemoryRouter>
+        <ChatDetailDrawer isOpen={true} onClose={onClose} conversation={directConv} partner={partnerUser} />
+      </MemoryRouter>
+    )
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('hides the block button when the current user is the blocked one (BR-38)', () => {
+    render(
+      <MemoryRouter>
+        <ChatDetailDrawer
+          isOpen={true}
+          onClose={vi.fn()}
+          conversation={{ ...directConv, blockStatus: 'BLOCKED_ME' }}
+          partner={partnerUser}
+        />
+      </MemoryRouter>
+    )
+    fireEvent.click(screen.getByTestId('accordion-privacy'))
+    expect(screen.queryByTestId('block-user-button')).not.toBeInTheDocument()
+  })
+
   it('renders group conversation details with 5 accordions, member list, and role badges', async () => {
     render(
       <MemoryRouter>

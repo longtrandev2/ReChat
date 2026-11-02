@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useRef } from 'react'
+import { useMemo, useEffect, useRef, useCallback } from 'react'
 import { Search, X, Users, UserPlus, Loader2 } from 'lucide-react'
 import { FriendCard } from './FriendCard'
 import { Button } from '@/components/ui/button'
@@ -44,7 +44,17 @@ export function FriendsListTab({
   onBlock,
   onSwitchToFindTab,
 }: FriendsListTabProps) {
-  const { isUserOnline } = useSocket()
+  const { isUserOnline, onlineUsers } = useSocket()
+  // Presence realtime ưu tiên; nếu chưa có sự kiện nào thì dùng isOnline từ API (FR-08)
+  const resolveOnline = useCallback(
+    (friend: FriendUser): boolean => {
+      if (typeof isUserOnline === 'function' && isUserOnline(friend.id)) return true
+      const live = onlineUsers?.[friend.id]
+      if (live) return live.status === 'ONLINE'
+      return Boolean(friend.isOnline)
+    },
+    [isUserOnline, onlineUsers]
+  )
   const sentinelRef = useRef<HTMLDivElement>(null)
 
   // Infinite Scroll: Kích hoạt khi sentinel xuất hiện ở gần cuối vùng cuộn
@@ -71,7 +81,7 @@ export function FriendsListTab({
   const filteredFriends = useMemo(() => {
     return friends.filter((friend) => {
       // 1. Kiểm tra filter trực tuyến
-      const online = typeof isUserOnline === 'function' ? isUserOnline(friend.id) : Boolean(friend.isOnline)
+      const online = resolveOnline(friend)
       if (activeFilter === 'online' && !online) {
         return false
       }
@@ -84,14 +94,12 @@ export function FriendsListTab({
       const userMatch = friend.username.toLowerCase().includes(trimmed)
       return nameMatch || userMatch
     })
-  }, [friends, searchQuery, activeFilter, isUserOnline])
+  }, [friends, searchQuery, activeFilter, resolveOnline])
 
   // Đếm số bạn bè đang trực tuyến
   const onlineCount = useMemo(() => {
-    return friends.filter((f) =>
-      typeof isUserOnline === 'function' ? isUserOnline(f.id) : Boolean(f.isOnline)
-    ).length
-  }, [friends, isUserOnline])
+    return friends.filter(resolveOnline).length
+  }, [friends, resolveOnline])
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden" data-testid="friends-list-tab">
@@ -185,10 +193,7 @@ export function FriendsListTab({
               data-testid="friends-grid"
             >
               {filteredFriends.map((friend) => {
-                const online =
-                  typeof isUserOnline === 'function'
-                    ? isUserOnline(friend.id)
-                    : Boolean(friend.isOnline)
+                const online = resolveOnline(friend)
 
                 return (
                   <FriendCard

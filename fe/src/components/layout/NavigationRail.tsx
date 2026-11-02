@@ -76,7 +76,7 @@ export function NavigationRail() {
   return (
     <aside
       aria-label="Thanh điều hướng chính"
-      className="w-16 h-full flex flex-col items-center justify-between py-4 bg-surface dark:bg-surface-dark border-r border-border dark:border-border-dark select-none shrink-0 transition-colors duration-200"
+      className="w-full h-14 md:w-16 md:h-full flex flex-row md:flex-col items-center justify-between px-3 md:px-0 py-0 md:py-4 bg-surface dark:bg-surface-dark border-t md:border-t-0 md:border-r border-border dark:border-border-dark select-none shrink-0 transition-colors duration-200"
     >
       {/* 1. Header: Avatar người dùng hiện tại */}
       <div className="relative group">
@@ -97,7 +97,7 @@ export function NavigationRail() {
       </div>
 
       {/* 2. Menu Tabs: Đoạn chat / Bạn bè / Cài đặt */}
-      <nav className="flex flex-col items-center gap-3 w-full px-2" aria-label="Menu chức năng">
+      <nav className="flex flex-row md:flex-col items-center gap-3 md:w-full md:px-2" aria-label="Menu chức năng">
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon
           const isActive =
@@ -122,7 +122,7 @@ export function NavigationRail() {
               {/* Modern active / hover indicator pill */}
               <span
                 className={cn(
-                  'absolute -left-2 top-1/2 -translate-y-1/2 w-1 rounded-r-full bg-brand transition-all duration-200 pointer-events-none',
+                  'hidden md:block absolute -left-2 top-1/2 -translate-y-1/2 w-1 rounded-r-full bg-brand transition-all duration-200 pointer-events-none',
                   isActive
                     ? 'h-6 opacity-100'
                     : 'h-0 opacity-0 group-hover:h-3 group-hover:opacity-60'
@@ -144,7 +144,7 @@ export function NavigationRail() {
       </nav>
 
       {/* 3. Footer Tools: Theme Toggle & Logout */}
-      <div className="flex flex-col items-center gap-2 w-full px-2">
+      <div className="flex flex-row md:flex-col items-center gap-2 md:w-full md:px-2">
         {/* Nút chuyển Dark/Light Mode */}
         <button
           type="button"

@@ -291,6 +291,32 @@ describe('useMessagesStore Tests (ZOMBIES & AAA Methodology)', () => {
     expect(msgs[0].editedAt).toBe('2026-10-26T09:00:00.000Z')
   })
 
+  it('M3: recall and edit also patch replyTo quotes of other messages (FR-45)', () => {
+    const reply: Message = {
+      ...mockMsg2,
+      id: 'reply-1',
+      replyTo: {
+        id: 'msg-1',
+        content: mockMsg1.content,
+        type: 'TEXT',
+        isRecalled: false,
+        createdAt: mockMsg1.createdAt,
+        sender: mockMsg1.sender,
+      },
+    }
+    useMessagesStore.getState().appendIncomingMessage('conv-1', mockMsg1)
+    useMessagesStore.getState().appendIncomingMessage('conv-1', reply)
+
+    useMessagesStore.getState().handleMessageEdited('conv-1', 'msg-1', 'Đã sửa', '2026-10-26T09:00:00.000Z')
+    let r = useMessagesStore.getState().messagesByConversation['conv-1'].find((m) => m.id === 'reply-1')
+    expect(r?.replyTo?.content).toBe('Đã sửa')
+
+    useMessagesStore.getState().handleMessageRecalled('conv-1', 'msg-1')
+    r = useMessagesStore.getState().messagesByConversation['conv-1'].find((m) => m.id === 'reply-1')
+    expect(r?.replyTo?.isRecalled).toBe(true)
+    expect(r?.replyTo?.content).toBe('[Tin nhắn đã bị thu hồi]')
+  })
+
   it('handles reaction updates with ADDED, REMOVED, and CHANGED', () => {
     useMessagesStore.getState().appendIncomingMessage('conv-1', mockMsg1)
 

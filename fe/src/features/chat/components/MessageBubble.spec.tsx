@@ -114,7 +114,7 @@ describe('MessageBubble Component Tests', () => {
     expect(handleReact).toHaveBeenCalledWith(reactedMsg, '❤️')
   })
 
-  it('renders (đã sửa) indicator when message isEdited is true', () => {
+  it('renders (đã chỉnh sửa) indicator when message isEdited is true', () => {
     const editedMsg: Message = {
       ...baseMessage,
       isEdited: true,
@@ -123,7 +123,7 @@ describe('MessageBubble Component Tests', () => {
 
     render(<MessageBubble message={editedMsg} isOutgoing={true} />)
 
-    expect(screen.getByText('(đã sửa)')).toBeInTheDocument()
+    expect(screen.getByText('(đã chỉnh sửa)')).toBeInTheDocument()
     expect(screen.getByText('Nội dung sau khi sửa')).toBeInTheDocument()
   })
 

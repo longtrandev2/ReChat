@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Loader2, ArrowLeft, ShieldCheck } from 'lucide-react'
 
@@ -8,11 +8,14 @@ import { OtpInput } from '@/components/ui/otp-input'
 import { Button } from '@/components/ui/button'
 import { authApi } from '@/features/auth/services/auth.api'
 import { useAuthStore } from '@/stores/auth.store'
+import { mfaTokenSession } from '../mfa-token-session'
 
 export function Verify2FAPage() {
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
-  const mfaToken = searchParams.get('mfaToken') || ''
+  const location = useLocation()
+  // mfaToken đến từ router state (không nằm trên URL); F5 thì lấy lại từ sessionStorage
+  const mfaToken =
+    (location.state as { mfaToken?: string } | null)?.mfaToken || mfaTokenSession.read()
 
   const { setAuth } = useAuthStore()
   const [otp, setOtp] = useState('')
@@ -39,6 +42,7 @@ export function Verify2FAPage() {
       const res = await authApi.verify2FALogin({ mfaToken, otp: finalOtp })
 
       // Store token & user profile in Zustand and localStorage
+      mfaTokenSession.clear()
       setAuth(res.accessToken, res.user)
       toast.success(`Đăng nhập thành công! Chào mừng trở lại, ${res.user.username}.`)
       navigate('/chat', { replace: true })

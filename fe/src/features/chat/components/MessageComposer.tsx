@@ -417,6 +417,10 @@ export function MessageComposer({
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
+    } else if (e.key === 'Escape' && editingMessage) {
+      // Esc hủy chỉnh sửa tin nhắn (FR-39)
+      e.preventDefault()
+      handleCancelEdit()
     }
   }
 

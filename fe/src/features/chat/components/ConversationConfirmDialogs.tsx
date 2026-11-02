@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 interface ConfirmDialogBaseProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** Trả true khi thành công để dialog tự đóng */
+  /** Dialog luôn tự đóng sau khi xử lý xong (thành công hay lỗi) */
   onConfirm: () => Promise<boolean>
   isLoading?: boolean
 }
@@ -34,8 +34,9 @@ function ConfirmShell({
   testId,
 }: ConfirmShellProps) {
   const handleConfirm = async () => {
-    const ok = await onConfirm()
-    if (ok) onOpenChange(false)
+    // Đóng dialog cả khi server từ chối (toast lỗi do hook hiển thị) để không kẹt UI
+    await onConfirm()
+    onOpenChange(false)
   }
 
   return (

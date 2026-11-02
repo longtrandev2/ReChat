@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { Search, X, MessageSquarePlus } from 'lucide-react'
 import { useConversationStore, type FilterTab } from '../stores/conversation.store'
 import { ConversationItem } from './ConversationItem'
+import { ConversationItemMenu } from './ConversationItemMenu'
 import { useSocket } from '@/hooks/useSocket'
 import { useSocketStore } from '@/stores/socket.store'
 import { useAuthStore } from '@/stores/auth.store'
@@ -61,7 +62,7 @@ export function ConversationSidebar({
   return (
     <aside
       aria-label="Danh sách cuộc trò chuyện"
-      className="w-80 h-full flex flex-col bg-surface-light dark:bg-surface-dark border-r border-border-light dark:border-border-dark shrink-0 select-none transition-colors duration-200"
+      className="w-full md:w-80 h-full flex flex-col bg-surface-light dark:bg-surface-dark border-r border-border-light dark:border-border-dark shrink-0 select-none transition-colors duration-200"
     >
       {/* 1. Header: Tiêu đề & Nút Tạo mới */}
       <div className="flex items-center justify-between px-4 pt-4 pb-2">
@@ -199,6 +200,7 @@ export function ConversationSidebar({
                 isActive={conv.id === activeConversationId}
                 isOnline={isOnline}
                 onClick={() => handleSelect(conv.id)}
+                actionMenu={<ConversationItemMenu conversation={conv} />}
               />
             )
           })

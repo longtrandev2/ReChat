@@ -1,9 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { UserSearchCard } from './UserSearchCard'
 import type { FriendUser } from '../types/friends.types'
 
 const mockNavigate = vi.fn()
+const toastError = vi.hoisted(() => vi.fn())
+vi.mock('sonner', () => ({ toast: { error: toastError } }))
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mockNavigate,
 }))
@@ -116,5 +118,18 @@ describe('UserSearchCard Component Tests', () => {
     const rejectBtn = screen.getByTestId('reject-user-request-btn-user-test-1')
     fireEvent.click(rejectBtn)
     expect(onReject).toHaveBeenCalledWith('req-rcv-1')
+  })
+
+  it('M5: shows a toast with the server message when sending a request fails (BR-28)', async () => {
+    const onSend = vi.fn().mockRejectedValue({
+      isAxiosError: true,
+      response: { data: { message: 'Bạn không thể gửi lời mời kết bạn cho người dùng này' } },
+    })
+    render(<UserSearchCard user={mockUser} relationStatus="NONE" onSendRequest={onSend} />)
+
+    fireEvent.click(screen.getByTestId('send-friend-request-btn-user-test-1'))
+
+    await waitFor(() => expect(toastError).toHaveBeenCalled())
+    expect(screen.getByTestId('send-friend-request-btn-user-test-1')).toBeInTheDocument()
   })
 })

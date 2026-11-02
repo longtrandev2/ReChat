@@ -517,6 +517,19 @@ export function ChatDetailDrawer({
     )
   }, [eligibleFriends, friendsSearch])
 
+  // Esc đóng drawer (L12); bỏ qua khi Esc đã được dialog/menu Radix xử lý hoặc đang gõ trong ô nhập
+  useEffect(() => {
+    if (!isOpen) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      const el = e.target as HTMLElement | null
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
+      onClose()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [isOpen, onClose])
+
   if (!isOpen) return null
 
   return (
@@ -1189,7 +1202,7 @@ export function ChatDetailDrawer({
                     <p className="text-[10px] text-ink-muted">Bạn sẽ không nhận được tin nhắn từ nhóm này nữa</p>
                   </div>
                 </button>
-              ) : (
+              ) : blockStatus === 'BLOCKED_ME' ? null : (
                 <button
                   type="button"
                   disabled={isBlocking}

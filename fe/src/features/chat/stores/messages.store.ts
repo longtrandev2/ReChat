@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { messagesApi } from '../services/messages.api'
-import type { Message, MessageSender } from '../types/message.types'
+import type { Message, MessageSender, ParentMessageSummary } from '../types/message.types'
 
 export interface MessagesState {
   messagesByConversation: Record<string, Message[]>
@@ -57,6 +57,31 @@ const DEFAULT_LIMIT = 30
 const TYPING_TIMEOUT_MS = 3000
 
 // Internal timer tracking for auto-clearing typing indicators
+/**
+ * Vá tin nhắn gốc (messagePatch + ownExtra) và mọi bản trích dẫn replyTo trỏ tới nó (FR-45).
+ * Trả về null nếu không có gì thay đổi.
+ */
+function patchMessageAndReplyQuotes(
+  list: Message[],
+  messageId: string,
+  quotePatch: Partial<ParentMessageSummary>,
+  ownExtra: Partial<Message> = {}
+): Message[] | null {
+  let changed = false
+  const result = list.map((m) => {
+    if (m.id === messageId) {
+      changed = true
+      return { ...m, ...quotePatch, ...ownExtra } as Message
+    }
+    if (m.replyTo?.id === messageId) {
+      changed = true
+      return { ...m, replyTo: { ...m.replyTo, ...quotePatch } }
+    }
+    return m
+  })
+  return changed ? result : null
+}
+
 const typingTimers: Record<string, ReturnType<typeof setTimeout>> = {}
 
 export const useMessagesStore = create<MessagesState>((set, get) => ({
@@ -79,22 +104,14 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 
   handleMessageRecalled: (conversationId: string, messageId: string) => {
     set((state) => {
-      const currentList = state.messagesByConversation[conversationId] || []
-      const index = currentList.findIndex((m) => m.id === messageId)
-      if (index === -1) return state
-
-      const updated = [...currentList]
-      updated[index] = {
-        ...updated[index],
-        isRecalled: true,
-        content: '[Tin nhắn đã bị thu hồi]',
-      }
+      const currentList = state.messagesByConversation[conversationId]
+      if (!currentList) return state
+      const recalled = { isRecalled: true, content: '[Tin nhắn đã bị thu hồi]', fileUrl: null }
+      const updated = patchMessageAndReplyQuotes(currentList, messageId, recalled)
+      if (!updated) return state
 
       return {
-        messagesByConversation: {
-          ...state.messagesByConversation,
-          [conversationId]: updated,
-        },
+        messagesByConversation: { ...state.messagesByConversation, [conversationId]: updated },
       }
     })
   },
@@ -106,23 +123,18 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
     editedAt?: string
   ) => {
     set((state) => {
-      const currentList = state.messagesByConversation[conversationId] || []
-      const index = currentList.findIndex((m) => m.id === messageId)
-      if (index === -1) return state
-
-      const updated = [...currentList]
-      updated[index] = {
-        ...updated[index],
-        content,
-        isEdited: true,
-        editedAt: editedAt || new Date().toISOString(),
-      }
+      const currentList = state.messagesByConversation[conversationId]
+      if (!currentList) return state
+      const updated = patchMessageAndReplyQuotes(
+        currentList,
+        messageId,
+        { content },
+        { isEdited: true, editedAt: editedAt || new Date().toISOString() }
+      )
+      if (!updated) return state
 
       return {
-        messagesByConversation: {
-          ...state.messagesByConversation,
-          [conversationId]: updated,
-        },
+        messagesByConversation: { ...state.messagesByConversation, [conversationId]: updated },
       }
     })
   },

@@ -9,6 +9,9 @@ import { resetNotificationSoundForTest } from '@/lib/notification-sound'
 import { useConversationStore } from '@/features/conversations/stores/conversation.store'
 import type { Socket } from 'socket.io-client'
 
+const toastError = vi.hoisted(() => vi.fn())
+vi.mock('sonner', () => ({ toast: { error: toastError } }))
+
 vi.mock('@/services/socket.client', () => ({
   socketClient: {
     connect: vi.fn(),
@@ -162,6 +165,35 @@ describe('useSocket & useSocketInit (Task 7.2)', () => {
     expect(useAuthStore.getState().isAuthenticated).toBe(false)
     expect(useSocketStore.getState().status).toBe('disconnected')
     expect(postAuthBroadcast).toHaveBeenCalledWith({ type: 'AUTH_LOGOUT' })
+  })
+
+  it('verifies the session on server-initiated disconnect and toasts when it is gone (FR-27)', async () => {
+    useAuthStore.setState({ token: 'jwt-active', isAuthenticated: true })
+    const checkAuth = vi.fn().mockImplementation(async () => {
+      useAuthStore.setState({ token: null, isAuthenticated: false })
+    })
+    useAuthStore.setState({ checkAuth })
+
+    renderHook(() => useSocketInit())
+    await act(async () => {
+      mockSocketListeners['disconnect']?.('io server disconnect')
+    })
+
+    expect(checkAuth).toHaveBeenCalledTimes(1)
+    expect(toastError).toHaveBeenCalledWith('Phiên đăng nhập đã kết thúc trên thiết bị này')
+  })
+
+  it('does not verify the session on a plain transport disconnect', async () => {
+    useAuthStore.setState({ token: 'jwt-active', isAuthenticated: true })
+    const checkAuth = vi.fn()
+    useAuthStore.setState({ checkAuth })
+
+    renderHook(() => useSocketInit())
+    await act(async () => {
+      mockSocketListeners['disconnect']?.('transport close')
+    })
+
+    expect(checkAuth).not.toHaveBeenCalled()
   })
 
   it('prevents concurrent duplicate refresh calls when multiple connect_error events fire rapidly', async () => {

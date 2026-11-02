@@ -359,6 +359,16 @@ describe('MessageComposer Component Tests', () => {
     expect(screen.queryByText('Đang chỉnh sửa:')).not.toBeInTheDocument()
   })
 
+  it('cancels edit mode when pressing Escape in the textarea (FR-39)', () => {
+    useMessagesStore.getState().setEditingMessage({ id: 'msg-edit-1', content: 'Nội dung ban đầu' })
+    render(<MessageComposer conversationId="conv-1" onSendMessage={vi.fn()} />)
+
+    fireEvent.keyDown(screen.getByLabelText('Nội dung tin nhắn'), { key: 'Escape' })
+
+    expect(useMessagesStore.getState().editingMessage).toBeNull()
+    expect(screen.getByLabelText('Nội dung tin nhắn')).toHaveValue('')
+  })
+
   it('displays reply banner and sends message with replyToId', async () => {
     const onSend = vi.fn()
     const mockReplyingMsg = {

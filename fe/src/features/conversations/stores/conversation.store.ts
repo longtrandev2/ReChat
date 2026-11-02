@@ -46,6 +46,42 @@ const pinnedFirst = (convs: Conversation[]): Conversation[] => {
 const sortConversations = (convs: Conversation[]): Conversation[] =>
   pinnedFirst(sortByRecency(convs))
 
+const restoringIds = new Set<string>()
+
+/** Tải chi tiết hội thoại chưa có trong store và chèn vào inbox với tin nhắn mới nhất (BR-42) */
+async function restoreMissingConversation(
+  conversationId: string,
+  message: LastMessage,
+  isSelf: boolean,
+  get: () => ConversationState,
+  set: (fn: (s: ConversationState) => Partial<ConversationState>) => void
+): Promise<void> {
+  if (restoringIds.has(conversationId)) return
+  restoringIds.add(conversationId)
+  try {
+    const detail = await conversationApi.getConversationById(conversationId)
+    if (!detail) return
+    const isActive = get().activeConversationId === conversationId
+    set((state) => {
+      const entry: Conversation = {
+        ...detail,
+        lastMessage: message,
+        lastMessageAt: message.createdAt,
+        unreadCount: isSelf || isActive ? 0 : Math.max(1, detail.unreadCount ?? 0),
+      }
+      const exists = state.conversations.some((c) => c.id === conversationId)
+      const next = exists
+        ? state.conversations.map((c) => (c.id === conversationId ? { ...c, ...entry } : c))
+        : [entry, ...state.conversations]
+      return { conversations: sortConversations(next) }
+    })
+  } catch {
+    // Không tải được chi tiết: bỏ qua, inbox sẽ đồng bộ ở lần fetch kế tiếp
+  } finally {
+    restoringIds.delete(conversationId)
+  }
+}
+
 export const useConversationStore = create<ConversationState>((set, get) => ({
   conversations: [],
   activeConversationId: null,
@@ -58,9 +94,18 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
     try {
       set({ isLoading: true, error: null })
       const data = await conversationApi.getInbox()
-      set({
-        conversations: sortConversations(data),
-        isLoading: false,
+      set((state) => {
+        const existingById = new Map(state.conversations.map((c) => [c.id, c]))
+        // Merge thay vì replace: giữ trường chi tiết (members...) mà inbox không có (tránh race với getConversationById)
+        const merged = data.map((item) => {
+          const existing = existingById.get(item.id)
+          const next: Conversation = existing
+            ? { ...existing, ...item, members: item.members ?? existing.members }
+            : item
+          // Phòng đang mở luôn coi là đã đọc, kể cả khi inbox trả số cũ (BR-10)
+          return item.id === state.activeConversationId ? { ...next, unreadCount: 0 } : next
+        })
+        return { conversations: sortConversations(merged), isLoading: false }
       })
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : 'Không thể tải danh sách cuộc trò chuyện'
@@ -125,7 +170,11 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
   handleNewMessage: (conversationId: string, message: LastMessage, isSelf = false) => {
     set((state) => {
       const target = state.conversations.find((c) => c.id === conversationId)
-      if (!target) return state
+      if (!target) {
+        // Hội thoại chưa có trong inbox (vd đã "Xóa đoạn chat" - BR-42): tải chi tiết rồi chèn lại
+        void restoreMissingConversation(conversationId, message, isSelf, get, set)
+        return state
+      }
 
       const isActive = state.activeConversationId === conversationId
       const newUnreadCount = isSelf || isActive ? target.unreadCount : target.unreadCount + 1

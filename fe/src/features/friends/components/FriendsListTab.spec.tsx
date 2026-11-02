@@ -192,4 +192,22 @@ describe('FriendsListTab Component Tests', () => {
     fireEvent.click(findBtn)
     expect(mockOnSwitchToFindTab).toHaveBeenCalledTimes(1)
   })
+
+  it('falls back to API isOnline when no realtime presence exists (FR-08)', () => {
+    const friends: FriendUser[] = [
+      { ...mockFriends[1], id: 'user-3', username: 'carol', displayName: 'Carol', isOnline: true },
+    ]
+    render(
+      <FriendsListTab
+        friends={friends}
+        isLoading={false}
+        searchQuery=""
+        activeFilter="all"
+        onSearchChange={mockOnSearchChange}
+        onFilterChange={mockOnFilterChange}
+        onUnfriend={mockOnUnfriend}
+      />
+    )
+    expect(screen.getByTestId('filter-online-button')).toHaveTextContent('Đang hoạt động (1)')
+  })
 })

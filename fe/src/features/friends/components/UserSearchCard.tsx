@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { UserPlus, UserCheck, MessageSquare, UserX, Check, X, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
+import { getApiErrorMessage } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { conversationApi } from '@/features/conversations/services/conversation.api'
 import { useConversationStore } from '@/features/conversations/stores/conversation.store'
@@ -59,44 +61,36 @@ export function UserSearchCard({
     }
   }
 
-  const handleSend = async () => {
-    if (loading) return
+  // Chạy một hành động kết bạn; lỗi từ server (vd 403 do bị chặn - BR-28) hiển thị qua toast
+  const runAction = async (action: () => Promise<void>, fallbackMsg: string) => {
     setInternalLoading(true)
     try {
-      await onSendRequest(user.id)
+      await action()
+    } catch (err) {
+      toast.error(getApiErrorMessage(err, fallbackMsg))
     } finally {
       setInternalLoading(false)
     }
+  }
+
+  const handleSend = async () => {
+    if (loading) return
+    await runAction(() => onSendRequest(user.id), 'Không thể gửi lời mời kết bạn')
   }
 
   const handleCancel = async () => {
     if (!requestId || !onCancelRequest || loading) return
-    setInternalLoading(true)
-    try {
-      await onCancelRequest(requestId)
-    } finally {
-      setInternalLoading(false)
-    }
+    await runAction(() => onCancelRequest(requestId), 'Không thể hủy lời mời')
   }
 
   const handleAccept = async () => {
     if (!requestId || !onAcceptRequest || loading) return
-    setInternalLoading(true)
-    try {
-      await onAcceptRequest(requestId)
-    } finally {
-      setInternalLoading(false)
-    }
+    await runAction(() => onAcceptRequest(requestId), 'Không thể chấp nhận lời mời')
   }
 
   const handleReject = async () => {
     if (!requestId || !onRejectRequest || loading) return
-    setInternalLoading(true)
-    try {
-      await onRejectRequest(requestId)
-    } finally {
-      setInternalLoading(false)
-    }
+    await runAction(() => onRejectRequest(requestId), 'Không thể từ chối lời mời')
   }
 
   return (

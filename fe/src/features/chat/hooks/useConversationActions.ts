@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { getApiErrorMessage } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth.store'
@@ -17,6 +17,7 @@ import type { Conversation } from '@/features/conversations/types/conversation.t
  */
 export function useConversationActions(conversation: Conversation | undefined, partnerIdOverride?: string | null) {
   const navigate = useNavigate()
+  const { pathname } = useLocation()
   const currentUserId = useAuthStore((s) => s.user?.id)
   const [isClearing, setIsClearing] = useState(false)
   const [isBlocking, setIsBlocking] = useState(false)
@@ -52,7 +53,8 @@ export function useConversationActions(conversation: Conversation | undefined, p
       useMessagesStore.getState().clearConversationMessages(conversationId)
       useConversationStore.getState().removeConversation(conversationId)
       toast.success('Đã xóa đoạn chat')
-      navigate('/chat')
+      // Chỉ điều hướng khi đang mở chính đoạn chat đó (menu sidebar có thể xóa chat khác)
+      if (pathname === `/chat/${conversationId}`) navigate('/chat')
       return true
     } catch (err) {
       toast.error(getApiErrorMessage(err, 'Không thể xóa đoạn chat'))
@@ -60,7 +62,7 @@ export function useConversationActions(conversation: Conversation | undefined, p
     } finally {
       setIsClearing(false)
     }
-  }, [conversationId, navigate])
+  }, [conversationId, navigate, pathname])
 
   const blockPartner = useCallback(async (): Promise<boolean> => {
     if (!partnerId || !conversationId) {

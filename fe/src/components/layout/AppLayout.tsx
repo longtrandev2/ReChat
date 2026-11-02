@@ -7,8 +7,8 @@ export function AppLayout() {
   useSocketInit()
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-canvas-light dark:bg-canvas-dark text-ink-primary dark:text-ink-primary-dark select-none">
-      {/* 1. Global Navigation Rail (64px) bên trái */}
+    <div className="flex flex-col-reverse md:flex-row h-dvh md:h-screen w-screen overflow-hidden bg-canvas-light dark:bg-canvas-dark text-ink-primary dark:text-ink-primary-dark select-none">
+      {/* 1. Global Navigation Rail (64px) bên trái; dưới md thành thanh dưới cùng */}
       <NavigationRail />
 
       {/* 2. Vùng hiển thị nội dung chính (Sidebar + Chat Canvas) */}

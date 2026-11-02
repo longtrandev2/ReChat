@@ -281,10 +281,24 @@ export function ActiveChatCanvas() {
     const onMessagePinned = (payload: {
       conversationId: string
       messageId: string
-      message?: Message
+      message?: Message & { senderName?: string }
       pinnedBy?: MessageSender
     }) => {
       if (payload.conversationId === conversationId) {
+        // Payload realtime chỉ có senderName (không có sender): chuẩn hoá để PinnedMessageBar hiển thị đúng tên (FR-20)
+        if (payload.message && !payload.message.sender) {
+          const inFeed = (
+            useMessagesStore.getState().messagesByConversation[conversationId] || []
+          ).find((m) => m.id === payload.messageId)
+          const name = payload.message.senderName
+          payload.message = {
+            ...inFeed,
+            ...payload.message,
+            sender:
+              inFeed?.sender ??
+              ({ id: '', username: name || '', displayName: name || '', avatarUrl: null } as MessageSender),
+          } as Message & { senderName?: string }
+        }
         handleMessagePinned(
           payload.conversationId,
           payload.messageId,
@@ -366,7 +380,8 @@ export function ActiveChatCanvas() {
 
     const onGroupMembershipChanged = (payload: { conversationId: string; action: string }) => {
       if (payload.conversationId === conversationId && (payload.action === 'REMOVED' || payload.action === 'LEFT')) {
-        toast.error('Bạn không còn là thành viên của nhóm chat này')
+        // LEFT = chính mình rời nhóm (drawer đã toast thành công) -> không toast lần hai
+        if (payload.action === 'REMOVED') toast.error('Bạn không còn là thành viên của nhóm chat này')
         navigate('/chat')
       }
     }
@@ -677,6 +692,7 @@ export function ActiveChatCanvas() {
         isMuted={conversation.isMuted}
         onSearchClick={handleToggleSearch}
         onToggleMute={handleToggleMute}
+        onBackClick={() => navigate('/chat')}
         onInfoClick={() => setIsDetailOpen((prev) => !prev)}
         isPinned={actions.isPinned}
         blockStatus={blockStatus}

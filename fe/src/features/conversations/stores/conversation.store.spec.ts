@@ -288,4 +288,39 @@ describe('useConversationStore Tests (ZOMBIES & AAA Methodology)', () => {
       expect(list.find((c) => c.id === 'old')?.isPinned).toBeFalsy()
     })
   })
+
+  describe('QA regressions', () => {
+    it('H2: fetchInbox keeps members from detail loaded earlier', async () => {
+      const members = [{ id: 'm1', role: 'OWNER', user: { id: 'u1', username: 'a', displayName: 'A', avatarUrl: null } }]
+      useConversationStore.getState().addOrUpdateConversation({ ...mockConv1, members })
+      vi.mocked(conversationApi.getInbox).mockResolvedValueOnce([{ ...mockConv1, name: 'Renamed' }])
+
+      await useConversationStore.getState().fetchInbox()
+
+      const c = useConversationStore.getState().conversations[0]
+      expect(c.name).toBe('Renamed')
+      expect(c.members).toEqual(members)
+    })
+
+    it('M2: fetchInbox zeroes unread of the active conversation', async () => {
+      useConversationStore.setState({ activeConversationId: 'conv-1' })
+      vi.mocked(conversationApi.getInbox).mockResolvedValueOnce([{ ...mockConv1, unreadCount: 3 }])
+
+      await useConversationStore.getState().fetchInbox()
+
+      expect(useConversationStore.getState().conversations[0].unreadCount).toBe(0)
+    })
+
+    it('M1: handleNewMessage restores a conversation missing from the inbox (BR-42)', async () => {
+      vi.mocked(conversationApi.getConversationById).mockResolvedValueOnce({ ...mockConv1, unreadCount: 0 })
+      const msg: LastMessage = { id: 'm9', content: 'Hello again', type: 'TEXT', createdAt: '2026-10-27T08:00:00.000Z' }
+
+      useConversationStore.getState().handleNewMessage('conv-1', msg, false)
+      await vi.waitFor(() => expect(useConversationStore.getState().conversations).toHaveLength(1))
+
+      const c = useConversationStore.getState().conversations[0]
+      expect(c.lastMessage?.content).toBe('Hello again')
+      expect(c.unreadCount).toBe(1)
+    })
+  })
 })

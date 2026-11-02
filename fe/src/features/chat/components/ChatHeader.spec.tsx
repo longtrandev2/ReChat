@@ -216,6 +216,18 @@ describe('ChatHeader Component Tests', () => {
       expect(screen.queryByRole('menuitem', { name: 'Chặn người dùng' })).not.toBeInTheDocument()
     })
 
+    it('hides "Chặn người dùng" and "Bỏ chặn" when the user is the blocked one (BR-38)', async () => {
+      const user = userEvent.setup()
+      render(
+        <ChatHeader conversation={directConv} blockStatus="BLOCKED_ME" onBlock={vi.fn()} onUnblock={vi.fn()} onClearHistory={vi.fn()} />
+      )
+
+      await user.click(screen.getByRole('button', { name: 'Tùy chọn hội thoại' }))
+      expect(await screen.findByRole('menuitem', { name: 'Xóa đoạn chat' })).toBeInTheDocument()
+      expect(screen.queryByRole('menuitem', { name: 'Chặn người dùng' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('menuitem', { name: 'Bỏ chặn' })).not.toBeInTheDocument()
+    })
+
     it('hides block items for GROUP conversations', async () => {
       const user = userEvent.setup()
       render(<ChatHeader conversation={groupConv} onBlock={vi.fn()} onClearHistory={vi.fn()} />)

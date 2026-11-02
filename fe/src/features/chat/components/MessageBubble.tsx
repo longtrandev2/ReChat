@@ -195,7 +195,7 @@ interface MessageBubbleProps {
   onUnpin?: (message: Message) => void
 }
 
-const QUICK_EMOJIS = ['❤️', '👍', '😂', '🔥', '😮', '😢']
+const QUICK_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏']
 
 /**
  * MessageBubble: Bong bóng tin nhắn Telegram chuẩn thiết kế
@@ -705,7 +705,7 @@ export function MessageBubble({
                       <div className="inline-flex items-center gap-1 select-none text-[11px] text-ink-secondary dark:text-ink-secondary-dark ml-auto shrink-0 leading-none pb-0.5">
                         {message.isEdited && (
                           <span className="text-[10px] text-ink-muted italic mr-0.5">
-                            (đã sửa)
+                            (đã chỉnh sửa)
                           </span>
                         )}
                         {message.isPinned && (

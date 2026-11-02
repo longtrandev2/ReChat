@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import userEvent from '@testing-library/user-event'
 import { ConversationSidebar } from './ConversationSidebar'
 import { useConversationStore } from '../stores/conversation.store'
@@ -63,7 +64,7 @@ describe('ConversationSidebar Component Tests', () => {
   })
 
   it('renders header, search bar, tabs, and conversation items', () => {
-    render(<ConversationSidebar />)
+    render(<MemoryRouter><ConversationSidebar /></MemoryRouter>)
 
     // Heading
     expect(screen.getByRole('heading', { name: 'Đoạn chat' })).toBeInTheDocument()
@@ -85,12 +86,12 @@ describe('ConversationSidebar Component Tests', () => {
       isLoading: true,
     })
 
-    render(<ConversationSidebar />)
+    render(<MemoryRouter><ConversationSidebar /></MemoryRouter>)
     expect(screen.getByTestId('sidebar-skeleton')).toBeInTheDocument()
   })
 
   it('filters conversation list when typing into search bar and clears query on click', async () => {
-    render(<ConversationSidebar />)
+    render(<MemoryRouter><ConversationSidebar /></MemoryRouter>)
 
     const searchInput = screen.getByPlaceholderText('Tìm kiếm đoạn chat...')
     await user.type(searchInput, 'Frontend')
@@ -107,7 +108,7 @@ describe('ConversationSidebar Component Tests', () => {
   })
 
   it('filters by "Chưa đọc" tab correctly', async () => {
-    render(<ConversationSidebar />)
+    render(<MemoryRouter><ConversationSidebar /></MemoryRouter>)
 
     const unreadTab = screen.getByRole('button', { name: /chưa đọc/i })
     await user.click(unreadTab)
@@ -118,12 +119,24 @@ describe('ConversationSidebar Component Tests', () => {
 
   it('triggers onSelectConversation callback when clicking a conversation item', async () => {
     const handleSelect = vi.fn()
-    render(<ConversationSidebar onSelectConversation={handleSelect} />)
+    render(<MemoryRouter><ConversationSidebar onSelectConversation={handleSelect} /></MemoryRouter>)
 
     const item = screen.getByText('Nguyễn Văn A')
     await user.click(item)
 
     expect(handleSelect).toHaveBeenCalledWith('conv-1')
     expect(useConversationStore.getState().activeConversationId).toBe('conv-1')
+  })
+
+  it('renders a working options menu per conversation (L1)', async () => {
+    render(
+      <MemoryRouter>
+        <ConversationSidebar />
+      </MemoryRouter>
+    )
+    const triggers = screen.getAllByLabelText('Tùy chọn hội thoại')
+    expect(triggers.length).toBeGreaterThan(0)
+    await userEvent.setup().click(triggers[0])
+    expect(await screen.findByTestId('conversation-menu-pin')).toBeInTheDocument()
   })
 })

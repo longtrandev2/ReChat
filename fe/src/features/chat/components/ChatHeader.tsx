@@ -274,7 +274,7 @@ export function ChatHeader({
                 </DropdownMenu.Item>
               )}
 
-              {!isGroup && blockStatus !== 'BLOCKED_BY_ME' && onBlock && (
+              {!isGroup && blockStatus === 'NONE' && onBlock && (
                 <DropdownMenu.Item
                   onSelect={() => onBlock()}
                   className={DANGER_ITEM_CLASS}

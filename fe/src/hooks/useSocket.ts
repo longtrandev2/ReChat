@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { toast } from 'sonner'
 import { socketClient } from '@/services/socket.client'
 import { useSocketStore } from '@/stores/socket.store'
 import { useAuthStore } from '@/stores/auth.store'
@@ -76,8 +77,19 @@ export function useSocketInit() {
       setStatus('connected')
     }
 
-    const handleDisconnect = () => {
+    const handleDisconnect = (reason?: string) => {
       setStatus('disconnected')
+      // Server chủ động ngắt (vd phiên bị đăng xuất từ xa - FR-27): xác minh phiên ngay thay vì chờ API call kế tiếp
+      if (reason === 'io server disconnect' && useAuthStore.getState().isAuthenticated) {
+        void useAuthStore
+          .getState()
+          .checkAuth()
+          .then(() => {
+            if (!useAuthStore.getState().isAuthenticated) {
+              toast.error('Phiên đăng nhập đã kết thúc trên thiết bị này')
+            }
+          })
+      }
     }
 
     let isRefreshingSocket = false

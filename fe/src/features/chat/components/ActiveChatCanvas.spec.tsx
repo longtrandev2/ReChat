@@ -347,5 +347,34 @@ describe('ActiveChatCanvas Component Tests', () => {
 
     expect(screen.queryByTestId('pinned-message-bar')).not.toBeInTheDocument()
   })
-})
 
+  it('M4: realtime messagePinned payload with only senderName shows the sender name', async () => {
+    let messagePinnedCallback: ((payload: unknown) => void) | undefined
+    mockSocket.on.mockImplementation((event: string, cb: (...args: unknown[]) => void) => {
+      if (event === 'messagePinned') messagePinnedCallback = cb as (payload: unknown) => void
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/chat/conv-test-1']}>
+        <Routes>
+          <Route path="/chat/:conversationId" element={<ActiveChatCanvas />} />
+        </Routes>
+      </MemoryRouter>
+    )
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      messagePinnedCallback?.({
+        conversationId: 'conv-test-1',
+        messageId: 'rt-pin-1',
+        message: { id: 'rt-pin-1', content: 'Chao Alice', senderName: 'qa_bob' },
+        pinnedBy: { id: 'a', displayName: 'Alice' },
+      })
+    })
+
+    expect(await screen.findByText('qa_bob:')).toBeInTheDocument()
+    expect(screen.queryByText('Người dùng:')).not.toBeInTheDocument()
+  })
+})
