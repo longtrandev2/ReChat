@@ -522,6 +522,11 @@ describe('FriendsService', () => {
             expect(result.data[1].username).toBe('alice');
             expect(result.data[1].friendshipId).toBe('f-2');
 
+            // FR-08: select phải lấy isOnline + lastSeen của bạn bè
+            const findArgs = mockFriendshipRepo.findAndCount.mock.calls[0][0];
+            expect(findArgs.select.requester).toMatchObject({ isOnline: true, lastSeen: true });
+            expect(findArgs.select.addressee).toMatchObject({ isOnline: true, lastSeen: true });
+
             // Pagination metadata verification
             expect(result.meta).toEqual({
                 page: 1,

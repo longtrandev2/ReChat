@@ -442,6 +442,19 @@ describe('ConversationsService', () => {
             expect(mockMemberRepo.save).toHaveBeenCalledWith(remainingMember);
         });
 
+        it('should announce the new owner with a SYSTEM message when ownership is auto-transferred (BR-37, FR-46)', async () => {
+            mockConversationRepo.findOne.mockResolvedValue({ id: conversationId, type: ConversationType.GROUP });
+            mockMemberRepo.findOne.mockResolvedValue({ id: 'm-owner', role: ConversationRole.OWNER });
+            mockMemberRepo.find.mockResolvedValue([
+                { id: 'm-bob', role: ConversationRole.MEMBER, user: { id: 'user-bob', displayName: 'Bob Builder' } },
+            ]);
+
+            await service.leaveGroup(currentUserId, conversationId);
+
+            const contents = mockMessageRepo.create.mock.calls.map((c: any[]) => c[0].content);
+            expect(contents).toContain('Bob Builder là Trưởng nhóm mới.');
+        });
+
         it('should disband group when OWNER leaves and no members are left (BR-12)', async () => {
             mockConversationRepo.findOne.mockResolvedValue({ id: conversationId, type: ConversationType.GROUP });
             mockMemberRepo.findOne.mockResolvedValue({ id: 'm-owner', role: ConversationRole.OWNER });

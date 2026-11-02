@@ -235,8 +235,8 @@ export class FriendsService {
             select: {
                 id: true,
                 createdAt: true,
-                requester: { id: true, username: true, displayName: true, avatarUrl: true },
-                addressee: { id: true, username: true, displayName: true, avatarUrl: true },
+                requester: { id: true, username: true, displayName: true, avatarUrl: true, isOnline: true, lastSeen: true },
+                addressee: { id: true, username: true, displayName: true, avatarUrl: true, isOnline: true, lastSeen: true },
             },
             order: {
                 createdAt: 'DESC',
