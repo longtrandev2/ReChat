@@ -8,6 +8,7 @@ vi.mock('@/services/api.client', () => ({
     get: vi.fn(),
     post: vi.fn(),
     patch: vi.fn(),
+    delete: vi.fn(),
   },
 }))
 
@@ -107,5 +108,139 @@ describe('conversationApi Unit Tests (AAA Methodology)', () => {
 
     // Assert
     expect(apiClient.patch).toHaveBeenCalledWith('/conversations/conv-123/read')
+  })
+
+  it('pinMessage triggers POST /conversations/:id/messages/:messageId/pin', async () => {
+    // Arrange
+    const mockMessage = { id: 'msg-456', isPinned: true }
+    vi.mocked(apiClient.post).mockResolvedValueOnce({ data: mockMessage })
+
+    // Act
+    const result = await conversationApi.pinMessage('conv-123', 'msg-456')
+
+    // Assert
+    expect(apiClient.post).toHaveBeenCalledWith('/conversations/conv-123/messages/msg-456/pin')
+    expect(result).toEqual(mockMessage)
+  })
+
+  it('unpinMessage triggers DELETE /conversations/:id/messages/:messageId/pin', async () => {
+    // Arrange
+    const mockRes = { message: 'Bỏ ghim thành công' }
+    vi.mocked(apiClient.delete).mockResolvedValueOnce({ data: mockRes })
+
+    // Act
+    const result = await conversationApi.unpinMessage('conv-123', 'msg-456')
+
+    // Assert
+    expect(apiClient.delete).toHaveBeenCalledWith('/conversations/conv-123/messages/msg-456/pin')
+    expect(result).toEqual(mockRes)
+  })
+
+  it('getPinnedMessages triggers GET /conversations/:id/pinned-messages', async () => {
+    // Arrange
+    const mockList = [{ id: 'msg-p1' }, { id: 'msg-p2' }]
+    vi.mocked(apiClient.get).mockResolvedValueOnce({ data: mockList })
+
+    // Act
+    const result = await conversationApi.getPinnedMessages('conv-123')
+
+    // Assert
+    expect(apiClient.get).toHaveBeenCalledWith('/conversations/conv-123/pinned-messages')
+    expect(result).toEqual(mockList)
+  })
+
+  it('updateGroup triggers PATCH /conversations/:id with name and avatarUrl', async () => {
+    // Arrange
+    const payload = { name: 'New Group Name', avatarUrl: 'https://new-avatar.png' }
+    const updatedConv = { ...mockConversation, ...payload }
+    vi.mocked(apiClient.patch).mockResolvedValueOnce({ data: updatedConv })
+
+    // Act
+    const result = await conversationApi.updateGroup('conv-123', payload)
+
+    // Assert
+    expect(apiClient.patch).toHaveBeenCalledWith('/conversations/conv-123', payload)
+    expect(result).toEqual(updatedConv)
+  })
+
+  it('updateQuickEmoji triggers PATCH /conversations/:id/quick-emoji', async () => {
+    // Arrange
+    vi.mocked(apiClient.patch).mockResolvedValueOnce({ data: { quickEmoji: '🔥' } })
+
+    // Act
+    const result = await conversationApi.updateQuickEmoji('conv-123', '🔥')
+
+    // Assert
+    expect(apiClient.patch).toHaveBeenCalledWith('/conversations/conv-123/quick-emoji', { emoji: '🔥' })
+    expect(result).toEqual({ quickEmoji: '🔥' })
+  })
+
+  it('addMembers triggers POST /conversations/:id/members', async () => {
+    // Arrange
+    vi.mocked(apiClient.post).mockResolvedValueOnce({ data: { success: true } })
+
+    // Act
+    await conversationApi.addMembers('conv-123', ['user-1', 'user-2'])
+
+    // Assert
+    expect(apiClient.post).toHaveBeenCalledWith('/conversations/conv-123/members', {
+      memberIds: ['user-1', 'user-2'],
+    })
+  })
+
+  it('kickMember triggers DELETE /conversations/:id/members/:userId', async () => {
+    // Arrange
+    const mockRes = { message: 'Đã xóa thành viên' }
+    vi.mocked(apiClient.delete).mockResolvedValueOnce({ data: mockRes })
+
+    // Act
+    const result = await conversationApi.kickMember('conv-123', 'user-bad')
+
+    // Assert
+    expect(apiClient.delete).toHaveBeenCalledWith('/conversations/conv-123/members/user-bad')
+    expect(result).toEqual(mockRes)
+  })
+
+  it('updateMemberRole triggers PATCH /conversations/:id/members/:userId/role', async () => {
+    // Arrange
+    const mockRes = { message: 'Đã thăng cấp' }
+    vi.mocked(apiClient.patch).mockResolvedValueOnce({ data: mockRes })
+
+    // Act
+    const result = await conversationApi.updateMemberRole('conv-123', 'user-admin', 'ADMIN')
+
+    // Assert
+    expect(apiClient.patch).toHaveBeenCalledWith('/conversations/conv-123/members/user-admin/role', {
+      role: 'ADMIN',
+    })
+    expect(result).toEqual(mockRes)
+  })
+
+  it('transferOwner triggers PATCH /conversations/:id/transfer-owner', async () => {
+    // Arrange
+    const mockRes = { message: 'Chuyển giao thành công' }
+    vi.mocked(apiClient.patch).mockResolvedValueOnce({ data: mockRes })
+
+    // Act
+    const result = await conversationApi.transferOwner('conv-123', 'user-new-owner')
+
+    // Assert
+    expect(apiClient.patch).toHaveBeenCalledWith('/conversations/conv-123/transfer-owner', {
+      newOwnerId: 'user-new-owner',
+    })
+    expect(result).toEqual(mockRes)
+  })
+
+  it('leaveGroup triggers DELETE /conversations/:id/leave', async () => {
+    // Arrange
+    const mockRes = { message: 'Đã rời nhóm' }
+    vi.mocked(apiClient.delete).mockResolvedValueOnce({ data: mockRes })
+
+    // Act
+    const result = await conversationApi.leaveGroup('conv-123')
+
+    // Assert
+    expect(apiClient.delete).toHaveBeenCalledWith('/conversations/conv-123/leave')
+    expect(result).toEqual(mockRes)
   })
 })

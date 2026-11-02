@@ -26,9 +26,11 @@ export interface ConversationMemberUser {
   lastSeen?: string
 }
 
+export type ConversationRole = 'OWNER' | 'ADMIN' | 'MEMBER'
+
 export interface ConversationMember {
   id: string
-  role: string
+  role: ConversationRole | string
   joinedAt?: string
   user: ConversationMemberUser
   lastReadMessageId?: string | null
@@ -58,4 +60,25 @@ export interface CreateDirectPayload {
 export interface CreateGroupPayload {
   name: string
   memberIds: string[]
+}
+
+export interface UpdateGroupPayload {
+  name?: string
+  avatarUrl?: string
+}
+
+export interface UpdateQuickEmojiPayload {
+  emoji: string
+}
+
+export interface AddMembersPayload {
+  memberIds: string[]
+}
+
+export interface UpdateMemberRolePayload {
+  role: 'ADMIN' | 'MEMBER'
+}
+
+export interface TransferOwnerPayload {
+  newOwnerId: string
 }

@@ -36,6 +36,9 @@ export interface Message {
   isRecalled: boolean
   isEdited?: boolean
   editedAt?: string | null
+  isPinned?: boolean
+  pinnedAt?: string | null
+  pinnedBy?: MessageSender | null
   reactions?: MessageReactionGroup[]
   createdAt: string
   updatedAt: string
@@ -67,6 +70,32 @@ export interface MessageEditedEvent {
   content: string
   isEdited: boolean
   editedAt: string
+}
+
+export interface MessagePinnedEvent {
+  conversationId: string
+  messageId: string
+  message?: Message
+  pinnedBy?: {
+    id: string
+    displayName: string
+  }
+}
+
+export interface MessageUnpinnedEvent {
+  conversationId: string
+  messageId: string
+}
+
+export interface ConversationCustomizedEvent {
+  conversationId: string
+  quickEmoji?: string
+  name?: string
+  avatarUrl?: string
+  updatedBy: {
+    id: string
+    displayName: string
+  }
 }
 
 export interface GetMessagesQuery {
