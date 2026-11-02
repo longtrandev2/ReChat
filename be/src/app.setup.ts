@@ -1,4 +1,5 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { ClassSerializerInterceptor, INestApplication, ValidationPipe } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import { corsOriginCallback } from './common/config/cors-origins.js';
@@ -37,6 +38,7 @@ export function configureApp(app: INestApplication): void {
     );
 
     // Response Envelope và Exception Filter toàn cục (Envelope Pattern)
-    app.useGlobalInterceptors(new TransformInterceptor());
+    // ClassSerializerInterceptor áp dụng @Exclude() trên entity (vd: email/2FA/password của User) trước khi bọc envelope
+    app.useGlobalInterceptors(new TransformInterceptor(), new ClassSerializerInterceptor(app.get(Reflector)));
     app.useGlobalFilters(new AllExceptionsFilter());
 }
