@@ -18,7 +18,9 @@ export class User {
     @Column({ default: false })
     twoFactorEnabled: boolean;
 
-    @Column()
+    // Không bao giờ trả hash mật khẩu ra ngoài: mọi query phải chọn tường minh khi cần (login, đổi mật khẩu)
+
+    @Column({ select: false })
     password: string;
 
     @Column({ nullable: true, length: 50 })

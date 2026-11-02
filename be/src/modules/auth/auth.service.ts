@@ -50,6 +50,18 @@ import {
 const MAX_2FA_LOGIN_RESENDS = 3;
 /** Số lần gửi lại OTP xác thực email tối đa mỗi giờ (mỗi lần gửi lại cấp thêm 5 lượt thử) */
 const MAX_EMAIL_OTP_RESENDS_PER_HOUR = 5;
+/** Cột cần cho đăng nhập: `password` có select:false trong entity nên phải chọn tường minh */
+const USER_WITH_PASSWORD_SELECT = {
+    id: true,
+    username: true,
+    email: true,
+    password: true,
+    isEmailVerified: true,
+    twoFactorEnabled: true,
+    displayName: true,
+    avatarUrl: true,
+    createdAt: true,
+} as const;
 const emailVerifyAttemptsKey = (email: string) => `email_verify_attempts:${email}`;
 const emailVerifyResendsKey = (email: string) => `email_verify_resends:${email}`;
 const mfaLoginAttemptsKey = (mfaToken: string) => `mfa_login_attempts:${mfaToken}`;
@@ -237,6 +249,7 @@ export class AuthService {
                 { username: account },
                 { email: account.toLowerCase() },
             ],
+            select: USER_WITH_PASSWORD_SELECT,
         });
 
         if (!user) {
@@ -641,7 +654,7 @@ export class AuthService {
     }
 
     private async findUserWithPasswordOrFail(userId: string): Promise<User> {
-        const dbUser = await this.userRepository.findOne({ where: { id: userId } });
+        const dbUser = await this.userRepository.findOne({ where: { id: userId }, select: { id: true, password: true } });
         if (!dbUser) {
             throw new NotFoundException('Người dùng không tồn tại');
         }
