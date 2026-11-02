@@ -1,6 +1,23 @@
 # SPEC.md — ReChat (Real-time Web Messenger)
 
-**Version:** 3.2 · **Ngày:** 02/11/2026 · **Trạng thái:** [x] Approved
+**Version:** 3.3 · **Ngày:** 02/11/2026 · **Trạng thái:** [x] Approved (Gate 1) · Living spec — mọi thay đổi ghi ở mục 0
+
+---
+
+## 0. Lịch sử phiên bản (Changelog)
+
+| Phiên bản | Ngày | Nội dung chính |
+|---|---|---|
+| 1.0 | 28/09/2026 | Khởi tạo SPEC từ `spec-template.md`: Auth, User, Room/Message (Gate 1) |
+| 1.1 | 29/09/2026 | Chuẩn hóa quan hệ Room–User n-n |
+| 2.0 | 06/10/2026 | Định hướng "modern real-time chat": Friendship, Direct/Group, WebSocket |
+| 2.1 | 14/10/2026 | Milestone 3: quản lý nhóm, ghim tin nhắn, media gallery, trạng thái hoạt động |
+| 3.0 | 20/10/2026 | Nền tảng bảo mật mới (Email OTP, 2FA, sessions, Redis), Milestone 4–5 (notification bridge, recall/edit, reaction, media, Redis adapter) |
+| 3.1 | 29/10/2026 | Phase 6 frontend: FR-29 → FR-48, BR-28 → BR-38 (bạn bè & chặn, right panel, quick emoji, in-chat search, mute, system messages, group eviction) |
+| 3.2 | 02/11/2026 | Settings Hub: FR-49, FR-50, BR-39, BR-40, `POST /auth/change-password`; thu hồi phiên thật sự (BR-24, BR-27) |
+| 3.3 | 02/11/2026 | Đồng bộ SPEC ↔ code sau review: BR-28 cưỡng chế phía server + event `userBlocked`/`userUnblocked`, BR-36 chặn giả mạo tin hệ thống, BR-M5-05 sửa cửa sổ 15 phút (UTC), BR-08 cho socket room, FR-48 + BR-41/BR-42 (ghim / xóa đoạn chat), BR-11/29/30/32/34 mô tả đúng hành vi thực tế, cập nhật §6 WebSocket, §7 schema, §9–§12, thêm §13 route map, §14 domain events, §15 truy vết BR → test |
+
+> Ghi chú quy trình: từ v3.0 một số mục (M4, M5) được bổ sung vào SPEC ngay sau khi implement thay vì trước — v3.3 rà soát lại toàn bộ để SPEC phản ánh đúng hệ thống.
 
 ---
 
@@ -57,7 +74,7 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 | **FR-30** | Messages | Tùy chỉnh biểu tượng cảm xúc mặc định (Quick Emoji) cho cuộc trò chuyện (mặc định là `👍`, hỗ trợ đổi sang icon khác như `❤️`, `🔥`, `🏸` và gửi nhanh với 1 cú nhấp). |
 | **FR-31** | Messages | Tìm kiếm nội dung tin nhắn trong cuộc hội thoại (In-Chat Search) theo từ khóa và cuộn trực tiếp đến tin nhắn tìm thấy. |
 | **FR-32** | Conversations | Tắt/Bật thông báo và âm thanh cuộc hội thoại (Mute / Unmute Notifications). |
-| **FR-33** | Conversations | Bảng điều khiển chi tiết hội thoại (Right Panel Messenger-style): Xem danh sách tin nhắn đã ghim, Đổi tên cuộc trò chuyện, Thay đổi ảnh đại diện hội thoại. |
+| **FR-33** | Conversations | Bảng điều khiển chi tiết hội thoại (Right Panel Messenger-style): Xem danh sách tin nhắn đã ghim, đổi tên và ảnh đại diện **nhóm** (hội thoại DIRECT hiển thị theo hồ sơ đối phương — BR-32), đổi Quick Emoji, tắt thông báo. |
 | **FR-34** | Auth | Tự động làm mới Access Token (Silent Refresh) thông qua HttpOnly Cookie (`POST /auth/refresh`) kèm cơ chế Refresh Token Rotation (RTR). |
 | **FR-35** | Auth | Ràng buộc phiên làm việc và Token Family với Device ID (`X-Device-Id`) kèm phát hiện hành vi tái sử dụng token (Reuse Detection). |
 | **FR-36** | Auth | Đồng bộ trạng thái đăng nhập, làm mới token và đăng xuất thời gian thực trên nhiều tab trình duyệt qua `BroadcastChannel`. |
@@ -72,7 +89,7 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 | **FR-45** | Messages | Thu hồi tin nhắn theo mẫu bia mộ (Message Recall & Tombstone Pattern): hiển thị "Tin nhắn đã bị thu hồi" cho cả hai phía và tự động xóa tài nguyên ảnh/tệp liên quan trên Cloudinary. |
 | **FR-46** | Messages | Tin nhắn thông báo hệ thống (System Action Messages): Tự động phát sinh bản ghi tin nhắn hệ thống (`type: SYSTEM`) khi diễn ra các sự kiện trong hội thoại (Tạo nhóm, Thêm thành viên, Xóa thành viên, Rời nhóm, Chuyển quyền Trưởng nhóm, Phân quyền Admin, Đổi tên/ảnh nhóm, Đổi Quick Emoji, Ghim/Bỏ ghim tin nhắn). Client hiển thị căn giữa dạng capsule badge, không có khung bong bóng (speech bubble), không avatar, không tick thời gian hay menu phản ứng. |
 | **FR-47** | Group Chat | Đồng bộ tư cách thành viên thời gian thực (Real-time Group Eviction): Khi thành viên bị xóa khỏi nhóm hoặc nhóm bị giải tán, socket server gửi thông báo `groupMembershipChanged`, client tự động toast cảnh báo, đóng active chat và chuyển hướng về `/chat`. |
-| **FR-48** | Conversations | Menu tùy chọn cuộc hội thoại (Conversation Actions Menu): Menu 3 chấm trên thanh tiêu đề hỗ trợ Ghim cuộc trò chuyện, Xóa đoạn chat, Chặn / Bỏ chặn người dùng với hộp thoại xác nhận an toàn. |
+| **FR-48** | Conversations | Menu tùy chọn cuộc hội thoại (Conversation Actions Menu): Menu 3 chấm trên thanh tiêu đề hỗ trợ Xem thông tin, Ghim / Bỏ ghim cuộc trò chuyện (`PATCH /conversations/:id/pin`, BR-41), Xóa đoạn chat phía mình (`DELETE /conversations/:id/history`, BR-42), Chặn / Bỏ chặn người dùng (DIRECT, BR-28, BR-38) — mọi thao tác phá hủy đều có hộp thoại xác nhận. |
 | **FR-49** | Profile & Auth | Đổi mật khẩu tài khoản trực tiếp trong Cài đặt (`POST /api/v1/auth/change-password`) yêu cầu xác thực mật khẩu hiện tại, kiểm tra chuẩn mật khẩu mới và mật khẩu xác nhận. |
 | **FR-50** | Settings | Trung tâm Cài đặt & Quản lý Bảo mật (Settings Hub `/settings`) tích hợp 3 tab: Hồ sơ & Đổi mật khẩu, Xác thực 2 bước (2FA), và Quản lý phiên đăng nhập đa thiết bị (Sessions Management). |
 
@@ -83,7 +100,7 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 | ID | Rule | Liên quan FR | Xử lý khi vi phạm |
 |----|------|--------------|-------------------|
 | **BR-01** | `username` là duy nhất, độ dài từ 3 đến 20 ký tự, chỉ chứa chữ cái, chữ số và gạch dưới `_` (regex: `^[a-zA-Z0-9_]+$`). | FR-01 | `409 Conflict` (trùng) hoặc `400 Bad Request` (sai định dạng) |
-| **BR-02** | `password` phải có độ dài tối thiểu từ 6 ký tự. `confirmPassword` phải khớp với `password`. | FR-01, FR-02 | `400 Bad Request` |
+| **BR-02** | `password` phải có độ dài tối thiểu từ 6 ký tự. `confirmPassword` phải khớp với `password`. Ghi chú: đăng ký / đặt lại mật khẩu giữ tối thiểu 6 ký tự; đổi mật khẩu trong Cài đặt áp dụng chuẩn mạnh hơn (BR-39) — quyết định có chủ đích để không chặn tài khoản cũ. | FR-01, FR-02 | `400 Bad Request` |
 | **BR-03** | Không thể tự gửi lời mời kết bạn cho chính mình (`requesterId != addresseeId`). | FR-06 | `400 Bad Request` |
 | **BR-04** | Không thể gửi lời mời kết bạn nếu đã gửi trước đó (trạng thái `PENDING`) hoặc hai người đã là bạn bè (`ACCEPTED`). | FR-06 | `409 Conflict` |
 | **BR-05** | Giữa 2 user chỉ tồn tại **duy nhất 1 Conversation loại `DIRECT`**. Khi gọi API tạo chat 1-1, nếu đã tồn tại thì trả về cuộc hội thoại cũ, không tạo trùng lặp. | FR-10 | `200 OK` (trả về hội thoại hiện có) |
@@ -92,7 +109,7 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 | **BR-08** | **Access Control:** Chỉ thành viên thuộc cuộc hội thoại (`ConversationMember`) mới có quyền xem lịch sử tin nhắn và gửi/nhận WebSocket message trong hội thoại đó. | FR-13, FR-14 | `403 Forbidden` / WS Event `exception` |
 | **BR-09** | Tin nhắn (`content`) không được để rỗng và có độ dài tối đa 2000 ký tự. | FR-14 | `400 Bad Request` / WS Event `exception` |
 | **BR-10** | Khi có tin nhắn mới, hệ thống tự động tăng `unreadCount = unreadCount + 1` cho tất cả thành viên khác trong hội thoại. Khi thành viên gọi `markAsRead`, reset `unreadCount = 0`. | FR-09, FR-16 | N/A (Hệ thống tự tính) |
-| **BR-11** | Mọi request API (trừ Register/Login) và kết nối WebSocket phải có JWT Token hợp lệ. | FR-03 -> FR-17 | `401 Unauthorized` / WS Disconnect |
+| **BR-11** | Mọi request API và kết nối WebSocket phải có JWT Token hợp lệ, **trừ** các endpoint công khai: `GET /api/v1` (health), `POST /auth/register`, `/auth/verify-email`, `/auth/resend-verification`, `/auth/login`, `/auth/2fa/verify-login`, `/auth/2fa/resend-login-otp`, `/auth/forgot-password`, `/auth/reset-password`, `/auth/refresh` (cookie) và `/auth/logout` (JWT tùy chọn). Token đã bị thu hồi (BR-27) bị từ chối ở cả HTTP lẫn handshake WebSocket. | FR-03 -> FR-17 | `401 Unauthorized` / WS Disconnect |
 | **BR-12** | Khi Owner rời nhóm: Tự động chuyển quyền Owner cho thành viên tiếp theo hoặc giải tán nhóm nếu không còn thành viên nào. | FR-12 | `200 OK` |
 | **BR-13** | Hành động Hủy kết bạn (Unfriend) yêu cầu hai người dùng phải đang có mối quan hệ bạn bè (`status = 'ACCEPTED'`). Nếu không tồn tại quan hệ bạn bè sẽ báo lỗi. | FR-08 | `404 Not Found` / `400 Bad Request` |
 | **BR-14** | **Quyền Xóa thành viên (Kick Member):** Chỉ `OWNER` hoặc `ADMIN` mới có quyền xóa thành viên khỏi nhóm chat. `ADMIN` không có quyền xóa `OWNER` hoặc `ADMIN` khác. `OWNER` có quyền xóa bất kỳ ai trừ chính mình. Không áp dụng cho hội thoại `DIRECT`. | FR-18 | `403 Forbidden` / `400 Bad Request` |
@@ -109,22 +126,22 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 | **BR-25** | **Xác thực 2 bước (2FA Challenge):** Khi người dùng bật 2FA (`twoFactorEnabled = true`), server chỉ cấp JWT Token sau khi xác thực 2 bước. Sau khi xác thực đúng username/password, server sinh `mfaToken` tạm (TTL 5 phút) và gửi mã OTP 6 số qua email. Nhập sai OTP quá 5 lần liên tiếp sẽ lập tức hủy bỏ phiên 2FA tạm để chống brute-force. Gửi lại OTP (`/auth/2fa/resend-login-otp`) **không** reset bộ đếm nhập sai và tối đa 3 lần cho mỗi `mfaToken`. OTP xác thực email (`/auth/verify-email`) cũng bị hủy sau 5 lần nhập sai. Mọi OTP được sinh bằng CSPRNG (`crypto.randomInt`). | FR-25, FR-26 | `400 Bad Request` / `429 Too Many Requests` |
 | **BR-26** | **Distributed Rate Limiting:** Áp dụng rate limiting phân tán lưu trữ trên Redis. Hạn mức toàn hệ thống là 100 requests/phút. Các endpoint nhạy cảm (`/auth/login`, `/auth/register`, `/auth/resend-verification`, `/auth/reset-password`, `/auth/2fa/verify-login`) có hạn mức nghiêm ngặt từ 3 đến 5 requests/phút. | FR-01, FR-02, FR-23, FR-24, FR-26 | `429 Too Many Requests` |
 | **BR-27** | **Token Blacklist & Multi-Device Sessions:** Khi người dùng bấm Đăng xuất (`POST /auth/logout`) hoặc bị Đăng xuất từ xa (`DELETE /auth/sessions/:deviceId`), token JWT sẽ được đưa vào Redis Blacklist (`auth:blacklist:{token}`) với thời gian sống bằng thời gian còn lại của token. Bất kỳ request nào mang token trong blacklist đều bị từ chối ngay lập tức. Mỗi thiết bị gắn với một Refresh Token Family (`auth:device_family:{userId}:{deviceId}`); đăng xuất / đăng xuất từ xa hủy family đó (không thể refresh tiếp) và ghi mốc `auth:device_min_issued_at:{userId}:{deviceId}` so với claim `did` trong Access Token để chặn token đang dùng. Mốc thu hồi lưu theo mili-giây (Access Token có claim `iatMs`) và được kiểm tra ở cả HTTP (JwtStrategy), handshake WebSocket lẫn `POST /auth/refresh` (trước và sau khi xoay token, chống race). Khi thu hồi, server phát event `auth.sessions_revoked` để ngắt ngay các socket đang mở của thiết bị bị thu hồi (room `device_{userId}_{deviceId}`). Session hiển thị có TTL bằng Refresh Token (30 ngày) và được gia hạn mỗi lần refresh. | FR-03, FR-27, FR-28 | `401 Unauthorized` |
-| **BR-28** | **Chặn & Bỏ chặn người dùng (Friendship Blocking):** Người dùng có quyền chặn người dùng khác (`status = 'BLOCKED'`). Khi User A chặn User B, User B không thể gửi tin nhắn cho User A trong chat DIRECT, không thấy trạng thái trực tuyến của nhau và không thể gửi lại lời mời kết bạn. Chỉ người đã thực hiện chặn (User A) mới có quyền mở chặn (`POST /friends/:friendId/unblock`). | FR-29 | `400 Bad Request` / `403 Forbidden` / `404 Not Found` |
-| **BR-29** | **Tùy chỉnh Quick Emoji:** Mỗi cuộc hội thoại (Direct hoặc Group) có thuộc tính `quickEmoji` (mặc định là `👍`). Mọi thành viên trong cuộc hội thoại đều có quyền thay đổi `quickEmoji` sang một ký tự emoji hợp lệ. Khi thay đổi thành công, hệ thống phát socket event `conversationCustomized` để đồng bộ real-time. | FR-30 | `400 Bad Request` / `403 Forbidden` |
-| **BR-30** | **Tìm kiếm trong cuộc hội thoại (In-Chat Search):** Thành viên có quyền tìm kiếm các tin nhắn có nội dung chứa từ khóa `q` (không phân biệt hoa thường). Loại trừ các tin nhắn đã bị thu hồi (`isRecalled = true`). Trả về danh sách message kèm sender và timestamp. | FR-31 | `403 Forbidden` / `400 Bad Request` |
+| **BR-28** | **Chặn & Bỏ chặn người dùng (Friendship Blocking):** Khi User A chặn User B (`status = 'BLOCKED'`, `requester` = người chặn): (1) không bên nào gửi được tin nhắn trong chat DIRECT — server trả `403` với `errorCode: CONVERSATION_BLOCKED` (áp dụng cả REST lẫn WebSocket); (2) hai bên không thấy trạng thái trực tuyến của nhau (inbox, chi tiết hội thoại, `/active` trả `isOnline=false`, không phát `userPresence`); (3) không thể gửi lời mời kết bạn; (4) chỉ người chặn (A) mới bỏ chặn được — B không thể 'chặn ngược' để ghi đè hay gỡ lệnh chặn của A (`403`); chặn lại lần nữa là thao tác idempotent. Khi chặn / bỏ chặn, server phát `userBlocked` / `userUnblocked` tới room cá nhân của cả hai. | FR-29, FR-48 | `400 Bad Request` / `403 Forbidden` / `404 Not Found` |
+| **BR-29** | **Tùy chỉnh Quick Emoji:** Mỗi cuộc hội thoại (Direct hoặc Group) có thuộc tính `quickEmoji` (mặc định là `👍`). Mọi thành viên trong cuộc hội thoại đều có quyền thay đổi `quickEmoji` sang một ký tự emoji hợp lệ. Khi thay đổi thành công, hệ thống phát socket event `conversationCustomized` để đồng bộ real-time. Giá trị phải là một emoji Unicode (cho phép chuỗi ZWJ / variation selector), tối đa 32 ký tự. | FR-30 | `400 Bad Request` / `403 Forbidden` |
+| **BR-30** | **Tìm kiếm trong cuộc hội thoại (In-Chat Search):** Thành viên có quyền tìm kiếm các tin nhắn có nội dung chứa từ khóa `q` (không phân biệt hoa thường). Loại trừ các tin nhắn đã bị thu hồi (`isRecalled = true`). Trả về danh sách message kèm sender và timestamp. Từ khóa rỗng trả về danh sách rỗng; tối đa 50 kết quả mới nhất; tôn trọng mốc "Xóa đoạn chat" của người tìm (BR-42). | FR-31 | `403 Forbidden` / `400 Bad Request` |
 | **BR-31** | **Tắt/Bật thông báo hội thoại (Mute Notifications):** Thành viên có thể tắt/bật thông báo âm thanh và push toast cho từng cuộc trò chuyện (`isMuted: boolean`). Trạng thái này lưu theo từng thành viên. Khi `isMuted = true`, ứng dụng client không phát âm thanh chuông khi có tin nhắn mới gửi đến từ hội thoại đó. | FR-32 | `403 Forbidden` |
-| **BR-32** | **Tùy chỉnh thông tin đoạn chat (Right Panel):** Thành viên có quyền đổi tên hội thoại (`name`) và đổi ảnh đại diện hội thoại (`avatarUrl`) cho cả hội thoại Group và Direct (đổi tên hiển thị / nickname). | FR-33 | `403 Forbidden` / `400 Bad Request` |
+| **BR-32** | **Tùy chỉnh thông tin đoạn chat (Right Panel):** Chỉ hội thoại **GROUP** được đổi tên (`name`) và ảnh đại diện (`avatarUrl`); hội thoại DIRECT luôn hiển thị tên / avatar của đối phương và trả `400` nếu cố cập nhật. Quick Emoji áp dụng cho cả hai loại (BR-29). | FR-33 | `403 Forbidden` / `400 Bad Request` |
 | **BR-33** | **Cơ chế Xoay vòng Refresh Token (RTR & Token Family):** Refresh Token có thời hạn sống 30 ngày, lưu trữ dưới dạng HttpOnly cookie (`rechat_refresh_token`). Khi gọi `POST /auth/refresh`, hệ thống cấp phát cặp Access Token (15 phút) và Refresh Token mới, đồng thời hủy token cũ trong Redis Token Family (`auth:family:{familyId}`). Áp dụng thời gian ân hạn (Grace Period) 30 giây cho token vừa xoay vòng để giải quyết xung đột đa tab/đa request. Nếu một token đã bị thu hồi ngoài 30s được sử dụng (Reuse Detection), hệ thống lập tức thu hồi toàn bộ Token Family của phiên đó và buộc đăng nhập lại. | FR-34, FR-35 | `401 Unauthorized` / `403 Forbidden` |
-| **BR-34** | **Ràng buộc Thiết bị (Device Binding):** Mọi phiên đăng nhập và yêu cầu refresh token bắt buộc phải đi kèm header `X-Device-Id`. Nếu `X-Device-Id` không khớp với thiết bị đã đăng ký trong metadata của refresh token, yêu cầu bị từ chối với lỗi `403 Forbidden`. | FR-35 | `403 Forbidden` |
+| **BR-34** | **Ràng buộc Thiết bị (Device Binding):** Client gửi header `X-Device-Id` (UUID lưu ở localStorage) cho mọi request. Nếu thiếu, server dùng định danh dự phòng (băm User-Agent, cuối cùng là `default-device`). Refresh token gắn với thiết bị đã cấp: refresh từ thiết bị khác bị từ chối và cookie không dùng được ở thiết bị lạ. Mỗi thiết bị chỉ có một Token Family hiệu lực (đăng nhập lại trên cùng thiết bị hủy family cũ). | FR-35 | `401 Unauthorized` |
 | **BR-35** | **Thu hồi Cookie khi Đăng xuất (Cookie Revocation on Logout):** Endpoint `POST /auth/logout` cho phép thu hồi phiên ngay cả khi Access Token đã hết hạn (`OptionalJwtAuthGuard`), xóa sạch cookie `rechat_refresh_token`, hủy token family trên Redis và đưa Access Token (nếu còn hạn) vào Redis Blacklist. | FR-03, FR-28 | `200 OK` |
-| **BR-36** | **Quy tắc phát sinh Tin nhắn hệ thống (System Action Messages):** Khi xảy ra các sự kiện thay đổi cấu trúc hoặc cấu hình quan trọng trong cuộc hội thoại, hệ thống tự động lưu bản ghi tin nhắn loại `SYSTEM` (`type = 'SYSTEM'`), cập nhật `conversation.lastMessageId` và `lastMessageAt`, đồng thời phát sự kiện socket `newMessage` và domain event `inbox.updated`. Các hành động phát sinh tin nhắn hệ thống gồm: (1) Tạo nhóm chat mới, (2) Thêm thành viên vào nhóm, (3) Xóa thành viên khỏi nhóm, (4) Thành viên tự rời nhóm, (5) Chuyển quyền Trưởng nhóm, (6) Bổ nhiệm / Gỡ quyền Quản trị viên (Admin), (7) Đổi tên nhóm hoặc ảnh đại diện nhóm, (8) Đổi biểu tượng cảm xúc nhanh (Quick Emoji), (9) Ghim hoặc Bỏ ghim tin nhắn. Tin nhắn hệ thống không có người nhận phản ứng (không thể thả emoji), không thể trả lời (reply), không thể chỉnh sửa hay thu hồi, và hiển thị dạng capsule badge căn giữa trên giao diện client. | FR-46 | N/A (Hệ thống tự động phát sinh) |
+| **BR-36** | **Quy tắc phát sinh Tin nhắn hệ thống (System Action Messages):** Khi xảy ra các sự kiện thay đổi cấu trúc hoặc cấu hình quan trọng trong cuộc hội thoại, hệ thống tự động lưu bản ghi tin nhắn loại `SYSTEM` (`type = 'SYSTEM'`), cập nhật `conversation.lastMessageId` và `lastMessageAt`, đồng thời phát sự kiện socket `newMessage` và domain event `inbox.updated`. Các hành động phát sinh tin nhắn hệ thống gồm: (1) Tạo nhóm chat mới, (2) Thêm thành viên vào nhóm, (3) Xóa thành viên khỏi nhóm, (4) Thành viên tự rời nhóm, (5) Chuyển quyền Trưởng nhóm, (6) Bổ nhiệm / Gỡ quyền Quản trị viên (Admin), (7) Đổi tên nhóm hoặc ảnh đại diện nhóm, (8) Đổi biểu tượng cảm xúc nhanh (Quick Emoji), (9) Ghim hoặc Bỏ ghim tin nhắn. Tin nhắn hệ thống không có người nhận phản ứng (không thể thả emoji), không thể trả lời (reply), không thể chỉnh sửa hay thu hồi, và hiển thị dạng capsule badge căn giữa trên giao diện client. Client **không** thể tự tạo tin nhắn `SYSTEM` (`type` chỉ nhận `TEXT`/`IMAGE`/`FILE`, `fileUrl` phải là URL http(s) tuyệt đối); server từ chối (`400`) reaction / chỉnh sửa / thu hồi / ghim / trả lời trên tin nhắn `SYSTEM`. | FR-46 | N/A (Hệ thống tự động phát sinh) |
 | **BR-37** | **Đồng bộ gỡ bỏ thành viên thời gian thực (Real-time Group Eviction):** Khi một thành viên bị xóa khỏi nhóm (`REMOVED`) hoặc tự rời khỏi nhóm (`LEFT`), hệ thống gửi WebSocket event cá nhân `groupMembershipChanged` đến room cá nhân `user_${userId}`. Client nhận sự kiện sẽ tự động xóa cuộc hội thoại khỏi inbox cache; nếu người dùng đang mở xem cuộc hội thoại đó trên `ActiveChatCanvas`, client tự động hiển thị thông báo toast cảnh báo *"Bạn không còn là thành viên của nhóm chat này"*, đóng khung chat và chuyển hướng về `/chat`. Nếu Trưởng nhóm (`OWNER`) rời nhóm và nhóm còn thành viên khác, hệ thống tự động chuyển quyền `OWNER` cho thành viên gia nhập sớm nhất (`joinedAt ASC`) trước khi xử lý rời nhóm. | FR-12, FR-14, FR-47 | N/A (Đồng bộ thời gian thực) |
-| **BR-38** | **Trạng thái giao diện khi Chặn người dùng trong Direct Chat:** Khi User A chặn User B, trong khung chat Direct của User A, thanh nhập tin nhắn được thay thế bằng thông báo "Bạn đã chặn người dùng này" kèm nút "Bỏ chặn"; menu 3 chấm hiển thị tùy chọn "Bỏ chặn", "Ghim cuộc trò chuyện", "Xóa đoạn chat". Về phía User B, thanh nhập tin nhắn bị khóa và hiển thị thông báo "Bạn không thể gửi tin nhắn cho người này". | FR-29, FR-48 | `400 Bad Request` / `403 Forbidden` |
+| **BR-38** | **Trạng thái giao diện khi Chặn người dùng trong Direct Chat:** Khi User A chặn User B, trong khung chat Direct của User A, thanh nhập tin nhắn được thay thế bằng thông báo "Bạn đã chặn người dùng này" kèm nút "Bỏ chặn"; menu 3 chấm hiển thị tùy chọn "Bỏ chặn", "Ghim cuộc trò chuyện", "Xóa đoạn chat". Về phía User B, thanh nhập tin nhắn bị khóa và hiển thị thông báo "Bạn không thể gửi tin nhắn cho người này". Trạng thái chặn được trả về trong payload hội thoại DIRECT (`blockStatus: NONE | BLOCKED_BY_ME | BLOCKED_ME`) và cập nhật realtime qua `userBlocked` / `userUnblocked`; gửi tin khi bị chặn nhận `403 CONVERSATION_BLOCKED` và client chuyển sang trạng thái khóa. | FR-29, FR-48 | `400 Bad Request` / `403 Forbidden` |
 | **BR-M5-01** | **Quyền thu hồi tin nhắn (Recall Permission):** Chỉ người gửi tin nhắn (`senderId === currentUserId`) và đang là thành viên hợp lệ của cuộc hội thoại mới có quyền thu hồi tin nhắn. | FR-45 | `403 Forbidden` / WS Event `exception` |
 | **BR-M5-02** | **Thời hạn thu hồi tin nhắn (Recall Window):** Cho phép thu hồi tin nhắn bất kỳ lúc nào, không giới hạn khoảng thời gian kể từ thời điểm gửi. | FR-45 | N/A |
 | **BR-M5-03** | **Mẫu bia mộ & Dọn dẹp tài nguyên (Tombstone & Cleanup):** Khi thu hồi, tin nhắn được đánh dấu `isRecalled = true`, nội dung chuyển thành `[Tin nhắn đã bị thu hồi]`, trường `fileUrl` bị xóa (`null`), đồng thời phát sự kiện domain `message.recalled` để tự động xóa file/ảnh tương ứng trên Cloudinary. | FR-45 | N/A (Hệ thống tự dọn dẹp) |
 | **BR-M5-04** | **Quyền chỉnh sửa tin nhắn (Edit Permission):** Chỉ người gửi tin nhắn (`senderId === currentUserId`) và đang là thành viên cuộc hội thoại mới có quyền chỉnh sửa. Không thể chỉnh sửa tin nhắn đã bị thu hồi (`isRecalled = true`). | FR-39 | `403 Forbidden` / `400 Bad Request` |
-| **BR-M5-05** | **Giới hạn thời gian chỉnh sửa (Edit Time Window):** Chỉ được phép chỉnh sửa tin nhắn trong vòng 15 phút kể từ thời điểm gửi (`createdAt + 15m >= NOW`). Quá 15 phút yêu cầu bị từ chối. | FR-39 | `400 Bad Request` / WS Event `exception` |
+| **BR-M5-05** | **Giới hạn thời gian chỉnh sửa (Edit Time Window):** Chỉ được phép chỉnh sửa tin nhắn trong vòng 15 phút kể từ thời điểm gửi (`createdAt + 15m >= NOW`). Quá 15 phút yêu cầu bị từ chối. Thời gian so sánh theo UTC (MySQL `time_zone=+00:00`, TypeORM `timezone: Z`); tin nhắn quá 15 phút luôn bị từ chối. | FR-39 | `400 Bad Request` / WS Event `exception` |
 | **BR-M5-06** | **Hợp lệ hóa nội dung chỉnh sửa (Edit Validation):** Nội dung mới sau khi `trim()` không được để trống và không được trùng với nội dung hiện tại của tin nhắn. Tin nhắn sau khi sửa được đánh dấu `isEdited = true` và lưu thời điểm `editedAt = NOW()`. | FR-39 | `400 Bad Request` / WS Event `exception` |
 | **BR-M5-07** | **Logic chuyển đổi cảm xúc (Reaction Toggle Logic):** Khi người dùng tương tác emoji với tin nhắn: Nếu chưa từng thả cảm xúc -> Thêm mới (`action: 'ADDED'`); Nếu đã thả đúng emoji đó -> Hủy bỏ cảm xúc (`action: 'REMOVED'`); Nếu đã thả emoji khác -> Đổi sang emoji mới (`action: 'CHANGED'`). | FR-37 | N/A (Toggle tự động) |
 | **BR-M5-08** | **Ràng buộc cảm xúc duy nhất (Single Reaction per User):** Mỗi người dùng chỉ được có tối đa 1 biểu tượng cảm xúc trên cùng một tin nhắn tại một thời điểm (Unique constraint `[messageId, userId]`). | FR-37 | `409 Conflict` |
@@ -132,6 +149,8 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 | **BR-M5-10** | **Tự động phát sóng khi tải lên (Auto-publish on Upload):** Khi gọi endpoint `POST /api/v1/media/upload`, nếu có truyền tham số `conversationId`, hệ thống tự động tạo một tin nhắn loại `IMAGE` hoặc `FILE` trong cuộc hội thoại và phát sóng realtime event `newMessage` tới tất cả thành viên trong phòng chat. | FR-40 | `400 Bad Request` / `403 Forbidden` |
 | **BR-39** | **Đổi mật khẩu tài khoản (Change Password):** Người dùng đang đăng nhập có quyền đổi mật khẩu tài khoản qua `POST /auth/change-password`. Bắt buộc xác thực mật khẩu hiện tại (`currentPassword`) bằng `bcrypt.compare`. Mật khẩu mới (`newPassword`) phải tối thiểu 8 ký tự, bao gồm ít nhất 1 chữ hoa, 1 chữ thường, 1 chữ số và 1 ký tự đặc biệt, không được trùng với mật khẩu hiện tại, và phải khớp chính xác với `confirmPassword` (tối đa 72 ký tự do giới hạn bcrypt). Sai mật khẩu hiện tại trả `401` kèm `errorCode: INVALID_CURRENT_PASSWORD` (client không kích hoạt silent refresh). Đổi mật khẩu thành công sẽ đăng xuất mọi thiết bị **khác** thiết bị hiện tại. | FR-49 | `400 Bad Request` / `401 Unauthorized` |
 | **BR-40** | **Quản lý Cài đặt & Hồ sơ cá nhân (Settings Hub & Profile Sync):** Giao diện Cài đặt `/settings` cấu trúc 3 tab (Hồ sơ & Mật khẩu, Bảo mật & 2FA, Quản lý thiết bị & Phiên). Khi tải lên ảnh đại diện (`POST /media/upload`) và lưu URL (`PATCH /users/me`), hệ thống đồng bộ ngay lập tức vào `useAuthStore` để cập nhật avatar trên Navigation Rail. Khi đổi mật khẩu thành công, reset form và hiển thị toast. Thao tác bật/tắt 2FA cập nhật `twoFactorEnabled` trong store. Đăng xuất thiết bị từ xa qua `DELETE /auth/sessions/:deviceId` thu hồi session trên Redis. | FR-04, FR-25, FR-27, FR-49, FR-50 | `400 Bad Request` / `401 Unauthorized` |
+| **BR-41** | **Ghim cuộc trò chuyện (Pin Conversation):** Ghim là thiết lập riêng của từng thành viên (`conversation_members.isPinned`, `pinnedAt`), không ảnh hưởng người khác. Tối đa 5 hội thoại được ghim mỗi người; inbox sắp xếp hội thoại ghim lên đầu (theo `pinnedAt` mới nhất), sau đó theo `lastMessageAt`. Chỉ thành viên mới được ghim (BR-08). | FR-48 | `400 Bad Request` / `403 Forbidden` |
+| **BR-42** | **Xóa đoạn chat phía mình (Clear History):** `DELETE /conversations/:id/history` ghi mốc `clearedAt` cho riêng người thực hiện và đưa `unreadCount` về 0. Với người đó, mọi tin nhắn có `createdAt <= clearedAt` bị ẩn khỏi lịch sử, media, tìm kiếm, tin ghim và preview inbox; hội thoại biến khỏi inbox cho tới khi có tin nhắn mới. Các thành viên khác không bị ảnh hưởng. | FR-48 | `403 Forbidden` |
 
 ---
 
@@ -140,6 +159,7 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 ### 5.1. Authentication, Security & Users
 | Method | Path | Mô tả | Auth | Rules |
 |--------|------|-------|------|-------|
+| `GET` | `/api/v1` | Health check (hello) | None | - |
 | `POST` | `/api/v1/auth/register` | Đăng ký tài khoản mới (gửi OTP về email) | None | BR-01, BR-02, BR-21, BR-26 |
 | `POST` | `/api/v1/auth/verify-email` | Xác thực tài khoản bằng mã OTP 6 số từ email | None | BR-22, BR-23 |
 | `POST` | `/api/v1/auth/resend-verification` | Gửi lại mã OTP kích hoạt tài khoản (Cooldown 60s) | None | BR-22, BR-26 |
@@ -193,6 +213,8 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 | `GET` | `/api/v1/conversations/:id/messages/search` | Tìm kiếm tin nhắn theo từ khóa (`q={keyword}`) | Bearer JWT | BR-08, BR-30 |
 | `PATCH` | `/api/v1/conversations/:id/read` | Đánh dấu đã đọc toàn bộ tin nhắn trong hội thoại | Bearer JWT | BR-08, BR-10 |
 | `PATCH` | `/api/v1/conversations/:id/mute` | Tắt/bật thông báo cuộc hội thoại `{ isMuted: boolean }` | Bearer JWT | BR-08, BR-31 |
+| `PATCH` | `/api/v1/conversations/:id/pin` | Ghim / bỏ ghim hội thoại phía mình `{ isPinned: boolean }` → `{ conversationId, isPinned, pinnedAt }` | Bearer JWT | BR-08, BR-41 |
+| `DELETE` | `/api/v1/conversations/:id/history` | Xóa đoạn chat phía mình → `{ conversationId, clearedAt }` | Bearer JWT | BR-08, BR-42 |
 | `PATCH` | `/api/v1/conversations/:id/quick-emoji` | Tùy chỉnh biểu tượng cảm xúc mặc định `{ emoji: string }` | Bearer JWT | BR-08, BR-29, BR-36 |
 | `POST` | `/api/v1/conversations/:id/messages/:messageId/pin` | Ghim tin nhắn trong cuộc trò chuyện | Bearer JWT | BR-08, BR-18, BR-36 |
 | `DELETE` | `/api/v1/conversations/:id/messages/:messageId/pin` | Bỏ ghim tin nhắn | Bearer JWT | BR-08, BR-18, BR-36 |
@@ -213,8 +235,8 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 |-------|---------|-------|-----------|
 | `joinConversation` | `{ conversationId: string }` | Tham gia vào socket room của hội thoại | BR-08 |
 | `leaveConversation` | `{ conversationId: string }` | Rời khỏi socket room của hội thoại | BR-08 |
-| `sendMessage` | `{ conversationId: string, content: string }` | Gửi tin nhắn mới vào cuộc trò chuyện | BR-08, BR-09 |
-| `typing` | `{ conversationId: string, isTyping: boolean }` | Bật/tắt thông báo đang gõ tin nhắn | BR-08 |
+| `sendMessage` | `{ conversationId: string, content: string, type?: 'TEXT'\|'IMAGE'\|'FILE', fileUrl?: string, fileSize?: number, replyToId?: string }` | Gửi tin nhắn mới (hỗ trợ reply & file). Không chấp nhận `SYSTEM`; DIRECT bị chặn → `exception` 403 | BR-08, BR-09, BR-28, BR-36 |
+| `typing` | `{ conversationId: string, isTyping: boolean }` | Bật/tắt thông báo đang gõ (chỉ thành viên mới được phát) | BR-08 |
 | `markAsRead` | `{ conversationId: string }` | Đánh dấu đã xem toàn bộ tin nhắn trong hội thoại | BR-08, BR-10 |
 | `recallMessage` | `{ conversationId: string, messageId: string }` | Thu hồi tin nhắn không giới hạn thời gian | BR-M5-01, BR-M5-02 |
 | `editMessage` | `{ conversationId: string, messageId: string, content: string }` | Chỉnh sửa tin nhắn văn bản trong 15 phút | BR-M5-04 -> BR-M5-07 |
@@ -226,40 +248,40 @@ Hệ thống được nâng cấp toàn diện nền tảng bảo mật (**Next-
 #### a. Tin nhắn & Tương tác trong phòng (`conv_${conversationId}`)
 | Event | Payload | Người nhận | Mô tả |
 |-------|---------|-----------|-------|
-| `newMessage` | `{ id, conversationId, content, type: 'TEXT'\|'IMAGE'\|'FILE'\|'SYSTEM', sender: { id, username, displayName, avatarUrl }, createdAt }` | Cả Conversation | Tin nhắn mới gửi thành công hoặc tin nhắn thông báo hệ thống |
-| `userTyping` | `{ conversationId: string, userId: string, displayName: string, isTyping: boolean }` | Người khác trong Conv | Hiển thị ai đang gõ tin nhắn |
-| `messageRead` | `{ conversationId: string, userId: string, readAt: string }` | Người khác trong Conv | Báo tin nhắn đã được xem |
+| `newMessage` | `{ id, conversationId, content, type, fileUrl, fileSize, replyToId, replyTo, reactions, isRecalled, isEdited, editedAt, isPinned, createdAt, sender: { id, username, displayName, avatarUrl } }` | Cả Conversation | Tin nhắn mới / tin hệ thống / tin từ media upload |
+| `userTyping` | `{ conversationId, userId, username, displayName, avatarUrl, isTyping }` | Người khác trong Conv | Hiển thị ai đang gõ |
+| `messageRead` | `{ conversationId, userId, username, displayName, avatarUrl, lastReadMessageId }` | Cả Conversation (gồm người gửi) | Báo đã xem |
 | `messageRecalled` | `{ conversationId: string, messageId: string, recalledAt: string, senderId: string }` | Cả Conversation | Thông báo tin nhắn đã bị thu hồi |
 | `messageEdited` | `{ conversationId: string, messageId: string, content: string, isEdited: true, editedAt: string, senderId: string }` | Cả Conversation | Thông báo tin nhắn đã được chỉnh sửa |
 | `messageReactionUpdated` | `{ conversationId: string, messageId: string, user: { id, displayName, avatarUrl }, emoji: string, action: 'ADDED'\|'REMOVED'\|'CHANGED' }` | Cả Conversation | Thông báo phản ứng cảm xúc emoji được cập nhật |
-| `messagePinned` | `{ conversationId: string, message: object, pinnedBy: object }` | Cả Conversation | Thông báo tin nhắn đã được ghim |
+| `messagePinned` | `{ conversationId, messageId, message, pinnedBy }` | Cả Conversation | Tin nhắn đã được ghim |
 | `messageUnpinned` | `{ conversationId: string, messageId: string }` | Cả Conversation | Thông báo tin nhắn được bỏ ghim |
-| `conversationCustomized` | `{ conversationId: string, quickEmoji?: string, name?: string, avatarUrl?: string, updatedBy: object }` | Cả Conversation | Thông báo tùy chỉnh hội thoại (tên, avatar, quick emoji) đã thay đổi |
-| `groupMemberUpdated`| `{ conversationId: string, action: 'ADDED'\|'REMOVED'\|'LEFT'\|'TRANSFER_OWNER'\|'ROLE_UPDATED', member: object, operatorId: string }` | Cả Conversation | Thông báo thay đổi thành viên nhóm (`ADDED`, `REMOVED`, `LEFT`, `TRANSFER_OWNER`, `ROLE_UPDATED`) |
+| `conversationCustomized` | `{ conversationId, customizedBy, changes: { name?, avatarUrl?, quickEmoji? }, quickEmoji?, name?, avatarUrl?, updatedBy }` | Conv room + `user_${memberId}` | Tùy chỉnh tên / avatar (GROUP) / quick emoji |
+| `groupMemberUpdated` | `{ conversationId, action: 'ADDED'\|'REMOVED'\|'LEFT'\|'TRANSFER_OWNER'\|'ROLE_UPDATED', actor: { id, displayName }, targetUserIds: string[] }` | Cả Conversation | Thay đổi thành viên nhóm; thành viên bị xóa / rời nhóm bị server đưa ra khỏi room `conv_${id}` |
 
 #### b. Hộp thư & Thông báo cá nhân (`user_${userId}`)
 | Event | Payload | Người nhận | Mô tả |
 |-------|---------|-----------|-------|
 | `conversationCreated` | `{ id, type, name, avatarUrl, members, lastMessage, unreadCount }` | Thành viên mới | Thông báo khi được thêm vào hội thoại hoặc group chat mới |
-| `conversationUpdated` | `{ conversationId: string, lastMessage: object, unreadCount: number }` | Thành viên ngoài room | Đẩy hội thoại lên đầu inbox, cập nhật badge chưa đọc |
-| `groupMembershipChanged` | `{ conversationId: string, action: 'ADDED'\|'REMOVED'\|'LEFT' }` | Thành viên bị kick/rời hoặc được thêm | Báo hiệu cho client đóng hội thoại, chuyển hướng /chat hoặc cập nhật lại danh sách hội thoại |
+| `conversationUpdated` | `{ conversationId, lastMessage: object, senderId? }` | `user_${memberId}` | Đẩy hội thoại lên đầu inbox; cũng phát khi thu hồi / sửa tin cuối |
+| `groupMembershipChanged` | `{ conversationId, action: 'ADDED'\|'REMOVED'\|'LEFT'\|'TRANSFER_OWNER'\|'ROLE_UPDATED' }` | User bị tác động | Client đóng hội thoại / chuyển về `/chat` khi bị xóa hoặc rời |
 
 #### c. Lời mời kết bạn & Bạn bè (`user_${userId}`)
 | Event | Payload | Người nhận | Mô tả |
 |-------|---------|-----------|-------|
 | `friendRequestReceived` | `{ requestId: string, requester: object, createdAt: string }` | Người nhận lời mời | Thông báo có lời mời kết bạn mới, tăng badge tab Bạn bè |
-| `friendRequestAccepted` | `{ friendshipId: string, friend: object }` | Người gửi ban đầu | Thông báo đối phương đã chấp nhận kết bạn |
+| `friendRequestAccepted` | `{ friendshipId, friend, createdAt }` | Người gửi ban đầu | Đối phương đã chấp nhận |
 | `friendRequestRejected` | `{ requestId: string }` | Người gửi ban đầu | Thông báo lời mời kết bạn đã bị từ chối |
 | `friendRequestCancelled`| `{ requestId: string }` | Người nhận ban đầu | Thông báo người gửi đã thu hồi lời mời kết bạn |
-| `friendRemoved` | `{ friendId: string }` | Bạn bè cũ | Thông báo bị xóa khỏi danh sách bạn bè |
-| `userBlocked` | `{ userId: string, blockedUserId: string }` | Người bị chặn | Thông báo người dùng đã bị chặn |
-| `userUnblocked` | `{ userId: string, unblockedUserId: string }` | Người được bỏ chặn | Thông báo người dùng đã được bỏ chặn |
+| `friendRemoved` | `{ friendId }` | Cả 2 phía (cũng phát khi chặn) | Hủy kết bạn / bị chặn |
+| `userBlocked` | `{ blockerId, blockedId, conversationId: string \| null }` | Cả người chặn và người bị chặn | Khóa ô nhập & ẩn trạng thái trực tuyến (BR-28, BR-38) |
+| `userUnblocked` | `{ blockerId, blockedId, conversationId: string \| null }` | Cả hai phía | Mở lại ô nhập trong chat DIRECT |
 
 #### d. Trạng thái & Hệ thống
 | Event | Payload | Người nhận | Mô tả |
 |-------|---------|-----------|-------|
 | `userPresence` | `{ userId: string, isOnline: boolean, lastSeen: string }` | Bạn bè liên quan | Cập nhật trạng thái Online / Offline |
-| `authRevoked` | `{ message: string, reason?: string }` | Client Socket | Thông báo phiên bị thu hồi từ xa hoặc do phát hiện token reuse, client tự động logout và xóa state in-memory |
+| _(disconnect)_ | — | Socket của thiết bị bị thu hồi (room `device_${userId}_${deviceId}`) | Đăng xuất từ xa / đổi / đặt lại mật khẩu: server gọi `disconnectSockets(true)` (domain event `auth.sessions_revoked`), không phát event riêng (BR-27) |
 | `exception` | `{ status: string, message: string }` | Sender Socket | Báo lỗi socket (WsException) |
 
 ### 6.3. Kiến trúc Đa Pod & Phân tán Realtime (Multi-Pod Redis Adapter)
@@ -300,7 +322,6 @@ erDiagram
         uuid id PK
         uuid requesterId FK
         uuid addresseeId FK
-        uuid blockedById FK "Nullable"
         enum status "PENDING | ACCEPTED | BLOCKED"
         datetime createdAt
         datetime updatedAt
@@ -311,7 +332,8 @@ erDiagram
         enum type "DIRECT | GROUP"
         varchar name "Nullable for DIRECT"
         varchar avatarUrl "Nullable"
-        varchar quickEmoji "Default '👍'"
+        varchar quickEmoji "Nullable, default 👍"
+        varchar directKey UK "Nullable, chỉ DIRECT (cặp userId đã sắp xếp)"
         uuid lastMessageId "Nullable"
         datetime lastMessageAt "Nullable"
         datetime createdAt
@@ -323,7 +345,9 @@ erDiagram
         uuid conversationId FK
         uuid userId FK
         enum role "OWNER | ADMIN | MEMBER"
-        varchar nickname "Nullable"
+        boolean isPinned "Default false (BR-41)"
+        datetime pinnedAt "Nullable"
+        datetime clearedAt "Nullable (BR-42)"
         boolean isMuted "Default false"
         uuid lastReadMessageId "Nullable"
         int unreadCount "Default 0"
@@ -337,7 +361,8 @@ erDiagram
         text content
         enum type "TEXT | IMAGE | FILE | SYSTEM"
         varchar fileUrl "Nullable"
-        uuid replyToId FK "Nullable (Self-relation)"
+        uuid replyToId "Nullable (tham chiếu Message.id, không ràng buộc FK)"
+        int fileSize "Nullable (bytes)"
         boolean isRecalled "Default false"
         boolean isEdited "Default false"
         datetime editedAt "Nullable"
@@ -377,7 +402,7 @@ erDiagram
   - `id`: string (UUID, Primary Key)
   - `requesterId`: string (UUID, Foreign Key -> User.id)
   - `addresseeId`: string (UUID, Foreign Key -> User.id)
-  - `blockedById`: string (UUID, Foreign Key -> User.id, Nullable)
+  - Không có cột `blockedById`: khi `status = BLOCKED`, `requester` là người chặn. Ràng buộc `UNIQUE(requester, addressee)`.
   - `status`: enum (`'PENDING'`, `'ACCEPTED'`, `'BLOCKED'`)
   - `createdAt`: Date (DATETIME)
   - `updatedAt`: Date (DATETIME)
@@ -386,8 +411,9 @@ erDiagram
   - `id`: string (UUID, Primary Key)
   - `type`: enum (`'DIRECT'`, `'GROUP'`)
   - `name`: string (VARCHAR 50, Nullable - dùng cho GROUP hoặc đổi tên DIRECT)
-  - `avatarUrl`: string (VARCHAR 255, Nullable)
-  - `quickEmoji`: string (VARCHAR 32, Default `'👍'`)
+  - `avatarUrl`: string (VARCHAR 500, Nullable — chỉ GROUP đổi được, BR-32)
+  - `quickEmoji`: string (VARCHAR 32, Nullable, mặc định `'👍'`)
+  - `directKey`: string (Nullable, UNIQUE) — khóa chống tạo trùng chat DIRECT (BR-05)
   - `lastMessageId`: string (UUID, Nullable)
   - `lastMessageAt`: Date (DATETIME, Nullable)
   - `createdAt`: Date (DATETIME)
@@ -398,7 +424,8 @@ erDiagram
   - `conversationId`: string (UUID, Foreign Key -> Conversation.id)
   - `userId`: string (UUID, Foreign Key -> User.id)
   - `role`: enum (`'OWNER'`, `'ADMIN'`, `'MEMBER'`)
-  - `nickname`: string (VARCHAR 50, Nullable)
+  - `isPinned`: boolean (Default false), `pinnedAt`: datetime (Nullable) — BR-41
+  - `clearedAt`: datetime(6) (Nullable) — BR-42. Ràng buộc `UNIQUE(conversation, user)`.
   - `isMuted`: boolean (Default false)
   - `lastReadMessageId`: string (UUID, Nullable)
   - `unreadCount`: number (INT, Default 0)
@@ -411,7 +438,8 @@ erDiagram
   - `content`: string (TEXT, Not Null)
   - `type`: enum (`'TEXT'`, `'IMAGE'`, `'FILE'`, `'SYSTEM'`, Default `'TEXT'`)
   - `fileUrl`: string (VARCHAR 500, Nullable)
-  - `replyToId`: string (UUID, Nullable, Self-relation -> Message.id)
+  - `replyToId`: string (UUID, Nullable — tham chiếu Message.id, không ràng buộc FK)
+  - `fileSize`: number (INT, Nullable, bytes)
   - `isRecalled`: boolean (Default false)
   - `isEdited`: boolean (Default false)
   - `editedAt`: Date (DATETIME, Nullable)
@@ -469,7 +497,7 @@ erDiagram
 
 ## 9. Yêu cầu phi chức năng
 
-- **Unit Test Coverage**: Mục tiêu ≥ 70% coverage (Hiện đạt 227/227 tests ~ 95% cho Auth, Friendship, Conversations, Gateway).
+- **Unit Test Coverage**: Mục tiêu ≥ 70% statements trên business logic. Số liệu hiện tại: xem README mục "Kiểm thử & chất lượng" (cập nhật mỗi lần chốt release).
 - **Môi trường & Công nghệ**:
   - **Runtime**: Node.js >= 20.x (Khuyên dùng Node v22 LTS)
   - **Framework**: NestJS 12.x
@@ -477,7 +505,7 @@ erDiagram
   - **In-Memory Cache & Storage**: Redis 7.x Alpine (Lưu Sessions, Token Blacklist, OTP, Rate Limiting)
   - **Async Job Queue**: BullMQ kết nối Redis worker xử lý gửi email ngầm (Nodemailer)
   - **Real-time Engine**: Socket.io + `@nestjs/websockets`
-  - **Client**: React 18 + Vite + TypeScript + Socket.io-client.
+  - **Client**: React 19 + Vite 8 + TypeScript + Zustand + Tailwind CSS + Socket.io-client.
 
 ---
 
@@ -490,15 +518,28 @@ erDiagram
 - Nhắn tin Text thời gian thực, Typing indicator, Online/Offline presence, Read receipts.
 
 ### In-Scope (Phase 2 — Rich Messaging):
-- Upload ảnh & file tài liệu (Multer + Cloudinary/S3).
+- Upload ảnh & file tài liệu (Multer + Cloudinary).
 - Trả lời tin nhắn (Reply / Quote message).
 - Thả cảm xúc Emoji trên tin nhắn (Reactions).
 - Thu hồi tin nhắn (Recall message).
+
+### In-Scope (Phase 3 — Group & Messaging nâng cao):
+- Quản lý nhóm (vai trò Owner/Admin/Member, chuyển quyền, kick, rời nhóm), ghim tin nhắn, media gallery, tin nhắn hệ thống, chỉnh sửa / thu hồi tin nhắn.
+
+### In-Scope (Phase 4 — Security & Scale):
+- Email OTP, 2FA, quên / đặt lại / đổi mật khẩu, HttpOnly Refresh Token Rotation, device binding, quản lý phiên & đăng xuất từ xa, rate limit phân tán, Redis adapter đa pod, hàng đợi email BullMQ.
+
+### In-Scope (Phase 5–6 — Frontend Telegram/Messenger):
+- App shell, inbox realtime, active chat, rich messaging UI, Friends Hub (bạn bè, lời mời, chặn), right panel, in-chat search, mute, quick emoji, menu hội thoại (ghim / xóa đoạn chat / chặn), Settings Hub (hồ sơ, mật khẩu, 2FA, thiết bị).
 
 ### Out of Scope (Không làm trong đồ án này):
 - Cuộc gọi Video / Audio (WebRTC).
 - Mã hóa đầu cuối (End-to-End Encryption - E2EE).
 - Bot tự động, AI Assistant, Thanh toán chuyển tiền trong chat.
+- Push notification (Web Push / mobile), ứng dụng mobile native.
+- Đặt biệt danh (nickname) / đổi tên hội thoại DIRECT (BR-32).
+- Registry presence dùng chung giữa nhiều instance backend (hiện lưu trong bộ nhớ từng instance).
+- TypeORM migrations cho production (hiện dùng `synchronize: true`).
 
 ---
 
@@ -514,7 +555,7 @@ erDiagram
 | Client gửi token JWT hết hạn khi kết nối WebSocket | `OnGatewayConnection` xác thực token thất bại, chủ động gọi `client.disconnect(true)`. |
 | Nhiều tab cùng lúc gửi request khi Access Token hết hạn | Frontend Axios Interceptor áp dụng concurrency lock và request queue kết hợp cùng cơ chế 30s Grace Period trên Backend ngăn chặn xung đột xoay vòng token. |
 | Kẻ tấn công đánh cắp Refresh Token cũ và cố tình gọi refresh | Hệ thống phát hiện Token Reuse qua Redis Token Family, lập tức vô hiệu hóa toàn bộ Token Family của phiên đó và buộc đăng nhập lại. |
-| Người dùng đăng xuất ở một tab | BroadcastChannel (`rechat_auth_channel`) phát tín hiệu đồng bộ, kích hoạt đăng xuất tức thì trên toàn bộ các tab trình duyệt khác đang mở. |
+| Người dùng đăng xuất ở một tab | BroadcastChannel (`rechat_auth_bus`) phát tín hiệu đồng bộ, kích hoạt đăng xuất tức thì trên toàn bộ các tab trình duyệt khác đang mở. |
 
 ---
 
@@ -530,9 +571,36 @@ erDiagram
 - [x] **Milestone 6.3:** Inbox Sidebar, Conversation Item & Presence Status Sync (Search bar, filter tabs Tất cả/Chưa đọc/Nhóm, unread badge, presence status dot).
 - [x] **Milestone 6.4:** Active Chat Canvas, Message Feed, Date Divider & Auto-resize Composer (ChatHeader, infinite scroll, auto-expanding textarea, debounced typing indicator).
 - [x] **Milestone 6.5:** Rich Messaging (Reactions toggle bar, Reply quote & scroll jump, 15m Edit window, Recall tombstone, Cloudinary upload, Shared media drawer & Lightbox modal).
-- [ ] **Milestone 6.6:** Friends Management, Messenger Customization & Settings Hub (Phase 6 - In Progress: Messenger right panel accordion, In-chat search bar, Quick emoji & full emoji picker, Friends block/unblock hub, Account & 2FA settings).
+- [x] **Milestone 6.6:** Friends Management, Messenger Customization & Settings Hub (Friends Hub 4 tab + chặn / bỏ chặn, right panel accordion, in-chat search, mute, quick emoji, pinned messages, system messages, group eviction, menu hội thoại FR-48, Settings Hub: hồ sơ, đổi mật khẩu, 2FA, thiết bị & phiên).
+- [x] **Milestone 6.7:** Hardening sau review: thu hồi phiên thật sự (refresh + access token + socket), chống brute-force OTP, cưỡng chế BR-28/BR-36/BR-08 phía server, cursor pagination khóa ghép `(createdAt, id)`, e2e cho các flow quan trọng, README & SPEC v3.3.
 
 ---
+
+## 13. Bản đồ route Frontend
+
+| Route | Màn hình | Bảo vệ |
+|---|---|---|
+| `/login`, `/register` | Đăng nhập, đăng ký | Public (đã đăng nhập → `/chat`) |
+| `/verify-otp`, `/verify-2fa` | Xác thực email OTP, thử thách 2FA | Public |
+| `/forgot-password`, `/reset-password?token=` | Quên / đặt lại mật khẩu | Public |
+| `/chat`, `/chat/:conversationId` | Inbox + khung chat | Protected |
+| `/friends` | Friends Hub (bạn bè, lời mời, đã chặn, tìm bạn) | Protected |
+| `/settings?tab=profile\|security\|sessions` | Settings Hub | Protected |
+| `/` → `/chat`, `*` → `/login` | Điều hướng mặc định | — |
+
+## 14. Danh mục Domain Events (EventEmitter → ChatGateway)
+
+Service nghiệp vụ chỉ phát domain event; `ChatGateway` lắng nghe và chuyển thành WebSocket event (mục 6.2) — module nghiệp vụ không phụ thuộc trực tiếp vào Socket.IO.
+
+| Domain event | Phát bởi | WebSocket event / tác động |
+|---|---|---|
+| `message.created` | ConversationsService, MediaController | `newMessage` tới `conv_${id}` |
+| `message.edited` / `message.recalled` / `message.reaction_updated` / `message.pinned` | ConversationsService | `messageEdited` / `messageRecalled` (+ MediaService dọn file Cloudinary) / `messageReactionUpdated` / `messagePinned`·`messageUnpinned` |
+| `inbox.updated` | ConversationsService | `conversationUpdated` tới `user_${memberId}` |
+| `conversation.created` / `conversation.customized` | ConversationsService | `conversationCreated` / `conversationCustomized` |
+| `group.member_event` | ConversationsService | `groupMemberUpdated`, `groupMembershipChanged`; đưa thành viên bị xóa / rời khỏi room |
+| `friend.request_sent` / `_accepted` / `_rejected` / `_cancelled`, `friend.removed` | FriendsService | `friendRequestReceived` / `friendRequestAccepted` / `friendRequestRejected` / `friendRequestCancelled`, `friendRemoved` |
+| `auth.sessions_revoked` | AuthService | Ngắt socket của thiết bị bị thu hồi (`disconnectSockets`) |
 
 ## Self-review trước khi xin approve (Gate 1) — tự tick
 

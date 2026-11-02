@@ -1,75 +1,27 @@
-# React + TypeScript + Vite
+# ReChat — Frontend (React)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Single-page app của ReChat (React 19 + Vite + Zustand + Tailwind). Hướng dẫn cài đặt đầy đủ: xem [README gốc](../README.md); thiết kế giao diện: [`DESIGN.md`](../DESIGN.md); đặc tả: [`docs/SPEC.md`](../docs/SPEC.md).
 
-Currently, two official plugins are available:
+## Lệnh thường dùng
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+cp .env.example .env   # VITE_API_BASE_URL, VITE_WS_URL
+npm ci
+npm run dev            # http://localhost:5173 (proxy /api và /socket.io tới :3000)
+npm run build          # type-check (tsc -b) + build production
+npm run lint           # eslint
+npm test               # vitest + Testing Library
+npm run test:cov       # test + coverage (report HTML trong coverage/)
 ```
 
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
+## Cấu trúc
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
-```
+| Thư mục | Nội dung |
+|---|---|
+| `src/features/auth` | Đăng nhập, đăng ký, OTP, 2FA, quên / đặt lại mật khẩu |
+| `src/features/conversations` | Inbox sidebar, tạo nhóm, store hội thoại |
+| `src/features/chat` | Khung chat, composer, bubble, drawer chi tiết, media |
+| `src/features/friends` | Trung tâm bạn bè: danh sách, lời mời, chặn, tìm bạn |
+| `src/features/settings` | Hồ sơ, đổi mật khẩu, 2FA, thiết bị & phiên |
+| `src/services` | `api.client` (Axios + silent refresh có khóa & hàng đợi), `socket.client` |
+| `src/stores`, `src/hooks`, `src/lib` | Auth store (token chỉ trong RAM), socket hook, tiện ích (device id, đồng bộ đa tab) |
