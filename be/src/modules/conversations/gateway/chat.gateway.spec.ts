@@ -27,6 +27,8 @@ import {
     MessageEditedEvent,
     MessageReactionEvent,
     ConversationCustomizedEvent,
+    UserBlockedEvent,
+    UserUnblockedEvent,
 } from '../../../common/events/index.js';
 
 describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () => {
@@ -615,6 +617,26 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
                 expect(result).toEqual({ status: 'success' });
             });
 
+            it('should validate membership before broadcasting typing (BR-08)', async () => {
+                const client = createMockSocket() as Socket;
+                client.data.user = { id: userId, username: 'john_doe' };
+
+                await gateway.handleTyping(client, { conversationId, isTyping: true });
+
+                expect(mockConversationsService.validateMembership).toHaveBeenCalledWith(conversationId, userId);
+            });
+
+            it('should reject typing from a non-member and NOT broadcast (BR-08)', async () => {
+                const client = createMockSocket() as Socket;
+                client.data.user = { id: userId, username: 'john_doe' };
+                mockConversationsService.validateMembership.mockRejectedValueOnce(new ForbiddenException());
+
+                await expect(
+                    gateway.handleTyping(client, { conversationId, isTyping: true }),
+                ).rejects.toThrow(ForbiddenException);
+                expect(client.to).not.toHaveBeenCalled();
+            });
+
             it('should broadcast userTyping with isTyping: false when user stops typing', async () => {
                 const client = createMockSocket() as Socket;
                 client.data.user = { id: userId, username: 'john_doe' };
@@ -870,6 +892,63 @@ describe('ChatGateway - Layer 1, 2 & 3 (Auth, Presence, Rooms & Messaging)', () 
                     action: 'ADDED',
                 }),
             );
+        });
+
+        it.each(['REMOVED', 'LEFT'] as const)(
+            'handleGroupMemberEvent (%s) should make the target user sockets leave the conv room (BR-08)',
+            (action) => {
+                const socketsLeave = vi.fn();
+                const inMock = vi.fn().mockReturnValue({ socketsLeave });
+                (mockServer as any).in = inMock;
+
+                gateway.handleGroupMemberEvent(
+                    new GroupMemberEvent('conv-1', action, { id: 'u1', displayName: 'Admin' }, ['u2']),
+                );
+
+                expect(inMock).toHaveBeenCalledWith('user_u2');
+                expect(socketsLeave).toHaveBeenCalledWith('conv_conv-1');
+                // Thông báo được phát trước khi đẩy socket ra khỏi room
+                expect(mockServer.emit).toHaveBeenCalledWith('groupMemberUpdated', expect.objectContaining({ action }));
+            },
+        );
+
+        it.each(['ADDED', 'ROLE_UPDATED', 'TRANSFER_OWNER'] as const)(
+            'handleGroupMemberEvent (%s) should NOT remove sockets from the conv room',
+            (action) => {
+                const socketsLeave = vi.fn();
+                (mockServer as any).in = vi.fn().mockReturnValue({ socketsLeave });
+
+                gateway.handleGroupMemberEvent(
+                    new GroupMemberEvent('conv-1', action, { id: 'u1', displayName: 'Admin' }, ['u2']),
+                );
+
+                expect(socketsLeave).not.toHaveBeenCalled();
+            },
+        );
+
+        it('handleUserBlocked should emit userBlocked to both users personal rooms with conversationId', () => {
+            gateway.handleUserBlocked(new UserBlockedEvent('u1', 'u2', 'conv-1'));
+
+            expect(mockServer.to).toHaveBeenCalledWith('user_u1');
+            expect(mockServer.to).toHaveBeenCalledWith('user_u2');
+            expect(mockServer.emit).toHaveBeenCalledTimes(2);
+            expect(mockServer.emit).toHaveBeenCalledWith('userBlocked', {
+                blockerId: 'u1',
+                blockedId: 'u2',
+                conversationId: 'conv-1',
+            });
+        });
+
+        it('handleUserUnblocked should emit userUnblocked to both users with conversationId null when no DIRECT chat', () => {
+            gateway.handleUserUnblocked(new UserUnblockedEvent('u1', 'u2', null));
+
+            expect(mockServer.to).toHaveBeenCalledWith('user_u1');
+            expect(mockServer.to).toHaveBeenCalledWith('user_u2');
+            expect(mockServer.emit).toHaveBeenCalledWith('userUnblocked', {
+                blockerId: 'u1',
+                blockedId: 'u2',
+                conversationId: null,
+            });
         });
 
         it('handleMessagePinned should emit messagePinned when pinned and messageUnpinned when unpinned', () => {

@@ -37,8 +37,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
                 errorCode = typeof resObj.errorCode === 'string' ? resObj.errorCode : undefined;
             }
         } else if (exception instanceof Error) {
-            message = exception.message;
-            error = exception.name;
+            // Không lộ chi tiết lỗi nội bộ (SQL, stack, đường dẫn) ra response; chỉ ghi log phía server
             this.logger.error(`Unhandled error at ${request?.method} ${request?.url}: ${exception.message}`, exception.stack);
         }
 

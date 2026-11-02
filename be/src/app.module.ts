@@ -76,6 +76,8 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
       username: process.env.MYSQL_USER,
       password: process.env.MYSQL_PASSWORD,
       database: process.env.MYSQL_DATABASE,
+      // Driver đọc/ghi Date theo UTC, khớp --default-time-zone=+00:00 của MySQL (BR-M5-05)
+      timezone: 'Z',
       autoLoadEntities: true,
       synchronize: true,
     }),

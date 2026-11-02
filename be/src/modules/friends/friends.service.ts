@@ -3,6 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Friendship, FriendshipStatus } from './entities/friendship.entity.js';
+import { Conversation } from '../conversations/entities/conversation.entity.js';
+import { findDirectConversation } from '../conversations/direct-conversation-key.js';
 import { User } from '../users/entities/user.entity.js';
 import { PaginationQueryDto, PaginatedResponse } from '../../common/dto/pagination.dto.js';
 import {
@@ -11,6 +13,10 @@ import {
     FriendRequestRejectedEvent,
     FriendRequestCancelledEvent,
     FriendRemovedEvent,
+    UserBlockedEvent,
+    UserUnblockedEvent,
+    USER_BLOCKED,
+    USER_UNBLOCKED,
 } from '../../common/events/index.js';
 
 @Injectable()
@@ -21,6 +27,9 @@ export class FriendsService {
 
         @InjectRepository(User)
         private readonly userRepository: Repository<User>,
+
+        @InjectRepository(Conversation)
+        private readonly conversationRepository: Repository<Conversation>,
 
         private readonly eventEmitter: EventEmitter2,
     ) { }
@@ -66,7 +75,7 @@ export class FriendsService {
                 }
             }
             if (existing.status === FriendshipStatus.BLOCKED) {
-                throw new BadRequestException('Không thể gửi lời mời kết bạn do người dùng đã bị chặn');
+                throw new ForbiddenException('Không thể gửi lời mời kết bạn do một trong hai người đã chặn người kia');
             }
         }
 
@@ -342,7 +351,17 @@ export class FriendsService {
             },
         });
 
+        if (existing?.status === FriendshipStatus.BLOCKED) {
+            // BR-28: chỉ người đã chặn mới sở hữu quan hệ chặn; người bị chặn không được "chặn ngược" để chiếm quyền mở chặn
+            if (existing.requester.id !== currentUserId) {
+                throw new ForbiddenException('Bạn không thể chặn người dùng này');
+            }
+            // Chặn lặp lại bởi cùng người chặn: idempotent, không phát lại event
+            return { message: 'Đã chặn người dùng thành công' };
+        }
+
         if (existing) {
+            // PENDING / ACCEPTED -> BLOCKED, người gọi trở thành blocker
             existing.requester = { id: currentUserId } as User;
             existing.addressee = targetUser;
             existing.status = FriendshipStatus.BLOCKED;
@@ -360,8 +379,22 @@ export class FriendsService {
             'friend.removed',
             new FriendRemovedEvent(currentUserId, targetUserId),
         );
+        this.eventEmitter.emit(
+            USER_BLOCKED,
+            new UserBlockedEvent(currentUserId, targetUserId, await this.findDirectConversationId(currentUserId, targetUserId)),
+        );
 
         return { message: 'Đã chặn người dùng thành công' };
+    }
+
+    /** Id hội thoại DIRECT giữa 2 user (nếu có) để đính kèm event chặn; lỗi tra cứu không làm hỏng thao tác chặn */
+    private async findDirectConversationId(userA: string, userB: string): Promise<string | null> {
+        try {
+            const conversation = await findDirectConversation(this.conversationRepository, userA, userB);
+            return conversation?.id ?? null;
+        } catch {
+            return null;
+        }
     }
 
     /**
@@ -385,6 +418,11 @@ export class FriendsService {
         }
 
         await this.friendshipRepository.delete(blockedFriendship.id);
+
+        this.eventEmitter.emit(
+            USER_UNBLOCKED,
+            new UserUnblockedEvent(currentUserId, targetUserId, await this.findDirectConversationId(currentUserId, targetUserId)),
+        );
 
         return { message: 'Đã bỏ chặn người dùng thành công' };
     }

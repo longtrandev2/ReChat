@@ -4,6 +4,20 @@ import { Repository } from 'typeorm';
 import { User } from './entities/user.entity.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
 
+/** Các trường công khai của hồ sơ người dùng khác (không email / 2FA / updatedAt / password) */
+const PUBLIC_PROFILE_FIELDS = ['id', 'username', 'displayName', 'avatarUrl', 'isOnline', 'lastSeen', 'createdAt'] as const;
+export type PublicUserProfile = Pick<User, (typeof PUBLIC_PROFILE_FIELDS)[number]>;
+
+export const toPublicProfile = (user: User): PublicUserProfile => ({
+    id: user.id,
+    username: user.username,
+    displayName: user.displayName,
+    avatarUrl: user.avatarUrl,
+    isOnline: user.isOnline,
+    lastSeen: user.lastSeen,
+    createdAt: user.createdAt,
+});
+
 @Injectable()
 export class UsersService {
     constructor(
@@ -42,21 +56,26 @@ export class UsersService {
         return result;
     }
 
-    async searchUsers(currentUserId: string, q: string, limit = 20): Promise<Array<Omit<User, 'password'>>> {
+    async searchUsers(currentUserId: string, q: string, limit = 20): Promise<PublicUserProfile[]> {
         const keyword = `%${q.trim().toLowerCase()}%`;
         const users = await this.userRepository
             .createQueryBuilder('user')
+            .select(PUBLIC_PROFILE_FIELDS.map((f) => `user.${f}`))
             .where('user.id != :currentUserId', { currentUserId })
             .andWhere('(LOWER(user.username) LIKE :keyword OR LOWER(user.displayName) LIKE :keyword)', { keyword })
             .orderBy('user.username', 'ASC')
             .take(Math.min(limit, 50))
             .getMany();
 
-        return users.map(({ password: _password, ...rest }) => rest);
+        return users.map(toPublicProfile);
     }
 
-    async getPublicProfile(targetUserId: string): Promise<Omit<User, 'password'>> {
-        return this.findById(targetUserId);
+    async getPublicProfile(targetUserId: string): Promise<PublicUserProfile> {
+        const user = await this.userRepository.findOne({ where: { id: targetUserId } });
+        if (!user) {
+            throw new NotFoundException(`User with ID ${targetUserId} not found`);
+        }
+        return toPublicProfile(user);
     }
 }
 

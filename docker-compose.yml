@@ -3,6 +3,8 @@ services:
     image: mysql:8.0
     container_name: rechat_mysql
     restart: always
+    # CURRENT_TIMESTAMP của DB và Date của driver (timezone 'Z') cùng là UTC
+    command: --default-time-zone=+00:00
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE}
       MYSQL_USER: ${MYSQL_USER}

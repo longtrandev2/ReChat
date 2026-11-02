@@ -48,6 +48,17 @@ export class ConversationMember {
     @Column({ type: 'boolean', default: false })
     isMuted: boolean;
 
+    /** Ghim cuộc trò chuyện trong Inbox của riêng thành viên này (FR-48) */
+    @Column({ type: 'boolean', default: false })
+    isPinned: boolean;
+
+    @Column({ type: 'datetime', precision: 6, nullable: true })
+    pinnedAt: Date | null;
+
+    /** Mốc "Xóa đoạn chat" của riêng thành viên: tin nhắn createdAt <= clearedAt bị ẩn với họ (FR-48) */
+    @Column({ type: 'datetime', precision: 6, nullable: true })
+    clearedAt: Date | null;
+
     @CreateDateColumn()
     joinedAt: Date;
 }

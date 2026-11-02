@@ -72,9 +72,11 @@ describe('AllExceptionsFilter', () => {
             expect.objectContaining({
                 success: false,
                 statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
-                message: 'Database crash',
+                message: 'Internal server error',
                 path: '/api/v1/unknown',
             }),
         );
+        // Không lộ thông điệp lỗi thật ra response
+        expect(JSON.stringify(jsonMock.mock.calls[0][0])).not.toContain('Database crash');
     });
 });

@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsNotEmpty, IsOptional, IsString, Length, MaxLength } from 'class-validator';
+import { IsEmoji } from '../../../common/validators/is-emoji.validator.js';
 
 export class CustomizeConversationDto {
     @ApiPropertyOptional({ description: 'UUID của cuộc hội thoại' })
@@ -23,5 +24,6 @@ export class CustomizeConversationDto {
     @IsOptional()
     @IsString({ message: 'quickEmoji phải là chuỗi ký tự' })
     @MaxLength(32, { message: 'quickEmoji không được vượt quá 32 ký tự' })
+    @IsEmoji({ message: 'quickEmoji không hợp lệ (chỉ chấp nhận ký tự emoji)' })
     quickEmoji?: string;
 }

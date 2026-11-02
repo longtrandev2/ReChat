@@ -36,6 +36,13 @@ export class Conversation {
     @Column({ nullable: true, length: 32, default: '👍' })
     quickEmoji?: string;
 
+    /**
+     * Khóa duy nhất cho hội thoại DIRECT: 2 userId sắp xếp tăng dần nối bằng ':' (BR-05).
+     * NULL với GROUP (và dữ liệu DIRECT cũ); MySQL cho phép nhiều NULL trong unique index.
+     */
+    @Column({ type: 'varchar', length: 73, nullable: true, unique: true })
+    directKey?: string | null;
+
     @Column({ nullable: true, type: 'uuid' })
     lastMessageId?: string;
 

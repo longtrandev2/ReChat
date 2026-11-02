@@ -52,6 +52,10 @@ import {
     MessageReactionEvent,
     MessageCreatedEvent,
     ConversationCustomizedEvent,
+    UserBlockedEvent,
+    UserUnblockedEvent,
+    USER_BLOCKED,
+    USER_UNBLOCKED,
 } from '../../../common/events/index.js';
 
 @WebSocketGateway({
@@ -364,6 +368,9 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         if (!user?.id) {
             throw new WsException('Unauthorized: Missing authenticated session');
         }
+
+        // Chỉ thành viên mới được phát typing vào hội thoại (BR-08), tránh spam/giả mạo vào room người khác
+        await this.conversationsService.validateMembership(dto.conversationId, user.id);
 
         const roomId = `conv_${dto.conversationId}`;
         // Gửi cho tất cả client trong room TRỪ chính client người gửi (client.to)
@@ -689,6 +696,42 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
                 action: event.action,
             });
         }
+
+        // BR-08: người bị xóa / rời nhóm / nhóm giải tán không còn là thành viên -> mọi socket của họ phải rời room
+        // conv_ ngay (sau khi đã nhận thông báo ở trên), nếu không họ vẫn nhận newMessage/typing của nhóm.
+        // socketsLeave chạy xuyên các pod nhờ Redis adapter.
+        if (event.action === 'REMOVED' || event.action === 'LEFT') {
+            for (const targetId of event.targetUserIds) {
+                this.server.in(`user_${targetId}`).socketsLeave(`conv_${event.conversationId}`);
+            }
+        }
+    }
+
+    /**
+     * Chặn người dùng (FR-29, BR-28): báo realtime cho CẢ blocker và blocked qua personal room
+     */
+    @OnEvent(USER_BLOCKED)
+    handleUserBlocked(event: UserBlockedEvent) {
+        this.emitBlockChange('userBlocked', event);
+    }
+
+    /**
+     * Bỏ chặn người dùng (FR-29, BR-28): báo realtime cho CẢ hai phía
+     */
+    @OnEvent(USER_UNBLOCKED)
+    handleUserUnblocked(event: UserUnblockedEvent) {
+        this.emitBlockChange('userUnblocked', event);
+    }
+
+    private emitBlockChange(eventName: 'userBlocked' | 'userUnblocked', event: UserBlockedEvent | UserUnblockedEvent) {
+        if (!this.server) return;
+        const payload = {
+            blockerId: event.blockerId,
+            blockedId: event.blockedId,
+            conversationId: event.conversationId,
+        };
+        this.server.to(`user_${event.blockerId}`).emit(eventName, payload);
+        this.server.to(`user_${event.blockedId}`).emit(eventName, payload);
     }
 
     /**

@@ -413,6 +413,8 @@ export class TokenManagerService {
         if (tokenIds.length > 0) {
             const keysToDelete = tokenIds.map((id) => `auth:refresh:${id}`);
             await this.redisService.del(...keysToDelete);
+            // Xóa luôn cache grace (cặp token mới đã phát trong thời gian ân hạn) để không "hồi sinh" family đã bị thu hồi
+            await this.redisService.del(...tokenIds.map((id) => `auth:grace:${id}`));
         }
 
         await this.redisService.del(familyKey);

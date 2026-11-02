@@ -11,12 +11,14 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { FriendsService } from './friends.service.js';
 import { Friendship, FriendshipStatus } from './entities/friendship.entity.js';
 import { User } from '../users/entities/user.entity.js';
+import { Conversation } from '../conversations/entities/conversation.entity.js';
 import { PaginationQueryDto } from '../../common/dto/pagination.dto.js';
 
 describe('FriendsService', () => {
     let service: FriendsService;
     let mockFriendshipRepo: any;
     let mockUserRepo: any;
+    let mockConversationRepo: any;
     let mockEventEmitter: any;
 
     beforeEach(async () => {
@@ -39,6 +41,16 @@ describe('FriendsService', () => {
             findOne: vi.fn(),
         };
 
+        mockConversationRepo = {
+            findOne: vi.fn().mockResolvedValue(null),
+            createQueryBuilder: vi.fn(() => ({
+                innerJoin: vi.fn().mockReturnThis(),
+                where: vi.fn().mockReturnThis(),
+                andWhere: vi.fn().mockReturnThis(),
+                getOne: vi.fn().mockResolvedValue(null),
+            })),
+        };
+
         mockEventEmitter = {
             emit: vi.fn(),
         };
@@ -53,6 +65,10 @@ describe('FriendsService', () => {
                 {
                     provide: getRepositoryToken(User),
                     useValue: mockUserRepo,
+                },
+                {
+                    provide: getRepositoryToken(Conversation),
+                    useValue: mockConversationRepo,
                 },
                 {
                     provide: EventEmitter2,
@@ -96,6 +112,22 @@ describe('FriendsService', () => {
             expect(mockUserRepo.findOne).toHaveBeenCalledWith({
                 where: { id: targetUserId },
             });
+        });
+
+        it.each([
+            ['caller is the blocker', true],
+            ['caller is the blocked one', false],
+        ])('should throw ForbiddenException when a BLOCKED pair exists (%s)', async (_label, callerIsBlocker) => {
+            mockUserRepo.findOne.mockResolvedValue({ id: targetUserId });
+            mockFriendshipRepo.findOne.mockResolvedValue({
+                id: 'existing-f-id',
+                status: FriendshipStatus.BLOCKED,
+                requester: { id: callerIsBlocker ? currentUserId : targetUserId },
+                addressee: { id: callerIsBlocker ? targetUserId : currentUserId },
+            });
+
+            await expect(service.sendFriendRequest(currentUserId, targetUserId)).rejects.toThrow(ForbiddenException);
+            expect(mockFriendshipRepo.save).not.toHaveBeenCalled();
         });
 
         it('should throw ConflictException if the two users are already friends (status ACCEPTED)', async () => {
@@ -633,6 +665,66 @@ describe('FriendsService', () => {
             );
         });
 
+        it('should throw ForbiddenException when the caller was already blocked by the target (no hijack)', async () => {
+            mockUserRepo.findOne.mockResolvedValue({ id: targetUserId });
+            mockFriendshipRepo.findOne.mockResolvedValue({
+                id: 'f-1',
+                requester: { id: targetUserId },
+                addressee: { id: currentUserId },
+                status: FriendshipStatus.BLOCKED,
+            });
+
+            await expect(service.blockUser(currentUserId, targetUserId)).rejects.toThrow(ForbiddenException);
+            expect(mockFriendshipRepo.save).not.toHaveBeenCalled();
+        });
+
+        it('should be idempotent when the same blocker blocks twice (no save, no event)', async () => {
+            mockUserRepo.findOne.mockResolvedValue({ id: targetUserId });
+            mockFriendshipRepo.findOne.mockResolvedValue({
+                id: 'f-1',
+                requester: { id: currentUserId },
+                addressee: { id: targetUserId },
+                status: FriendshipStatus.BLOCKED,
+            });
+
+            const result = await service.blockUser(currentUserId, targetUserId);
+
+            expect(result).toEqual({ message: 'Đã chặn người dùng thành công' });
+            expect(mockFriendshipRepo.save).not.toHaveBeenCalled();
+            expect(mockEventEmitter.emit).not.toHaveBeenCalled();
+        });
+
+        it('should emit friend.removed and user.blocked with the DIRECT conversationId', async () => {
+            mockUserRepo.findOne.mockResolvedValue({ id: targetUserId });
+            mockFriendshipRepo.findOne.mockResolvedValue(null);
+            mockFriendshipRepo.create.mockReturnValue({ status: FriendshipStatus.BLOCKED });
+            mockConversationRepo.findOne.mockResolvedValue({ id: 'conv-direct-1' });
+
+            await service.blockUser(currentUserId, targetUserId);
+
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'friend.removed',
+                expect.objectContaining({ userId: currentUserId, friendId: targetUserId }),
+            );
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'user.blocked',
+                expect.objectContaining({ blockerId: currentUserId, blockedId: targetUserId, conversationId: 'conv-direct-1' }),
+            );
+        });
+
+        it('should emit user.blocked with conversationId null when no DIRECT conversation exists', async () => {
+            mockUserRepo.findOne.mockResolvedValue({ id: targetUserId });
+            mockFriendshipRepo.findOne.mockResolvedValue(null);
+            mockFriendshipRepo.create.mockReturnValue({ status: FriendshipStatus.BLOCKED });
+
+            await service.blockUser(currentUserId, targetUserId);
+
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'user.blocked',
+                expect.objectContaining({ conversationId: null }),
+            );
+        });
+
         it('should create new BLOCKED friendship if no previous friendship existed', async () => {
             const mockTarget = { id: targetUserId, username: 'target' };
             mockUserRepo.findOne.mockResolvedValue(mockTarget);
@@ -685,6 +777,32 @@ describe('FriendsService', () => {
 
             expect(mockFriendshipRepo.delete).toHaveBeenCalledWith(blocked.id);
             expect(result).toEqual({ message: 'Đã bỏ chặn người dùng thành công' });
+        });
+
+        it('should only look up BLOCKED rows where the caller is the blocker (blocked user cannot unblock)', async () => {
+            mockFriendshipRepo.findOne.mockResolvedValue(null);
+
+            await expect(service.unblockUser(currentUserId, targetUserId)).rejects.toThrow(NotFoundException);
+            expect(mockFriendshipRepo.findOne).toHaveBeenCalledWith({
+                where: {
+                    requester: { id: currentUserId },
+                    addressee: { id: targetUserId },
+                    status: FriendshipStatus.BLOCKED,
+                },
+            });
+            expect(mockFriendshipRepo.delete).not.toHaveBeenCalled();
+        });
+
+        it('should emit user.unblocked with the DIRECT conversationId', async () => {
+            mockFriendshipRepo.findOne.mockResolvedValue({ id: 'f-blocked', status: FriendshipStatus.BLOCKED });
+            mockConversationRepo.findOne.mockResolvedValue({ id: 'conv-direct-1' });
+
+            await service.unblockUser(currentUserId, targetUserId);
+
+            expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+                'user.unblocked',
+                expect.objectContaining({ blockerId: currentUserId, blockedId: targetUserId, conversationId: 'conv-direct-1' }),
+            );
         });
     });
 

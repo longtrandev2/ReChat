@@ -6,7 +6,7 @@ import {
     NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, MoreThan, Repository, SelectQueryBuilder } from 'typeorm';
 import { Conversation, ConversationType } from './entities/conversation.entity.js';
 import { ConversationMember, ConversationRole } from './entities/conversation-member.entity.js';
 import { Message, MessageType } from './entities/message.entity.js';
@@ -23,8 +23,14 @@ import {
     GetMediaQueryDto,
     SendMessageDto,
     UpdateQuickEmojiDto,
-    ToggleMuteDto,
 } from './dto/index.js';
+import { buildDirectKey, findDirectConversation, isDuplicateKeyError } from './direct-conversation-key.js';
+import {
+    BlockStatus,
+    buildConversationBlockedException,
+    getBlockStatus,
+    getBlockStatusMap,
+} from './conversation-block-policy.js';
 
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
@@ -38,6 +44,11 @@ import {
     ConversationCustomizedEvent,
     MessageCreatedEvent,
 } from '../../common/events/index.js';
+
+/** Thời hạn chỉnh sửa tin nhắn kể từ lúc gửi (BR-M5-05) */
+const EDIT_WINDOW_MS = 15 * 60 * 1000;
+/** Số kết quả tối đa của tìm kiếm tin nhắn (FR-31) */
+const SEARCH_RESULT_LIMIT = 50;
 
 @Injectable()
 export class ConversationsService {
@@ -61,7 +72,46 @@ export class ConversationsService {
         private readonly friendshipRepository: Repository<Friendship>,
 
         private readonly eventEmitter: EventEmitter2,
+
+        private readonly dataSource: DataSource,
     ) { }
+
+    /** Tin nhắn SYSTEM do server sinh ra, không thể react / sửa / thu hồi / ghim / trả lời (BR-36) */
+    private assertNotSystemMessage(message: { type: MessageType }, action: string): void {
+        if (message.type === MessageType.SYSTEM) {
+            throw new BadRequestException(`Không thể ${action} tin nhắn hệ thống`);
+        }
+    }
+
+    /**
+     * Chặn gửi tin vào hội thoại DIRECT khi giữa 2 thành viên có quan hệ BLOCKED (cả 2 chiều) (FR-29, BR-28, BR-38)
+     */
+    private async assertDirectConversationNotBlocked(conversationId: string, senderId: string): Promise<void> {
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+            select: { id: true, type: true },
+        });
+        if (conversation?.type !== ConversationType.DIRECT) return;
+
+        const members = (await this.memberRepository.find({
+            where: { conversation: { id: conversationId } },
+            relations: { user: true },
+        })) || [];
+        const partnerId = members.map((m) => m.user?.id).find((id) => id && id !== senderId);
+        if (!partnerId) return;
+
+        const status = await getBlockStatus(this.friendshipRepository, senderId, partnerId);
+        if (status !== 'NONE') {
+            throw buildConversationBlockedException(status);
+        }
+    }
+
+    /** Ẩn các tin nhắn tới mốc "Xóa đoạn chat" (clearedAt) của riêng thành viên (FR-48) */
+    private applyClearedAtFilter(qb: SelectQueryBuilder<Message>, member: ConversationMember): void {
+        if (member.clearedAt) {
+            qb.andWhere('m.createdAt > :clearedAt', { clearedAt: member.clearedAt });
+        }
+    }
 
     /**
      * Tạo tin nhắn hệ thống (SYSTEM Message) ghi lại các sự kiện nhóm/hội thoại (chuẩn Messenger)
@@ -71,28 +121,48 @@ export class ConversationsService {
         actorId: string,
         content: string,
     ): Promise<Message> {
-        const actor = await this.userRepository.findOne({
+        const { message, publish } = await this.persistSystemMessage(conversationId, actorId, content);
+        publish();
+        return message;
+    }
+
+    /**
+     * Ghi tin nhắn SYSTEM vào DB (có thể nằm trong transaction qua `manager`) và trả về hàm `publish`
+     * để phát domain event SAU khi transaction commit (tránh báo realtime cho dữ liệu có thể bị rollback).
+     */
+    private async persistSystemMessage(
+        conversationId: string,
+        actorId: string,
+        content: string,
+        manager?: EntityManager,
+    ): Promise<{ message: Message; publish: () => void }> {
+        const userRepo = manager ? manager.getRepository(User) : this.userRepository;
+        const messageRepo = manager ? manager.getRepository(Message) : this.messageRepository;
+        const conversationRepo = manager ? manager.getRepository(Conversation) : this.conversationRepository;
+        const memberRepo = manager ? manager.getRepository(ConversationMember) : this.memberRepository;
+
+        const actor = await userRepo.findOne({
             where: { id: actorId },
             select: { id: true, username: true, displayName: true, avatarUrl: true },
         });
 
-        const message = this.messageRepository.create({
+        const message = messageRepo.create({
             conversation: { id: conversationId } as Conversation,
             sender: (actor || { id: actorId }) as User,
             content: content.trim(),
             type: MessageType.SYSTEM,
         });
-        const savedMessage = await this.messageRepository.save(message);
+        const savedMessage = await messageRepo.save(message);
 
         const msgId = savedMessage?.id || 'msg-system-uuid';
         const msgCreatedAt = savedMessage?.createdAt || new Date();
 
-        await this.conversationRepository.update(conversationId, {
+        await conversationRepo.update(conversationId, {
             lastMessageId: msgId,
             lastMessageAt: msgCreatedAt,
         });
 
-        const members = await this.memberRepository.find({
+        const members = await memberRepo.find({
             where: { conversation: { id: conversationId } },
             relations: { user: true },
         });
@@ -123,29 +193,31 @@ export class ConversationsService {
             sender: senderObj,
         };
 
-        this.eventEmitter.emit(
-            'message.created',
-            new MessageCreatedEvent(conversationId, payload),
-        );
+        const publish = () => {
+            this.eventEmitter.emit(
+                'message.created',
+                new MessageCreatedEvent(conversationId, payload),
+            );
 
-        this.eventEmitter.emit(
-            'inbox.updated',
-            new InboxUpdatedEvent(
-                conversationId,
-                memberIds,
-                {
-                    id: msgId,
-                    content: content.trim(),
-                    type: MessageType.SYSTEM,
-                    fileUrl: null,
-                    senderName: senderObj.displayName,
-                    createdAt: msgCreatedAt,
-                },
-                actorId,
-            ),
-        );
+            this.eventEmitter.emit(
+                'inbox.updated',
+                new InboxUpdatedEvent(
+                    conversationId,
+                    memberIds,
+                    {
+                        id: msgId,
+                        content: content.trim(),
+                        type: MessageType.SYSTEM,
+                        fileUrl: null,
+                        senderName: senderObj.displayName,
+                        createdAt: msgCreatedAt,
+                    },
+                    actorId,
+                ),
+            );
+        };
 
-        return savedMessage;
+        return { message: savedMessage, publish };
     }
 
     /**
@@ -177,39 +249,54 @@ export class ConversationsService {
             throw new ForbiddenException('Chỉ có thể nhắn tin với người là bạn bè');
         }
 
-        // Tìm cuộc hội thoại DIRECT đã tồn tại giữa 2 người (BR-05)
-        const existingConversation = await this.conversationRepository
-            .createQueryBuilder('c')
-            .innerJoin('c.members', 'm1')
-            .innerJoin('c.members', 'm2')
-            .where('c.type = :type', { type: ConversationType.DIRECT })
-            .andWhere('m1.userId = :currentUserId', { currentUserId })
-            .andWhere('m2.userId = :targetUserId', { targetUserId })
-            .getOne();
+        // Tìm cuộc hội thoại DIRECT đã tồn tại giữa 2 người (BR-05): theo directKey, fallback theo thành viên
+        const existingConversation = await findDirectConversation(
+            this.conversationRepository,
+            currentUserId,
+            targetUserId,
+        );
 
         if (existingConversation) {
             return existingConversation;
         }
 
-        // Tạo cuộc hội thoại mới nếu chưa có
-        const newConversation = this.conversationRepository.create({
-            type: ConversationType.DIRECT,
-        });
-        const savedConversation = await this.conversationRepository.save(newConversation);
+        // Tạo cuộc hội thoại mới trong 1 transaction. directKey UNIQUE chặn tạo trùng khi 2 request đồng thời (BR-05)
+        let savedConversation: Conversation;
+        try {
+            savedConversation = await this.dataSource.transaction(async (manager) => {
+                const conversationRepo = manager.getRepository(Conversation);
+                const memberRepo = manager.getRepository(ConversationMember);
 
-        const member1 = this.memberRepository.create({
-            conversation: savedConversation,
-            user: { id: currentUserId } as User,
-            role: ConversationRole.MEMBER,
-        });
+                const conversation = await conversationRepo.save(
+                    conversationRepo.create({
+                        type: ConversationType.DIRECT,
+                        directKey: buildDirectKey(currentUserId, targetUserId),
+                    }),
+                );
 
-        const member2 = this.memberRepository.create({
-            conversation: savedConversation,
-            user: targetUser,
-            role: ConversationRole.MEMBER,
-        });
+                await memberRepo.save([
+                    memberRepo.create({
+                        conversation,
+                        user: { id: currentUserId } as User,
+                        role: ConversationRole.MEMBER,
+                    }),
+                    memberRepo.create({
+                        conversation,
+                        user: targetUser,
+                        role: ConversationRole.MEMBER,
+                    }),
+                ]);
 
-        await this.memberRepository.save([member1, member2]);
+                return conversation;
+            });
+        } catch (error) {
+            // Request song song đã tạo trước -> trả về hội thoại thắng cuộc thay vì lỗi 500
+            if (isDuplicateKeyError(error)) {
+                const winner = await findDirectConversation(this.conversationRepository, currentUserId, targetUserId);
+                if (winner) return winner;
+            }
+            throw error;
+        }
 
         // Phát domain event để FE của cả 2 phía lập tức hiển thị conversation mới vào danh sách Inbox
         this.eventEmitter.emit(
@@ -246,36 +333,53 @@ export class ConversationsService {
             throw new NotFoundException('Một hoặc nhiều người dùng không tồn tại');
         }
 
-        // 4. Tạo cuộc hội thoại GROUP (BR-06)
-        const newGroup = this.conversationRepository.create({
-            type: ConversationType.GROUP,
-            name: dto.name.trim(),
+        // 4-6. Tạo nhóm + thành viên + tin nhắn hệ thống trong 1 transaction: lỗi giữa chừng không để lại nhóm mồ côi
+        const { savedGroup, publishSystemMessage } = await this.dataSource.transaction(async (manager) => {
+            const conversationRepo = manager.getRepository(Conversation);
+            const memberRepo = manager.getRepository(ConversationMember);
+
+            // Tạo cuộc hội thoại GROUP (BR-06)
+            const group = await conversationRepo.save(
+                conversationRepo.create({
+                    type: ConversationType.GROUP,
+                    name: dto.name.trim(),
+                }),
+            );
+
+            // Owner (role: OWNER) và các thành viên khác (role: MEMBER)
+            const ownerMember = memberRepo.create({
+                conversation: group,
+                user: { id: ownerId } as User,
+                role: ConversationRole.OWNER,
+            });
+
+            const otherMembers = uniqueMemberIds.map((memberId) =>
+                memberRepo.create({
+                    conversation: group,
+                    user: { id: memberId } as User,
+                    role: ConversationRole.MEMBER,
+                }),
+            );
+
+            await memberRepo.save([ownerMember, ...otherMembers]);
+
+            const owner = await manager.getRepository(User).findOne({
+                where: { id: ownerId },
+                select: { id: true, displayName: true, username: true },
+            });
+            const ownerName = owner?.displayName || owner?.username || 'Người dùng';
+            const systemMessage = await this.persistSystemMessage(
+                group.id,
+                ownerId,
+                `${ownerName} đã tạo nhóm.`,
+                manager,
+            );
+
+            return { savedGroup: group, publishSystemMessage: systemMessage.publish };
         });
-        const savedGroup = await this.conversationRepository.save(newGroup);
 
-        // 5. Tạo thành viên: Owner (role: OWNER) và các thành viên khác (role: MEMBER)
-        const ownerMember = this.memberRepository.create({
-            conversation: savedGroup,
-            user: { id: ownerId } as User,
-            role: ConversationRole.OWNER,
-        });
-
-        const otherMembers = uniqueMemberIds.map((memberId) =>
-            this.memberRepository.create({
-                conversation: savedGroup,
-                user: { id: memberId } as User,
-                role: ConversationRole.MEMBER,
-            }),
-        );
-
-        await this.memberRepository.save([ownerMember, ...otherMembers]);
-
-        const owner = await this.userRepository.findOne({
-            where: { id: ownerId },
-            select: { id: true, displayName: true, username: true },
-        });
-        const ownerName = owner?.displayName || owner?.username || 'Người dùng';
-        await this.createSystemMessage(savedGroup.id, ownerId, `${ownerName} đã tạo nhóm.`);
+        // Chỉ phát event realtime sau khi transaction đã commit
+        publishSystemMessage();
 
         // Phát domain event để FE của tất cả thành viên trong nhóm lập tức thấy nhóm mới trong Inbox
         this.eventEmitter.emit(
@@ -471,6 +575,16 @@ export class ConversationsService {
 
             // Trường hợp 2: Không còn ai trong nhóm (Owner là người cuối cùng) -> Giải tán nhóm
             await this.conversationRepository.delete(conversationId);
+            // Báo gateway cho socket của người rời nhóm thoát khỏi room conv_ đã bị giải tán
+            this.eventEmitter.emit(
+                'group.member_event',
+                new GroupMemberEvent(
+                    conversationId,
+                    'LEFT',
+                    { id: currentUserId, displayName: actorName },
+                    [currentUserId],
+                ),
+            );
             return { message: 'Đã rời nhóm và giải tán nhóm thành công' };
         }
 
@@ -523,8 +637,15 @@ export class ConversationsService {
             lastMessageMap = new Map(lastMessages.map((msg) => [msg.id, msg]));
         }
 
+        // 2b. Trạng thái chặn với đối phương của các hội thoại DIRECT (1 query, 2 chiều) (FR-29, BR-28)
+        const partnerIds = conversations
+            .filter((c) => c.type === ConversationType.DIRECT)
+            .map((c) => c.members.find((m) => m.user.id !== currentUserId)?.user?.id)
+            .filter((id): id is string => Boolean(id));
+        const blockMap = await getBlockStatusMap(this.friendshipRepository, currentUserId, partnerIds);
+
         // 3. Biến đổi dữ liệu (Projection) theo góc nhìn của currentUserId
-        return conversations.map((c) => {
+        const items = conversations.map((c) => {
             const myMember = c.members.find((m) => m.user.id === currentUserId);
             let displayName = c.name;
             let avatarUrl = c.avatarUrl;
@@ -539,6 +660,14 @@ export class ConversationsService {
 
             const lastMsg = c.lastMessageId ? lastMessageMap.get(c.lastMessageId) : null;
 
+            // "Xóa đoạn chat": ẩn hội thoại đến khi có tin nhắn mới hơn mốc clearedAt (FR-48)
+            if (myMember?.clearedAt && (!lastMsg || new Date(lastMsg.createdAt) <= new Date(myMember.clearedAt))) {
+                return null;
+            }
+
+            const blockStatus: BlockStatus = partnerId ? blockMap.get(partnerId) ?? 'NONE' : 'NONE';
+            const isDirect = c.type === ConversationType.DIRECT;
+
             return {
                 id: c.id,
                 type: c.type,
@@ -546,11 +675,17 @@ export class ConversationsService {
                 avatarUrl,
                 quickEmoji: c.quickEmoji || '👍',
                 partnerId,
-                isOnline: c.type === ConversationType.DIRECT
-                    ? c.members.find((m) => m.user.id !== currentUserId)?.user?.isOnline
+                // Bị chặn (2 chiều) thì không thấy trạng thái trực tuyến của nhau (BR-28)
+                isOnline: isDirect
+                    ? blockStatus === 'NONE'
+                        ? c.members.find((m) => m.user.id !== currentUserId)?.user?.isOnline
+                        : false
                     : undefined,
+                ...(isDirect ? { blockStatus } : {}),
                 unreadCount: myMember ? myMember.unreadCount : 0,
                 isMuted: myMember ? Boolean(myMember.isMuted) : false,
+                isPinned: myMember ? Boolean(myMember.isPinned) : false,
+                pinnedAt: myMember?.pinnedAt ?? null,
                 lastMessage: lastMsg
                     ? {
                         id: lastMsg.id,
@@ -570,11 +705,52 @@ export class ConversationsService {
                 updatedAt: c.updatedAt,
             };
         });
+
+        // 4. Bỏ hội thoại đã xóa đoạn chat; ghim lên đầu (pinnedAt DESC), phần còn lại giữ thứ tự cũ (sort ổn định)
+        return items
+            .filter((item): item is NonNullable<typeof item> => item !== null)
+            .sort((a, b) => {
+                if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+                if (a.isPinned && b.isPinned) {
+                    return new Date(b.pinnedAt as Date).getTime() - new Date(a.pinnedAt as Date).getTime();
+                }
+                return 0;
+            });
     }
 
     /**
      * Lấy lịch sử tin nhắn của cuộc hội thoại bằng Cursor Pagination (FR-13, BR-08)
      */
+    /**
+     * Phân trang con trỏ "before" theo khóa ghép (createdAt, id), so sánh hoàn toàn trong SQL:
+     * - Nhiều tin nhắn có thể trùng createdAt (insert cùng câu lệnh, tin nhắn hệ thống) -> chỉ so createdAt sẽ mất tin
+     *   ở ranh giới trang; id là khóa phụ giúp thứ tự tuyệt đối và ổn định.
+     * - Không nạp createdAt của tin mốc vào JS Date (chỉ chính xác tới ms) vì cột datetime(6) lưu tới micro-giây.
+     */
+    private async applyBeforeCursor(
+        qb: SelectQueryBuilder<Message>,
+        conversationId: string,
+        before: string | undefined,
+        limit: number,
+    ): Promise<void> {
+        if (before) {
+            const beforeMessage = await this.messageRepository.findOne({
+                where: { id: before, conversation: { id: conversationId } },
+                select: { id: true },
+            });
+            if (!beforeMessage) {
+                throw new BadRequestException('Tin nhắn mốc (before cursor) không tồn tại trong hội thoại này');
+            }
+
+            qb.andWhere(
+                '(m.createdAt, m.id) < (SELECT cursor_msg.createdAt, cursor_msg.id FROM messages cursor_msg WHERE cursor_msg.id = :beforeId)',
+                { beforeId: before },
+            );
+        }
+
+        qb.orderBy('m.createdAt', 'DESC').addOrderBy('m.id', 'DESC').take(limit);
+    }
+
     async getMessages(
         currentUserId: string,
         conversationId: string,
@@ -590,16 +766,7 @@ export class ConversationsService {
         }
 
         // 2. Kiểm tra quyền truy cập: Người gửi request phải thuộc cuộc trò chuyện (BR-08)
-        const isMember = await this.memberRepository.findOne({
-            where: {
-                conversation: { id: conversationId },
-                user: { id: currentUserId },
-            },
-        });
-
-        if (!isMember) {
-            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
-        }
+        const member = await this.validateMembership(conversationId, currentUserId);
 
         // 3. Xây dựng Cursor Query
         const limit = query.limit || 30;
@@ -608,6 +775,7 @@ export class ConversationsService {
             .createQueryBuilder('m')
             .leftJoinAndSelect('m.sender', 'sender')
             .where('m.conversationId = :conversationId', { conversationId });
+        this.applyClearedAtFilter(qb, member);
 
         // Lọc theo loại tin nhắn (TEXT, IMAGE, FILE) nếu có
         if (query.type) {
@@ -616,24 +784,8 @@ export class ConversationsService {
             qb.andWhere('m.isRecalled = :isRecalled', { isRecalled: false });
         }
 
-        // Nếu có con trỏ before: Lấy tin nhắn trước mốc đó
-        if (query.before) {
-            const beforeMessage = await this.messageRepository.findOne({
-                where: {
-                    id: query.before,
-                    conversation: { id: conversationId },
-                },
-                select: { id: true, createdAt: true },
-            });
-
-            if (!beforeMessage) {
-                throw new BadRequestException('Tin nhắn mốc (before cursor) không tồn tại trong hội thoại này');
-            }
-
-            qb.andWhere('m.createdAt < :beforeTime', { beforeTime: beforeMessage.createdAt });
-        }
-
-        qb.orderBy('m.createdAt', 'DESC').take(limit);
+        // Phân trang con trỏ `before` với khóa ghép (createdAt, id)
+        await this.applyBeforeCursor(qb, conversationId, query.before, limit);
 
         const messages = await qb.getMany();
 
@@ -801,6 +953,8 @@ export class ConversationsService {
 
         let displayName = conversation.name;
         let avatarUrl = conversation.avatarUrl;
+        let partnerId: string | undefined;
+        let blockStatus: BlockStatus = 'NONE';
 
         if (conversation.type === ConversationType.DIRECT) {
             const partner = conversation.members.find(
@@ -808,6 +962,10 @@ export class ConversationsService {
             )?.user;
             displayName = partner?.displayName || partner?.username || 'Người dùng';
             avatarUrl = partner?.avatarUrl;
+            partnerId = partner?.id;
+            if (partnerId) {
+                blockStatus = await getBlockStatus(this.friendshipRepository, currentUserId, partnerId);
+            }
         }
 
         return {
@@ -819,20 +977,27 @@ export class ConversationsService {
             currentUserRole: currentMember.role,
             unreadCount: currentMember.unreadCount,
             isMuted: Boolean(currentMember.isMuted),
-            members: conversation.members.map((m) => ({
-                id: m.id,
-                role: m.role,
-                joinedAt: m.joinedAt,
-                isMuted: Boolean(m.isMuted),
-                user: {
-                    id: m.user.id,
-                    username: m.user.username,
-                    displayName: m.user.displayName,
-                    avatarUrl: m.user.avatarUrl,
-                    isOnline: m.user.isOnline,
-                    lastSeen: m.user.lastSeen,
-                },
-            })),
+            isPinned: Boolean(currentMember.isPinned),
+            pinnedAt: currentMember.pinnedAt ?? null,
+            ...(conversation.type === ConversationType.DIRECT ? { blockStatus } : {}),
+            members: conversation.members.map((m) => {
+                // Bị chặn (2 chiều) thì giấu trạng thái trực tuyến của đối phương (BR-28)
+                const hidePresence = blockStatus !== 'NONE' && m.user.id === partnerId;
+                return {
+                    id: m.id,
+                    role: m.role,
+                    joinedAt: m.joinedAt,
+                    isMuted: Boolean(m.isMuted),
+                    user: {
+                        id: m.user.id,
+                        username: m.user.username,
+                        displayName: m.user.displayName,
+                        avatarUrl: m.user.avatarUrl,
+                        isOnline: hidePresence ? false : m.user.isOnline,
+                        lastSeen: hidePresence ? null : m.user.lastSeen,
+                    },
+                };
+            }),
             createdAt: conversation.createdAt,
             updatedAt: conversation.updatedAt,
         };
@@ -1257,6 +1422,8 @@ export class ConversationsService {
             throw new NotFoundException('Tin nhắn không tồn tại trong cuộc hội thoại này');
         }
 
+        this.assertNotSystemMessage(message, 'ghim');
+
         if (message.isRecalled) {
             throw new BadRequestException('Không thể ghim tin nhắn đã bị thu hồi');
         }
@@ -1371,22 +1538,15 @@ export class ConversationsService {
         currentUserId: string,
         conversationId: string,
     ): Promise<Message[]> {
-        const member = await this.memberRepository.findOne({
-            where: {
-                conversation: { id: conversationId },
-                user: { id: currentUserId },
-            },
-        });
-
-        if (!member) {
-            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
-        }
+        const member = await this.validateMembership(conversationId, currentUserId);
 
         return this.messageRepository.find({
             where: {
                 conversation: { id: conversationId },
                 isPinned: true,
                 isRecalled: false,
+                // Ẩn tin nhắn ghim trước mốc "Xóa đoạn chat" của riêng người gọi (FR-48)
+                ...(member.clearedAt ? { createdAt: MoreThan(member.clearedAt) } : {}),
             },
             relations: {
                 sender: true,
@@ -1407,16 +1567,7 @@ export class ConversationsService {
         conversationId: string,
         query: GetMediaQueryDto,
     ): Promise<Message[]> {
-        const member = await this.memberRepository.findOne({
-            where: {
-                conversation: { id: conversationId },
-                user: { id: currentUserId },
-            },
-        });
-
-        if (!member) {
-            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
-        }
+        const member = await this.validateMembership(conversationId, currentUserId);
 
         const limit = query.limit || 30;
 
@@ -1425,6 +1576,7 @@ export class ConversationsService {
             .leftJoinAndSelect('m.sender', 'sender')
             .where('m.conversationId = :conversationId', { conversationId })
             .andWhere('m.isRecalled = false');
+        this.applyClearedAtFilter(qb, member);
 
         if (query.type) {
             qb.andWhere('m.type = :type', { type: query.type });
@@ -1432,23 +1584,8 @@ export class ConversationsService {
             qb.andWhere('m.type IN (:...types)', { types: [MessageType.IMAGE, MessageType.FILE] });
         }
 
-        if (query.before) {
-            const beforeMessage = await this.messageRepository.findOne({
-                where: {
-                    id: query.before,
-                    conversation: { id: conversationId },
-                },
-                select: { id: true, createdAt: true },
-            });
-
-            if (!beforeMessage) {
-                throw new BadRequestException('Tin nhắn mốc (before cursor) không tồn tại trong hội thoại này');
-            }
-
-            qb.andWhere('m.createdAt < :beforeTime', { beforeTime: beforeMessage.createdAt });
-        }
-
-        qb.orderBy('m.createdAt', 'DESC').take(limit);
+        // Phân trang con trỏ `before` với khóa ghép (createdAt, id)
+        await this.applyBeforeCursor(qb, conversationId, query.before, limit);
 
         return qb.getMany();
     }
@@ -1493,7 +1630,11 @@ export class ConversationsService {
 
         if (conversation.type === ConversationType.DIRECT) {
             const partner = otherMembers[0]?.user;
-            isActive = Boolean(partner?.isOnline);
+            // Bị chặn (2 chiều) thì không thấy trạng thái trực tuyến của nhau (BR-28)
+            const blockStatus = partner
+                ? await getBlockStatus(this.friendshipRepository, currentUserId, partner.id)
+                : 'NONE';
+            isActive = blockStatus === 'NONE' && Boolean(partner?.isOnline);
             activeMemberCount = isActive ? 1 : 0;
         } else {
             activeMemberCount = otherMembers.filter((m) => Boolean(m.user?.isOnline)).length;
@@ -1545,6 +1686,14 @@ export class ConversationsService {
         // 1. Kiểm tra thành viên hội thoại (BR-08)
         await this.validateMembership(conversationId, senderId);
 
+        // 1b. SYSTEM chỉ do server sinh ra, client không được giả mạo (BR-36)
+        if (type === MessageType.SYSTEM) {
+            throw new BadRequestException('Không thể gửi tin nhắn loại SYSTEM');
+        }
+
+        // 1c. Hội thoại DIRECT có quan hệ chặn (2 chiều) -> 403 CONVERSATION_BLOCKED (FR-29, BR-28)
+        await this.assertDirectConversationNotBlocked(conversationId, senderId);
+
         // 2. Validate nội dung tin nhắn (BR-09)
         if (!content || !content.trim()) {
             throw new BadRequestException('Nội dung tin nhắn không được để trống');
@@ -1580,6 +1729,7 @@ export class ConversationsService {
             if (!originalMessage) {
                 throw new BadRequestException('Tin nhắn trả lời không tồn tại trong cuộc hội thoại này');
             }
+            this.assertNotSystemMessage(originalMessage, 'trả lời');
             replyToSummary = {
                 id: originalMessage.id,
                 content: originalMessage.isRecalled ? '[Tin nhắn đã bị thu hồi]' : originalMessage.content,
@@ -1723,6 +1873,9 @@ export class ConversationsService {
             throw new NotFoundException('Tin nhắn không tồn tại trong cuộc hội thoại này');
         }
 
+        // 3b. Tin nhắn hệ thống không thể thu hồi (BR-36)
+        this.assertNotSystemMessage(message, 'thu hồi');
+
         // 4. Kiểm tra quyền sở hữu
         if (message.sender.id !== currentUserId) {
             throw new ForbiddenException('Bạn không có quyền thu hồi tin nhắn của người khác');
@@ -1737,7 +1890,8 @@ export class ConversationsService {
         const originalFileUrl = message.fileUrl;
         message.isRecalled = true;
         message.content = '[Tin nhắn đã bị thu hồi]';
-        message.fileUrl = undefined;
+        // null (không phải undefined) để TypeORM thực sự xóa fileUrl trong DB
+        message.fileUrl = null;
 
         const savedMessage = await this.messageRepository.save(message);
 
@@ -1758,7 +1912,7 @@ export class ConversationsService {
                 currentUserId,
                 isLastMessage,
                 memberIds,
-                originalFileUrl,
+                originalFileUrl ?? undefined,
             ),
         );
 
@@ -1810,6 +1964,9 @@ export class ConversationsService {
             throw new NotFoundException('Tin nhắn không tồn tại trong cuộc hội thoại này');
         }
 
+        // 3b. Tin nhắn hệ thống không thể chỉnh sửa (BR-36)
+        this.assertNotSystemMessage(message, 'chỉnh sửa');
+
         // 4. Kiểm tra quyền sở hữu
         if (message.sender.id !== currentUserId) {
             throw new ForbiddenException('Bạn không có quyền chỉnh sửa tin nhắn của người khác');
@@ -1821,15 +1978,10 @@ export class ConversationsService {
         }
 
         // 6. Kiểm tra giới hạn 15 phút (BR-M5-05)
-        const fifteenMinutesMs = 15 * 60 * 1000;
+        // createdAt trong tương lai (lệch đồng hồ) -> ageMs âm -> vẫn được sửa
         const now = new Date();
-        const createdDate = new Date(message.createdAt);
-        let diffMs = Math.abs(now.getTime() - createdDate.getTime());
-        const oneHourMs = 60 * 60 * 1000;
-        if (diffMs >= oneHourMs) {
-            diffMs = diffMs % oneHourMs;
-        }
-        if (diffMs > fifteenMinutesMs) {
+        const ageMs = now.getTime() - new Date(message.createdAt).getTime();
+        if (ageMs > EDIT_WINDOW_MS) {
             throw new BadRequestException('Chỉ có thể chỉnh sửa tin nhắn trong vòng 15 phút kể từ khi gửi');
         }
 
@@ -1928,6 +2080,9 @@ export class ConversationsService {
         if (!message) {
             throw new NotFoundException('Tin nhắn không tồn tại trong cuộc hội thoại này');
         }
+
+        // 3b. Tin nhắn hệ thống không thể thả cảm xúc (BR-36)
+        this.assertNotSystemMessage(message, 'thả cảm xúc vào');
 
         // 4. Không cho phép thả reaction vào tin nhắn đã thu hồi
         if (message.isRecalled) {
@@ -2057,29 +2212,24 @@ export class ConversationsService {
         }
 
         // 2. Kiểm tra quyền thành viên (BR-08)
-        const isMember = await this.memberRepository.findOne({
-            where: {
-                conversation: { id: conversationId },
-                user: { id: currentUserId },
-            },
-        });
-
-        if (!isMember) {
-            throw new ForbiddenException('Bạn không phải thành viên của cuộc hội thoại này');
-        }
+        const member = await this.validateMembership(conversationId, currentUserId);
 
         // 3. Tìm kiếm tin nhắn khớp từ khóa (không phân biệt hoa thường, loại trừ isRecalled)
         const searchPattern = `%${keyword.trim()}%`;
-        const messages = await this.messageRepository
+        const qb = this.messageRepository
             .createQueryBuilder('m')
             .leftJoinAndSelect('m.sender', 'sender')
             .where('m.conversationId = :conversationId', { conversationId })
             .andWhere('m.isRecalled = :isRecalled', { isRecalled: false })
-            .andWhere('LOWER(m.content) LIKE LOWER(:searchPattern)', { searchPattern })
-            .orderBy('m.createdAt', 'ASC')
-            .getMany();
+            .andWhere('LOWER(m.content) LIKE LOWER(:searchPattern)', { searchPattern });
+        this.applyClearedAtFilter(qb, member);
 
-        return messages;
+        // Mới nhất trước, giới hạn SEARCH_RESULT_LIMIT kết quả để tránh quét/trả về cả lịch sử
+        return qb
+            .orderBy('m.createdAt', 'DESC')
+            .addOrderBy('m.id', 'DESC')
+            .take(SEARCH_RESULT_LIMIT)
+            .getMany();
     }
 
     /**

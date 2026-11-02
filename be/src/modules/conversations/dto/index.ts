@@ -17,3 +17,4 @@ export * from './update-quick-emoji.dto.js';
 export * from './customize-conversation.dto.js';
 export * from './toggle-mute.dto.js';
 
+export * from './toggle-pin.dto.js';

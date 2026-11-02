@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { IsEmoji } from '../../../common/validators/is-emoji.validator.js';
 
 export class UpdateQuickEmojiDto {
     @ApiProperty({
@@ -9,5 +10,6 @@ export class UpdateQuickEmojiDto {
     @IsNotEmpty({ message: 'Emoji không được để trống' })
     @IsString({ message: 'Emoji phải là chuỗi ký tự' })
     @MaxLength(32, { message: 'Emoji không được vượt quá 32 ký tự' })
+    @IsEmoji({ message: 'Emoji không hợp lệ (chỉ chấp nhận ký tự emoji)' })
     emoji: string;
 }

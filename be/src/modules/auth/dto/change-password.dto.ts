@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsNotEmpty, IsString, Matches, MaxLength, MinLength, Validate } from 'class-validator';
+import { MaxUtf8BytesConstraint } from '../validators/max-utf8-bytes.validator.js';
 
 /**
  * BR-39: tối thiểu 8 ký tự, có ít nhất 1 chữ hoa, 1 chữ thường, 1 chữ số và 1 ký tự đặc biệt.
@@ -21,6 +22,9 @@ export class ChangePasswordDto {
     @IsString({ message: 'Mật khẩu mới phải là chuỗi' })
     @MinLength(8, { message: 'Mật khẩu mới phải có ít nhất 8 ký tự' })
     @MaxLength(72, { message: 'Mật khẩu mới tối đa 72 ký tự' })
+    @Validate(MaxUtf8BytesConstraint, [72], {
+        message: 'Mật khẩu mới tối đa 72 byte (ký tự có dấu/emoji chiếm nhiều byte hơn)',
+    })
     @Matches(STRONG_PASSWORD_REGEX, {
         message: 'Mật khẩu mới phải chứa ít nhất một chữ hoa, một chữ thường, một chữ số và một ký tự đặc biệt',
     })

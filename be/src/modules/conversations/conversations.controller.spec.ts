@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConversationsController } from './conversations.controller.js';
 import { ConversationsService } from './conversations.service.js';
+import { ConversationActionsService } from './conversation-actions.service.js';
 import { User } from '../users/entities/user.entity.js';
 import { ConversationRole } from './entities/conversation-member.entity.js';
 import { MessageType } from './entities/message.entity.js';
@@ -9,6 +10,7 @@ import { MessageType } from './entities/message.entity.js';
 describe('ConversationsController', () => {
     let controller: ConversationsController;
     let mockConversationsService: any;
+    let mockActionsService: any;
 
     const mockCurrentUser = {
         id: 'user-current-id',
@@ -42,12 +44,21 @@ describe('ConversationsController', () => {
             toggleMute: vi.fn(),
         };
 
+        mockActionsService = {
+            setPinned: vi.fn(),
+            clearHistory: vi.fn(),
+        };
+
         const module: TestingModule = await Test.createTestingModule({
             controllers: [ConversationsController],
             providers: [
                 {
                     provide: ConversationsService,
                     useValue: mockConversationsService,
+                },
+                {
+                    provide: ConversationActionsService,
+                    useValue: mockActionsService,
                 },
             ],
         }).compile();
@@ -338,6 +349,30 @@ describe('ConversationsController', () => {
                 'conv-1',
                 true,
             );
+            expect(result).toEqual(mockResult);
+        });
+    });
+
+    describe('togglePin (FR-48)', () => {
+        it('should delegate to actions service with user id, conversation id and isPinned', async () => {
+            const mockResult = { conversationId: 'conv-1', isPinned: true, pinnedAt: new Date() };
+            mockActionsService.setPinned.mockResolvedValue(mockResult);
+
+            const result = await controller.togglePin(mockCurrentUser, 'conv-1', { isPinned: true });
+
+            expect(mockActionsService.setPinned).toHaveBeenCalledWith(mockCurrentUser.id, 'conv-1', true);
+            expect(result).toEqual(mockResult);
+        });
+    });
+
+    describe('clearHistory (FR-48)', () => {
+        it('should delegate to actions service with user id and conversation id', async () => {
+            const mockResult = { conversationId: 'conv-1', clearedAt: new Date() };
+            mockActionsService.clearHistory.mockResolvedValue(mockResult);
+
+            const result = await controller.clearHistory(mockCurrentUser, 'conv-1');
+
+            expect(mockActionsService.clearHistory).toHaveBeenCalledWith(mockCurrentUser.id, 'conv-1');
             expect(result).toEqual(mockResult);
         });
     });

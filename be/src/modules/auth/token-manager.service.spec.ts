@@ -542,5 +542,13 @@ describe('TokenManagerService', () => {
             );
             expect(mockRedisService.del).toHaveBeenCalledWith('auth:family:family-1');
         });
+
+        it('should also delete grace cache entries of the family tokens', async () => {
+            mockRedisService.smembers.mockResolvedValue(['token-a', 'token-b']);
+
+            await service.revokeFamily('family-1');
+
+            expect(mockRedisService.del).toHaveBeenCalledWith('auth:grace:token-a', 'auth:grace:token-b');
+        });
     });
 });
