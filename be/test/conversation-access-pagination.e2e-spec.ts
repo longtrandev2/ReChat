@@ -101,6 +101,8 @@ describe('Conversation access control & cursor pagination (e2e)', () => {
         // Không bao giờ lộ hash mật khẩu của người gửi (regression: sender được join nguyên entity User)
         const page = await ctx.http().get(`${API}/conversations/${conversationId}/messages`).set(asUser('alice')).expect(200);
         expect(JSON.stringify(page.body)).not.toContain('"password"');
+        // Không lộ thông tin cá nhân của người gửi (email, trạng thái 2FA) cho thành viên khác
+        expect(JSON.stringify(page.body)).not.toMatch(/"(email|twoFactorEnabled|isEmailVerified)"/);
     });
 
     it('keeps messages that share the exact same createdAt when they straddle a page boundary', async () => {

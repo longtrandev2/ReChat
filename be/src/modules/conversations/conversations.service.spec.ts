@@ -39,6 +39,9 @@ describe('ConversationsService', () => {
         update: vi.fn().mockReturnThis(),
         set: vi.fn().mockReturnThis(),
         execute: vi.fn().mockResolvedValue({ affected: 1 }),
+        select: vi.fn().mockReturnThis(),
+        // Con trỏ phân trang: createdAt của tin mốc dạng chuỗi đủ micro-giây
+        getRawOne: vi.fn().mockResolvedValue({ createdAt: '2026-10-14 08:00:00.000000' }),
         getOne: vi.fn().mockResolvedValue(Array.isArray(result) ? result[0] || null : result),
         getMany: vi.fn().mockResolvedValue(Array.isArray(result) ? result : [result]),
     });
@@ -553,6 +556,9 @@ describe('ConversationsService', () => {
             mockConversationRepo.findOne.mockResolvedValue({ id: conversationId });
             mockMemberRepo.findOne.mockResolvedValue({ id: 'm-1' });
             mockMessageRepo.findOne.mockResolvedValue(null);
+            const cursorQb = createMockQueryBuilder();
+            cursorQb.getRawOne.mockResolvedValue(undefined);
+            mockMessageRepo.createQueryBuilder.mockReturnValue(cursorQb);
 
             await expect(service.getMessages(currentUserId, conversationId, { before: 'msg-non-existent' }))
                 .rejects.toThrow(BadRequestException);
@@ -1077,6 +1083,9 @@ describe('ConversationsService', () => {
         it('should throw BadRequestException if before cursor not found', async () => {
             mockMemberRepo.findOne.mockResolvedValue({ id: 'm-1' });
             mockMessageRepo.findOne.mockResolvedValue(null);
+            const cursorQb = createMockQueryBuilder();
+            cursorQb.getRawOne.mockResolvedValue(undefined);
+            mockMessageRepo.createQueryBuilder.mockReturnValue(cursorQb);
 
             await expect(service.getMediaMessages('user-1', 'conv-1', { before: 'msg-ghost' }))
                 .rejects.toThrow(BadRequestException);

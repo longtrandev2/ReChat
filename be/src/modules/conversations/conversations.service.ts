@@ -734,17 +734,21 @@ export class ConversationsService {
         limit: number,
     ): Promise<void> {
         if (before) {
-            const beforeMessage = await this.messageRepository.findOne({
-                where: { id: before, conversation: { id: conversationId } },
-                select: { id: true },
-            });
-            if (!beforeMessage) {
+            // Đọc createdAt của tin mốc dạng chuỗi đủ micro-giây ngay trong MySQL (không qua JS Date, chỉ chính xác tới ms)
+            const cursor: { createdAt?: string } | undefined = await this.messageRepository
+                .createQueryBuilder('cursor_msg')
+                .select("DATE_FORMAT(cursor_msg.createdAt, '%Y-%m-%d %H:%i:%s.%f')", 'createdAt')
+                .where('cursor_msg.id = :beforeId', { beforeId: before })
+                .andWhere('cursor_msg.conversationId = :conversationId', { conversationId })
+                .getRawOne();
+            if (!cursor?.createdAt) {
                 throw new BadRequestException('Tin nhắn mốc (before cursor) không tồn tại trong hội thoại này');
             }
 
+            // Dạng OR tường minh để MySQL dùng index (conversation, createdAt); so sánh hàng (a,b) < (x,y) không dùng được range
             qb.andWhere(
-                '(m.createdAt, m.id) < (SELECT cursor_msg.createdAt, cursor_msg.id FROM messages cursor_msg WHERE cursor_msg.id = :beforeId)',
-                { beforeId: before },
+                '(m.createdAt < :beforeTime OR (m.createdAt = :beforeTime AND m.id < :beforeId))',
+                { beforeTime: cursor.createdAt, beforeId: before },
             );
         }
 
